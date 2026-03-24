@@ -17,7 +17,7 @@ This repository hosts two distinct, high-fidelity simulation environments:
 
 ---
 
-## 📺 Digital Twin Demo: Grid Erosion & Failure (CXfail.mp4)
+## 📺 Digital Twin Demo: Grid Erosion & Failure
 
 <p align="center">
   <i>This simulation demonstrates the end-of-life (EOL) transition of a dual-grid ion optics system. As CEX ions pit the accelerator grid, the geometry thins, and the negative potential barrier collapses.</i>
