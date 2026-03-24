@@ -1,5 +1,7 @@
 
-<big>🚀 Ion Thruster Digital Twin & MCC Plume Simulator (MATLAB) </big>
+<h1 align="center">
+  <big>🚀 Ion Thruster Digital Twin & MCC Plume Simulator (MATLAB)</big>
+</h1>
 
 A suite of vectorized MATLAB applications for modeling Charge Exchange (CEX) dynamics and Grid Erosion in Ion thrusters.
 
