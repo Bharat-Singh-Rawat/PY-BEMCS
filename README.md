@@ -62,7 +62,7 @@ Grid Erosion: The resulting slow-moving CEX ion is accelerated into the accelera
 
 EOL: The thruster reaches its end-of-life when the grid can no longer prevent electrons from flowing back into the discharge chamber (EBS failure) or when structural integrity is lost.
 
-Adapted from the original Java-based PIC/MCC demonstration by Lubos Brieda Particle In Cell Consulting.
+Adapted from the original Java-based PIC/MCC demonstration by Lubos Brieda, Particle In Cell Consulting (https://www.particleincell.com/2011/mcc/).
 
 🤝 Community & Feedback
 I am actively seeking feedback from the #ElectricPropulsion community. Future roadmap items include:
