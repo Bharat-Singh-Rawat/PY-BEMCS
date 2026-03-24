@@ -1,19 +1,20 @@
 <h1 align="center">
-  <big>🚀 Ion Thruster Digital Twin & MCC Plume Simulator (MATLAB)</big>
+  <big>🚀 Ion Thruster Digital Twin & MCC Plume Simulator</big>
 </h1>
 
 <p align="center">
-  <strong>A suite of high-performance, vectorized MATLAB applications for modeling Charge Exchange (CEX) dynamics and Grid Erosion in Ion thrusters.</strong>
+  <strong>A suite of high-performance simulation applications for modeling Charge Exchange (CEX) dynamics and grid erosion in ion thrusters, with MATLAB and Python implementations.</strong>
 </p>
 
 ---
 
 ### 📂 Repository Overview
 
-This repository hosts two distinct, high-fidelity simulation environments:
+This repository hosts two primary simulation workflows and one Python port of the digital twin GUI:
 
 * **Plume MCC Simulator (`charge_exchange_code.m`):** Focuses on CEX ion production, plume expansion, and downstream flux collection.
 * **Grid Digital Twin / EOL (`TransientDigitalTwin.m`):** Focuses on "Accelerated Life Testing," modeling the physical sputtering and eventual structural failure of accelerator grids.
+* **Python Digital Twin GUI (`Python/TrainsientDigitalTwin.py`):** A desktop Python implementation of the transient digital twin with PyQt5, live telemetry plots, damage-map tracking, frame recording, and a placeholder 3D view.
 
 ---
 
@@ -66,9 +67,19 @@ A synchronized 3D window projects the 2D axisymmetric physics into a **revolved 
 * **Built-in GIF Recorder:** Silently buffers frames into memory while running, allowing for high-quality `.gif` export of plume dynamics or grid destruction.
 * **CSV Data Export:** Pause and export raw probe time-series or telemetry history directly to formatted `.csv` files for post-processing.
 
+<br>
+
+<h3><big>🐍 Python Desktop Port</big></h3>
+
+* **Interactive PyQt5 GUI:** Includes control inputs for grid geometry, plasma parameters, accelerated sputter damage, and run-state toggling.
+* **Live Diagnostics:** Reproduces the digital twin workflow with beam extraction, CEX generation, erosion accumulation, and embedded Matplotlib plots.
+* **Animation Export Path:** Supports GIF export through Pillow when frame recording is enabled.
+
 ---
 
 ## <big>🛠️ Installation & Usage</big>
+
+### MATLAB
 
 1.  **Prerequisites:** You need **MATLAB R2015b or newer**. No extra toolboxes (e.g., Signal Processing or Image Processing) are required.
 2.  **Download:** Clone this repository or download the `.m` files.
@@ -77,3 +88,18 @@ A synchronized 3D window projects the 2D axisymmetric physics into a **revolved 
 ```matlab
 TransientDigitalTwin  % To study Grid Erosion & EOL
 charge_exchange_code  % To study Plume Dynamics & Flux
+```
+
+### Python
+
+1.  **Prerequisites:** Use **Python 3.10+**.
+2.  **Install dependencies:**
+
+```bash
+pip install numpy scipy matplotlib PyQt5 Pillow
+```
+
+3.  **Run the Python GUI:**
+
+```bash
+python Python/TrainsientDigitalTwin.py
