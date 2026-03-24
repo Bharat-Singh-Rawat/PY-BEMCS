@@ -1,10 +1,10 @@
+
 🚀 Ion Thruster Digital Twin & MCC Plume Simulator (MATLAB)
-A suite of high-performance, vectorized MATLAB applications for modeling Charge Exchange (CEX) dynamics and Grid Erosion in Ion and Hall thrusters.
+
+A suite of vectorized MATLAB applications for modeling Charge Exchange (CEX) dynamics and Grid Erosion in Ion thrusters.
 
 This repository hosts two major versions:
-
 Plume MCC Simulator: Focuses on CEX ion production and downstream flux collection (Plume dynamics) (charge_exchange_code.m).
-
 Grid Digital Twin (EOL): Focuses on "Accelerated Life Testing," modeling the physical sputtering and eventual structural failure of accelerator grids (TransientDigitalTwin.m).
 
 📺 Digital Twin Demo: Grid Erosion & Failure (CXfail.mp4)
