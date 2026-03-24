@@ -1,27 +1,33 @@
 <h1 align="center">
-  <big>🚀 Ion Thruster Digital Twin & MCC Plume Simulator</big>
+  <big>Ion Thruster Digital Twin and MCC Plume Simulator</big>
 </h1>
 
 <p align="center">
-  <strong>A suite of high-performance simulation applications for modeling Charge Exchange (CEX) dynamics and grid erosion in ion thrusters, with MATLAB and Python implementations.</strong>
+  <strong>Simulation tools for charge-exchange (CEX) physics, ion optics erosion, and multiphysics digital twin studies in ion thrusters.</strong>
 </p>
 
 ---
 
-### 📂 Repository Overview
+## Repository Overview
 
-This repository hosts two primary simulation workflows and one Python port of the digital twin GUI:
+This repository currently includes:
 
-* **Plume MCC Simulator (`charge_exchange_code.m`):** Focuses on CEX ion production, plume expansion, and downstream flux collection.
-* **Grid Digital Twin / EOL (`TransientDigitalTwin.m`):** Focuses on "Accelerated Life Testing," modeling the physical sputtering and eventual structural failure of accelerator grids.
-* **Python Digital Twin GUI (`Python/TrainsientDigitalTwin.py`):** A desktop Python implementation of the transient digital twin with PyQt5, live telemetry plots, damage-map tracking, frame recording, and a placeholder 3D view.
+- **Plume MCC Simulator (`charge_exchange_code.m`)**
+  - MATLAB model for CEX ion production, plume expansion, and downstream behavior.
+- **Grid Digital Twin / EOL (`TransientDigitalTwin.m`)**
+  - MATLAB model for accelerated life testing, sputter erosion, and structural failure of accelerator grids.
+- **Python Digital Twin (latest modular implementation)**
+  - **Runner:** `Python/main.py`
+  - **GUI layer:** `Python/gui_window.py`
+  - **Physics backend:** `Python/physics_engine.py`
+- **Legacy Python single-file app:** `Python/TrainsientDigitalTwin.py`
 
 ---
 
-## 📺 Digital Twin Demo: Grid Erosion & Failure
+## Digital Twin Demo
 
 <p align="center">
-  <i>This simulation demonstrates the end-of-life (EOL) transition of a dual-grid ion optics system. As CEX ions pit the accelerator grid, the geometry thins, and the negative potential barrier collapses.</i>
+  <i>This simulation demonstrates end-of-life transition of a dual-grid ion optics system. As CEX ions erode the accelerator grid, geometry and potential barriers evolve in time.</i>
 </p>
 
 <p align="center">
@@ -32,74 +38,64 @@ This repository hosts two primary simulation workflows and one Python port of th
 
 ---
 
-## <big>✨ Key Features</big>
+## Key Features
 
-<br>
+### Core Physics
 
-<h3><big>⚡ Vectorized Physics Engine</big></h3>
-Both versions replace traditional particle-tracking loops with <b>matrix operations</b>, enabling real-time simulation of thousands of particles natively in MATLAB. This ensures massive performance gains and smooth GUI interactivity.
+- **Vectorized particle updates** for high-throughput runtime performance.
+- **CEX collision modeling** with probabilistic scattering.
+- **Dynamic erosion and failure logic** with in-situ remeshing behavior.
 
-<br>
+### Python Multiphysics Additions (Latest)
 
-<h3><big>🛠️ Dynamic Sputter Morphing (Digital Twin)</big></h3>
+- **Poisson field update with space charge** using both ion and electron density contributions.
+- **Neutralizer electron model** with configurable electron injection rate and electron temperature.
+- **Thermal-erosion coupling** with simulation modes:
+  - `Both`
+  - `Thermal`
+  - `Erosion`
+- **Thermal telemetry** for screen and accelerator grids.
 
-* **Yamamura Yield Integration:** Calculates material removal based on ion impact energy and angle.
-* **Self-Consistent Laplace Solver:** As the grid "melts" away, the code remeshes the geometry and recalculates the electrostatic potential profile on the fly to reflect the changing field topology.
-* **Structural Failure Logic:** Removes grid cells once they cross a cumulative damage threshold, allowing for realistic "hole-to-hole" erosion modeling.
+### Visualization and Telemetry
 
-<br>
-
-<h3><big>📊 Real-Time Telemetry & Analytics</big></h3>
-
-* **EBS Monitoring:** Tracks the minimum centerline potential to predict the onset of **Electron Backstreaming**.
-* **Beam Diagnostics:** Live calculation of **95% Beam Divergence** half-angles.
-* **Directional Flux Probes (Plume Ver.):** Point-and-click to place physical probes in the domain. Includes adjustable collection radii and surface angles to simulate realistic downstream "shadowing."
-
-<br>
-
-<h3><big>🎥 Live 3D CAD Projection</big></h3>
-A synchronized 3D window projects the 2D axisymmetric physics into a **revolved 3D view**. This allows for real-time inspection of "barrel erosion" and "pit and groove" patterns from any angle during the simulation.
-
-<br>
-
-<h3><big>💾 Engineering Exports</big></h3>
-
-* **Built-in GIF Recorder:** Silently buffers frames into memory while running, allowing for high-quality `.gif` export of plume dynamics or grid destruction.
-* **CSV Data Export:** Pause and export raw probe time-series or telemetry history directly to formatted `.csv` files for post-processing.
-
-<br>
-
-<h3><big>🐍 Python Desktop Port</big></h3>
-
-* **Interactive PyQt5 GUI:** Includes control inputs for grid geometry, plasma parameters, accelerated sputter damage, and run-state toggling.
-* **Live Diagnostics:** Reproduces the digital twin workflow with beam extraction, CEX generation, erosion accumulation, and embedded Matplotlib plots.
-* **Animation Export Path:** Supports GIF export through Pillow when frame recording is enabled.
+- Live plasma and damage-map plots.
+- Electron backstreaming and beam divergence telemetry.
+- Grid temperature map visualization.
+- CSV telemetry export (iteration, potential, divergence, temperatures).
+- GIF recording/export via Pillow.
 
 ---
 
-## <big>🛠️ Installation & Usage</big>
+## Installation and Usage
 
-### MATLAB
+### MATLAB Workflow
 
-1.  **Prerequisites:** You need **MATLAB R2015b or newer**. No extra toolboxes (e.g., Signal Processing or Image Processing) are required.
-2.  **Download:** Clone this repository or download the `.m` files.
-3.  **Run:** Open MATLAB, navigate to the folder containing the files, and type the following in the Command Window:
+1. Prerequisite: MATLAB R2015b or newer.
+2. Open MATLAB in the repository root.
+3. Run:
 
 ```matlab
-TransientDigitalTwin  % To study Grid Erosion & EOL
-charge_exchange_code  % To study Plume Dynamics & Flux
+TransientDigitalTwin  % Grid erosion and EOL study
+charge_exchange_code  % Plume/CEX study
 ```
 
-### Python
+### Python Workflow (Recommended, Modular)
 
-1.  **Prerequisites:** Use **Python 3.10+**.
-2.  **Install dependencies:**
+1. Use Python 3.10+.
+2. Install dependencies:
 
 ```bash
 pip install numpy scipy matplotlib PyQt5 Pillow
 ```
 
-3.  **Run the Python GUI:**
+3. Launch the modular app:
+
+```bash
+python Python/main.py
+```
+
+### Python Workflow (Legacy Single File)
 
 ```bash
 python Python/TrainsientDigitalTwin.py
+```
