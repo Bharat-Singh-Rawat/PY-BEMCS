@@ -98,3 +98,12 @@ python Python/main.py
 ```bash
 python Python/TrainsientDigitalTwin.py
 ```
+## License
+
+This project is licensed under the **Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)**. 
+
+This means you are free to use, share, and adapt this code for academic, research, and personal projects, provided you give appropriate credit. It **may not** be used for commercial purposes.
+
+[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
+
+*For commercial inquiries or alternative licensing, please contact the author.*
