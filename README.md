@@ -31,8 +31,7 @@ This repository currently includes:
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/f7e544f9-890e-43f9-bb1e-c623c5e220ad" width="900px" controls autoplay loop muted>
-    Your browser does not support the video tag.
+  <video src="https://github.com/user-attachments/assets/f0d695a7-5418-4c66-abd5-f046e2a007d8" width="900px" controls autoplay loop muted>
   </video>
 </p>
 
