@@ -1,4 +1,4 @@
-import sys # <-- Added sys
+import sys 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -52,21 +52,24 @@ class DigitalTwinApp(QMainWindow):
             return spin
 
         control_layout.addWidget(QLabel('<b>1. GRID DESIGN</b>'))
-        self.inputs['Vs'] = add_input('Screen Volts (V):', 1000, 0, 5000, 100, 0)
-        self.inputs['Va'] = add_input('Accel Volts (V):', -200, -1000, 0, 50, 0)
+        self.inputs['Vs'] = add_input('Screen Volts (V):', 1650, 0, 5000, 100, 0)
+        self.inputs['Va'] = add_input('Accel Volts (V):', -350, -1000, 0, 50, 0)
         self.inputs['gap'] = add_input('Grid Gap (mm):', 1.0, 0.1, 5.0, 0.1)
-        self.inputs['ts'] = add_input('Screen Thick (mm):', 0.6, 0.1, 5.0, 0.1)
-        self.inputs['ta'] = add_input('Accel Thick (mm):', 1.2, 0.1, 5.0, 0.1)
+        self.inputs['ts'] = add_input('Screen Thick (mm):', 1, 0.1, 5.0, 0.1)
+        self.inputs['ta'] = add_input('Accel Thick (mm):', 1, 0.1, 5.0, 0.1)
         self.inputs['rs'] = add_input('Screen Hole R (mm):', 1.0, 0.1, 5.0, 0.1)
-        self.inputs['ra'] = add_input('Accel Hole R (mm):', 0.8, 0.1, 5.0, 0.1)
+        self.inputs['ra'] = add_input('Accel Hole R (mm):', 0.6, 0.1, 5.0, 0.1)
         self.inputs['cham_s'] = add_input('Screen Chamfer (°):', 0, 0, 45, 1)
-        self.inputs['cham_a'] = add_input('Accel Chamfer (°):', 15, 0, 45, 1)
+        self.inputs['cham_a'] = add_input('Accel Chamfer (°):', 0, 0, 45, 1)
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel('<b>2. PLASMA & MORPHING</b>'))
+        self.inputs['n0_plasma'] = add_input('Plasma Dens (m-3):', 1e17, 1e15, 1e19, 1e16, 0)
+        self.inputs['Te_up'] = add_input('Upstream Te (eV):', 3.0, 0.1, 20.0, 0.5, 1)
+        
         self.inputs['Ti'] = add_input('Ion Temp (eV):', 2.0, 0.1, 10, 0.5)
         self.inputs['Tn'] = add_input('Neutral Temp (K):', 300, 100, 2000, 100, 0)
-        self.inputs['n0'] = add_input('Neutral Dens n0:', 1e20, 1e18, 1e22, 1e19, 0)
+        self.inputs['n0'] = add_input('Neutral Dens (m-3):', 1e20, 1e18, 1e22, 1e19, 0)
         self.inputs['Accel'] = add_input('Accel. Factor (X):', 5e13, 1e10, 1e16, 1e12, 0)
         self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 1.0, 0.1, 10.0, 0.1)
 
@@ -76,7 +79,6 @@ class DigitalTwinApp(QMainWindow):
         self.combo_mode.addItems(['Both', 'Thermal', 'Erosion'])
         control_layout.addWidget(self.combo_mode)
         
-        # --- NEW NEUTRALIZER CONTROLS ---
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel('<b>4. NEUTRALIZER</b>'))
         self.inputs['neut_rate'] = add_input('e- Inject Rate:', 30, 0, 200, 10, 0)
@@ -147,7 +149,7 @@ class DigitalTwinApp(QMainWindow):
         
         self.sim.build_domain(self.get_params())
         self.draw_static_domain()
-        self.lbl_status.setText('Domain Ready.')
+        self.lbl_status.setText(f'Domain Ready. Wt: {self.sim.macro_weight:.1e}')
         self.lbl_temp.setText('Grid Temps: Screen: 26°C | Accel: 26°C')
 
     def draw_static_domain(self):
@@ -218,7 +220,8 @@ class DigitalTwinApp(QMainWindow):
             gy, gx = np.where(self.sim.isBound)
             self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c='grey', alpha=0.5)
 
-            self.lbl_status.setText(f'Ions: {len(self.sim.p_x)} | Electrons: {len(self.sim.e_x)} | Iter: {self.sim.iteration}')
+            # Updated status label to show current Macro Weight (Wt)
+            self.lbl_status.setText(f'Ions: {len(self.sim.p_x)} | e-: {len(self.sim.e_x)} | Iter: {self.sim.iteration} | Wt: {self.sim.macro_weight:.1e}')
             self.lbl_temp.setText(f'Grid Temps: Screen: {int(T_s - 273.15)}°C | Accel: {int(T_a - 273.15)}°C')
             self.canvas.draw()
 
@@ -272,10 +275,9 @@ class DigitalTwinApp(QMainWindow):
             except ImportError:
                 QMessageBox.warning(self, "Error", "Install Pillow (`pip install Pillow`)")
 
-# --- THIS IS THE MISSING ENGINE STARTER BLOCK ---
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    app.setStyle('Fusion') # Gives it a clean, modern look
+    app.setStyle('Fusion') 
     ex = DigitalTwinApp()
     ex.show()
     sys.exit(app.exec_())
