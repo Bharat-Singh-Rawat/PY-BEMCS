@@ -42,6 +42,7 @@ This repository currently includes:
 ### Core Physics
 
 - **Vectorized particle updates** for high-throughput runtime performance.
+- **Self-consistent beam extraction** from plasma meniscus and Bohm criteria.
 - **CEX collision modeling** with probabilistic scattering.
 - **Dynamic erosion and failure logic** with in-situ remeshing behavior.
 
@@ -55,12 +56,12 @@ This repository currently includes:
   - `Erosion`
 - **Thermal telemetry** for screen and accelerator grids.
 
-### Visualization and Telemetry
+### Visualization and Data export
 
 - Live plasma and damage-map plots.
 - Electron backstreaming and beam divergence telemetry.
 - Grid temperature map visualization.
-- CSV telemetry export (iteration, potential, divergence, temperatures).
+- CSV export (iteration, electron backstreaming potential, divergence, grid temperatures).
 - GIF recording/export via Pillow.
 
 ---
