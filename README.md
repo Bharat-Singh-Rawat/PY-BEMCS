@@ -35,10 +35,9 @@ This repository currently includes:
 </p>
 
 <p align="center">
-  <video src="examples/SpaceCharge_example.mp4" width="900px" controls autoplay loop muted>
+  <video src="https://github.com/user-attachments/assets/7a36980c-458f-4a1b-a8b9-4ae7be00d4a5" width="900px" autoplay loop muted playsinline>
   </video>
 </p>
-
 ---
 
 ## Key Features
