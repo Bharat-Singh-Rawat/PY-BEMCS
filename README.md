@@ -3,7 +3,7 @@
 </h1>
 
 <p align="center">
-  <strong>A simulation tool for charge-exchange (CEX) physics, ion optics erosion, and multiphysics digital twin studies in ion thrusters.</strong>
+  <strong>A simulation tool for charge-exchange (CEX) physics, ion optics erosion, and multiphysics studies in ion thrusters.</strong>
 </p>
 
 ---
@@ -24,7 +24,7 @@ This repository currently includes:
 
 ---
 
-## Digital Twin Demo
+## PY-BEMCS Demo
 
 <p align="center">
   <i>This simulation demonstrates end-of-life transition of a dual-grid ion optics system. As CEX ions erode the accelerator grid, geometry and potential barriers evolve in time.</i>
