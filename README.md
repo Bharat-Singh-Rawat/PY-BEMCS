@@ -31,7 +31,7 @@ This repository currently includes:
 ## PY-BEMCS Demo
 
 <p align="center">
-  <i>This simulation demonstrates end-of-life transition of a dual-grid ion optics system. As CEX ions erode the accelerator grid, geometry and potential barriers evolve in time.</i>
+  <i>This simulation demonstrates Xe+ beam extraction of a dual-grid ion optics system. As CEX ions erode the accelerator grid, geometry and potential barriers evolve in time.The secondary electrons are emitted due to the impact of primary beam ions and the charge exchange ions on the grids.</i>
 </p>
 
 <p align="center">
