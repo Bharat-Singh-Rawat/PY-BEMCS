@@ -1,7 +1,7 @@
 <h1 align="center">
-  <big>Python Beam Extraction & Monte Carlo Simulator (PY-BEMCS)</big>
-  ![Simulation Screenshot](https://github.com/Bharat26031992/PY-BEMCS/PY-BEMCS-ICON.png)
-</h1>
+  <img src="PY-BEMCS-ICON.png" alt="PY-BEMCS Icon" width="100"><br>
+  Python Beam Extraction & Monte Carlo Simulator (PY-BEMCS)
+</h1>>
 
 <p align="center">
   <strong>A simulation tool for charge-exchange (CEX) physics, ion optics erosion, and multiphysics studies in ion thrusters.</strong>
