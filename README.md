@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="PY-BEMCS-ICON.png" alt="PY-BEMCS Ion Extraction Simulation" width="800">
+  <img src="PY-BEMCS-ICON.png" alt="PY-BEMCS Ion Extraction Simulation" width="500">
 </p>
 
 <h1 align="center">
