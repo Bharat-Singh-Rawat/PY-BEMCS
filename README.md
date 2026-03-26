@@ -1,9 +1,9 @@
 <h1 align="center">
-  <big>Ion Thruster Digital Twin and MCC Plume Simulator</big>
+  <big>Python Beam Extraction & Monte Carlo Simulator (PY-BEMCS)</big>
 </h1>
 
 <p align="center">
-  <strong>Simulation tools for charge-exchange (CEX) physics, ion optics erosion, and multiphysics digital twin studies in ion thrusters.</strong>
+  <strong>A simulation tool for charge-exchange (CEX) physics, ion optics erosion, and multiphysics digital twin studies in ion thrusters.</strong>
 </p>
 
 ---
