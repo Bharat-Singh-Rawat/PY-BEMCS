@@ -46,7 +46,7 @@ This repository currently includes:
 
 - **Vectorized particle updates** for high-throughput runtime performance.
 - **Self-consistent beam extraction** from plasma meniscus and Bohm criteria.
-- **CEX collision modeling** with probabilistic scattering.
+- **CEX collision modeling** with probabilistic scattering, with user defined region in source code.
 - **Dynamic erosion and failure logic** due to CEX ions with in-situ remeshing behavior.
 
 ### Python Multiphysics Additions (Latest)
