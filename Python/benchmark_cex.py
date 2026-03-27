@@ -10,7 +10,7 @@ def worker_sweep(gap, nn_sweep, result_queue):
         sim = DigitalTwinSimulator()
         params = {
             'sim_mode': 'Both',
-            'ts': 0.5, 'ta': 0.5, 'rs': 1.0, 'ra': 0.6,
+            'ts': 1, 'ta': 1, 'rs': 1.0, 'ra': 0.6,
             'cham_s': 0, 'cham_a': 0,
             'Vs': 1650, 'Va': -350, 
             'gap': gap,
