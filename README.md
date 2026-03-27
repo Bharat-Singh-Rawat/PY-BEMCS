@@ -117,6 +117,6 @@ This means you are free to use, share, and adapt this code for academic, researc
 ---
 ## Author
 
-**Dr.Bharat Singh Rawat** - *Lead Developer* 
+**Dr.Bharat Singh Rawat** 
 
 Feel free to reach out for collaborations or questions regarding the code on bharat.bharat22@gmail.com!
