@@ -20,7 +20,7 @@ def worker_sweep(gap, Va_sweep, result_queue):
         }
         
         sim.build_domain(params)
-        steady_state_steps = 600
+        steady_state_steps = 500
         pot_history = []
         
         for step_idx in range(1, steady_state_steps + 1):

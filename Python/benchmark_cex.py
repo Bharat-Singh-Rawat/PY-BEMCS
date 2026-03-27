@@ -12,7 +12,7 @@ def worker_sweep(gap, nn_sweep, result_queue):
             'sim_mode': 'Both',
             'ts': 0.5, 'ta': 0.5, 'rs': 1.0, 'ra': 0.6,
             'cham_s': 0, 'cham_a': 0,
-            'Vs': 1000, 'Va': -200, 
+            'Vs': 1650, 'Va': -350, 
             'gap': gap,
             'n0_plasma': 1e17,   # Fixed optimal perveance
             'Te_up': 3.0, 'Ti': 0.1,
@@ -24,7 +24,7 @@ def worker_sweep(gap, nn_sweep, result_queue):
         }
         
         sim.build_domain(params)
-        steady_state_steps = 600
+        steady_state_steps = 500
         
         for step_idx in range(1, steady_state_steps + 1):
             sim.step(params)
