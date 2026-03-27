@@ -35,11 +35,10 @@ This repository currently includes:
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/7a36980c-458f-4a1b-a8b9-4ae7be00d4a5" width="900px" autoplay loop muted playsinline>
+  <video src="https://github.com/user-attachments/assets/331fac12-c8ef-427f-8381-171eaee8a657" width="900px" autoplay loop muted playsinline>
   </video>
 </p>
 ---
-
 ## Key Features
 
 ### Core Physics
