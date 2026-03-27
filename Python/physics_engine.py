@@ -286,15 +286,21 @@ class DigitalTwinSimulator:
         iy = np.clip(np.round(self.p_y / self.dy).astype(int), 0, self.ny - 1)
         hit_grid = self.isBound[iy, ix]
         out_of_bounds = (self.p_x < 0) | (self.p_x > self.Lx) | (self.p_y < 0) | (self.p_y > self.Ly) | np.isnan(self.p_x)
-
+        
+        # 1. Create a thermal filter to protect the left wall from fake heat
+        valid_thermal_hit = hit_grid & (self.p_x > 0.5)
+        
         remeshed = False
         
-        if sim_mode in ['Thermal', 'Both'] and np.any(hit_grid):
-            v_mag_sq = self.p_vx[hit_grid]**2 + self.p_vy[hit_grid]**2
+        # 2. Use the filtered hits for the heat calculation
+        if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
+            v_mag_sq = self.p_vx[valid_thermal_hit]**2 + self.p_vy[valid_thermal_hit]**2
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
-            np.add.at(self.T_map, (iy[hit_grid], ix[hit_grid]), dT_heat)
-
+            
+            # 3. Add heat only to the valid cells
+            np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
+            
         if sim_mode in ['Thermal', 'Both']:
             T_bound = self.T_map[self.isBound]
             cooling_factor = (self.emissivity * self.sb_sigma * self.A_cell * self.dt * self.thermal_accel) / self.C_cell
