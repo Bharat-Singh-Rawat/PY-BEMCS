@@ -70,8 +70,8 @@ class DigitalTwinApp(QMainWindow):
         self.inputs['Ti'] = add_input('Ion Temp (eV):', 2.0, 0.1, 10, 0.5)
         self.inputs['Tn'] = add_input('Neutral Temp (K):', 300, 100, 2000, 100, 0)
         self.inputs['n0'] = add_input('Neutral Dens (m-3):', 1e20, 1e18, 1e22, 1e19, 0)
-        self.inputs['Accel'] = add_input('Accel. Factor (X):', 5e13, 1e10, 1e16, 1e12, 0)
-        self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 1.0, 0.1, 10.0, 0.1)
+        self.inputs['Accel'] = add_input('Accel. Factor (X):', 1, 1e3, 1e16, 1e12, 0)
+        self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 1.0, 0.1, 100000.0, 0.1)
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel('<b>3. SIMULATION MODE</b>'))

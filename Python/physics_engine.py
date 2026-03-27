@@ -349,10 +349,19 @@ class DigitalTwinSimulator:
                 self.e_vy = np.concatenate((self.e_vy, see_vy))
 
         # --- EROSION LOGIC ---
-        is_erosion_hit = hit_grid & self.p_isCEX
+        is_erosion_hit = hit_grid  #delete self.p_isCEX to include all hits, not just CEX ions and uncomment the below line
+        # Protect the left injection wall by only allowing erosion if x > 0.5 mm 
+        is_erosion_hit = hit_grid & (self.p_x > 0.5)
+        
         if sim_mode in ['Erosion', 'Both'] and np.any(is_erosion_hit):
             E_eV = (0.5 * self.m_XE * (self.p_vx[is_erosion_hit]**2 + self.p_vy[is_erosion_hit]**2)) / self.q
+            
+            #1. The True Physics: Empirical yield for Xe+ on Molybdenum
             Y_yield = np.where(E_eV > 30, 1.05e-4 * (E_eV - 30)**1.5, 0)
+            # 2. The Numerical Safety Limit: Cap max damage to 1.0 atom/ion 
+            # (Prevents instant grid deletion in the GUI if the 1650V primary beam strikes the wall)
+            Y_yield = np.clip(Y_yield, 0, 1.0) 
+           
             np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params['Accel'])
 
             broken_cells = (self.damage_map > params['Thresh']) & self.isBound
