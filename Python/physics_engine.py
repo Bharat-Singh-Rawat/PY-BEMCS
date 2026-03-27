@@ -298,9 +298,9 @@ class DigitalTwinSimulator:
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
             
-            # 3. Add heat only to the valid cells
+            # 3. Add heat only to the valid cells and fixes the heatmap
             np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
-            
+
         if sim_mode in ['Thermal', 'Both']:
             T_bound = self.T_map[self.isBound]
             cooling_factor = (self.emissivity * self.sb_sigma * self.A_cell * self.dt * self.thermal_accel) / self.C_cell
