@@ -1,6 +1,7 @@
 import sys 
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QDoubleSpinBox, QPushButton, QCheckBox, 
@@ -271,24 +272,41 @@ class DigitalTwinApp(QMainWindow):
 
     def draw_static_domain(self):
         self.ax_live.clear()
+        # Draw transparent potential contours
         self.ax_live.contourf(self.sim.X, self.sim.Y, self.sim.V, 20, cmap='viridis', alpha=0.4) 
+        
+        # Draw physical grid boundaries
         gy, gx = np.where(self.sim.isBound)
         self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=12, c='k', alpha=0.8)
         
         Vs = self.inputs['Vs'].value()
         
+        # Initialize scatter plots
         self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=Vs+50, alpha=0.8)
         self.scat_cex = self.ax_live.scatter([], [], c=[], s=7, cmap='turbo', vmin=0, vmax=Vs+50, alpha=1.0)
-        # --- FIX: Removed the duplicate color argument here as well ---
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)
         
+        # --- FIXED COLORBAR LOGIC ---
+        # 1. Safely remove old colorbar
         if self.cbar_energy is not None:
-            self.cbar_energy.remove()
+            try:
+                self.cbar_energy.remove()
+            except:
+                pass
+            self.cbar_energy = None
+
+        # 2. Use a divider to reserve space so the plot NEVER rescales
+        divider = make_axes_locatable(self.ax_live)
+        cax = divider.append_axes("right", size="3%", pad=0.1) # Reserves 3% width on the right
         
-        self.cbar_energy = self.fig.colorbar(self.scat_prim, ax=self.ax_live, fraction=0.046, pad=0.04)
+        self.cbar_energy = self.fig.colorbar(self.scat_prim, cax=cax)
         self.cbar_energy.set_label('Kinetic Energy (eV)')
         
+        # Set axis limits so they stay constant
+        self.ax_live.set_xlim(0, self.sim.Lx)
+        self.ax_live.set_ylim(0, self.sim.Ly)
         self.ax_live.set_title('Live Axisymmetric Plasma (Colored by Energy)')
+        
         self.canvas.draw()
 
     def run_sim_step(self):
@@ -349,7 +367,10 @@ class DigitalTwinApp(QMainWindow):
             self.ax_div.set_ylim(0, 45)
 
             if self.cbar_temp is not None:
-                self.cbar_temp.remove()
+                try:
+                    self.cbar_temp.remove()
+                except Exception:
+                    pass
                 self.cbar_temp = None
 
             self.ax_temp.clear()
@@ -362,7 +383,11 @@ class DigitalTwinApp(QMainWindow):
                 
                 contour = self.ax_temp.contourf(self.sim.X, self.sim.Y, T_display_C, 15, cmap='inferno')
                 
-                self.cbar_temp = self.fig.colorbar(contour, ax=self.ax_temp, fraction=0.046, pad=0.04)
+                # Reserving space for Temperature colorbar
+                divider_t = make_axes_locatable(self.ax_temp)
+                cax_t = divider_t.append_axes("right", size="5%", pad=0.1)
+                
+                self.cbar_temp = self.fig.colorbar(contour, cax=cax_t)
                 self.cbar_temp.set_label('Temperature (°C)')
                 
                 ts = self.inputs['ts'].value()
