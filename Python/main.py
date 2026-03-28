@@ -9,6 +9,101 @@ from PyQt5.QtCore import QTimer, Qt
 import csv
 from physics_engine import DigitalTwinSimulator
 
+# --- IEDF & EEDF SUB-WINDOW CLASS ---
+class IEDFWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('Energy Distribution Function (IEDF & EEDF)')
+        self.setGeometry(100, 100, 600, 450)
+        
+        layout = QVBoxLayout(self)
+        
+        # Dropdown to toggle particle types (Now includes electrons)
+        self.combo_type = QComboBox()
+        self.combo_type.addItems([
+            'All Ions', 
+            'Primary Ions Only', 
+            'CEX Ions Only',
+            'All Electrons',
+            'Grid Electrons (SEE) [x <= 4mm]',
+            'Plume Electrons (Neut) [x > 4mm]'
+        ])
+        layout.addWidget(QLabel("<b>Select Particle Population:</b>"))
+        layout.addWidget(self.combo_type)
+        
+        self.fig = plt.figure(figsize=(6, 4))
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+        layout.addWidget(self.canvas)
+        
+    def update_histogram(self, p_vx, p_vy, p_isCEX, e_x, e_vx, e_vy, m_XE, m_e, q, Vs):
+        self.ax.clear()
+        self.ax.grid(True, alpha=0.3)
+        
+        mode = self.combo_type.currentText()
+        data = np.array([])
+        color = 'gray'
+        x_max = Vs + 100 # Default axis for ions
+        title = 'Live Energy Distribution'
+
+        # --- ION LOGIC ---
+        if 'Ions' in mode:
+            self.ax.set_xlabel('Kinetic Energy (eV)')
+            self.ax.set_ylabel('Ion Count')
+            if len(p_vx) > 0:
+                v_sq = p_vx**2 + p_vy**2
+                E_all = (0.5 * m_XE * v_sq) / q
+                
+                if mode == 'All Ions':
+                    data = E_all
+                    color = 'purple'
+                    title = 'Ion Energy Distribution (All Ions)'
+                elif mode == 'Primary Ions Only':
+                    data = E_all[~p_isCEX]
+                    color = 'blue'
+                    title = 'Ion Energy Distribution (Primary Beam)'
+                else:
+                    data = E_all[p_isCEX]
+                    color = 'red'
+                    title = 'Ion Energy Distribution (CEX Only)'
+                    x_max = max(Vs * 0.3, np.max(data) + 50) if len(data) > 0 else 500 
+
+        # --- ELECTRON LOGIC ---
+        else:
+            self.ax.set_xlabel('Electron Kinetic Energy (eV)')
+            self.ax.set_ylabel('Electron Count')
+            if len(e_vx) > 0:
+                v_sq_e = e_vx**2 + e_vy**2
+                E_elec = (0.5 * m_e * v_sq_e) / q
+                
+                if mode == 'All Electrons':
+                    data = E_elec
+                    color = '#2ECC71' # Green
+                    title = 'Electron Energy Distribution (All)'
+                elif 'SEE' in mode:
+                    data = E_elec[e_x <= 4.0]
+                    color = '#E67E22' # Orange
+                    title = 'Electron Energy Distribution (Grid/SEE Zone)'
+                else:
+                    data = E_elec[e_x > 4.0]
+                    color = '#1ABC9C' # Teal
+                    title = 'Electron Energy Distribution (Plume/Neut Zone)'
+                
+                if len(data) > 0:
+                    hist_max = np.percentile(data, 99) 
+                    x_max = max(20.0, hist_max * 1.2) 
+                else:
+                    x_max = 20.0
+
+        self.ax.set_title(title)
+
+        if len(data) > 0:
+            self.ax.hist(data, bins=50, range=(0, x_max), color=color, alpha=0.8, edgecolor='black')
+            self.ax.set_xlim(0, x_max)
+            
+        self.canvas.draw()
+
+
 class DigitalTwinApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -25,7 +120,11 @@ class DigitalTwinApp(QMainWindow):
         self.Ta_history = []
         self.recorded_frames = []
         
-        self.cbar = None
+        self.tracking_buffer = [] 
+        self.iedf_window = None 
+        
+        self.cbar_temp = None
+        self.cbar_energy = None
 
         self.setup_ui()
         self.timer = QTimer()
@@ -71,7 +170,7 @@ class DigitalTwinApp(QMainWindow):
         self.inputs['Tn'] = add_input('Neutral Temp (K):', 300, 100, 2000, 100, 0)
         self.inputs['n0'] = add_input('Neutral Dens (m-3):', 1e20, 1e18, 1e22, 1e19, 0)
         self.inputs['Accel'] = add_input('Accel. Factor (X):', 1, 10, 1e16, 1e12, 0)
-        self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 1.0, 0.1, 100000.0, 0.1)
+        self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 100.0, 0.1, 100000.0, 0.1)
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel('<b>3. SIMULATION MODE</b>'))
@@ -94,6 +193,15 @@ class DigitalTwinApp(QMainWindow):
         self.btn_csv.clicked.connect(self.export_csv)
         self.btn_csv.setStyleSheet("background-color: #E6E6FA; font-weight: bold;")
         
+        self.chk_track_ptcls = QCheckBox('Record Kinematics (RAM Heavy)')
+        self.btn_export_trk = QPushButton('Export Particle Data (.csv)')
+        self.btn_export_trk.clicked.connect(self.export_tracking_data)
+        self.btn_export_trk.setStyleSheet("background-color: #FFDAB9; font-weight: bold;")
+        
+        self.btn_iedf = QPushButton('Show Energy Dist. (IEDF/EEDF)')
+        self.btn_iedf.clicked.connect(self.open_iedf_window)
+        self.btn_iedf.setStyleSheet("background-color: #D1F2EB; font-weight: bold;")
+        
         self.chk_record = QCheckBox('Record Frames (0)')
         self.btn_save = QPushButton('Save GIF Animation')
         self.btn_save.clicked.connect(self.save_gif)
@@ -102,7 +210,7 @@ class DigitalTwinApp(QMainWindow):
         self.lbl_temp = QLabel('Grid Temps: Screen: 26°C | Accel: 26°C')
         self.lbl_temp.setStyleSheet("color: #D35400; font-weight: bold;") 
 
-        for w in [self.btn_build, self.btn_toggle, self.btn_csv, self.chk_record, self.btn_save, self.lbl_status, self.lbl_temp]:
+        for w in [self.btn_build, self.btn_toggle, self.btn_csv, self.chk_track_ptcls, self.btn_export_trk, self.btn_iedf, self.chk_record, self.btn_save, self.lbl_status, self.lbl_temp]:
             control_layout.addWidget(w)
             
         main_layout.addWidget(control_panel)
@@ -121,8 +229,9 @@ class DigitalTwinApp(QMainWindow):
         self.line_ebs, = self.ax_ebs.plot([], [], 'm-', lw=2)
         self.line_div, = self.ax_div.plot([], [], 'b-', lw=2)
         
-        self.scat_prim = self.ax_live.scatter([], [], s=2, c='b', alpha=0.6) 
-        self.scat_cex = self.ax_live.scatter([], [], s=5, c='r')             
+        self.scat_prim = None
+        self.scat_cex = None
+        # --- FIX: Removed the duplicate 'c' argument and added proper X, Y empty lists ---
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5) 
         self.fig.tight_layout()
 
@@ -138,29 +247,48 @@ class DigitalTwinApp(QMainWindow):
         self.sim_isRunning = not self.sim_isRunning
         self.btn_toggle.setText('PAUSE BEAM' if self.sim_isRunning else 'RESUME BEAM')
 
+    def open_iedf_window(self):
+        if self.iedf_window is None:
+            self.iedf_window = IEDFWindow()
+        self.iedf_window.show()
+
     def build_domain(self):
         self.sim_isRunning = False
         self.btn_toggle.setText('2. START BEAM')
         self.iter_history.clear(); self.ebs_history.clear(); self.div_history.clear()
         self.Ts_history.clear(); self.Ta_history.clear()
         
+        self.tracking_buffer.clear() 
+        
         self.lbl_status.setText('Building 2-Grid Domain...')
         QApplication.processEvents() 
         
         self.sim.build_domain(self.get_params())
         self.draw_static_domain()
+        
         self.lbl_status.setText(f'Domain Ready. Wt: {self.sim.macro_weight:.1e}')
         self.lbl_temp.setText('Grid Temps: Screen: 26°C | Accel: 26°C')
 
     def draw_static_domain(self):
         self.ax_live.clear()
-        self.ax_live.contourf(self.sim.X, self.sim.Y, self.sim.V, 20, cmap='turbo')
+        self.ax_live.contourf(self.sim.X, self.sim.Y, self.sim.V, 20, cmap='viridis', alpha=0.4) 
         gy, gx = np.where(self.sim.isBound)
         self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=12, c='k', alpha=0.8)
         
-        self.scat_prim = self.ax_live.scatter([], [], s=2, c='b', alpha=0.6)
-        self.scat_cex = self.ax_live.scatter([], [], s=5, c='r')
+        Vs = self.inputs['Vs'].value()
+        
+        self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=Vs+50, alpha=0.8)
+        self.scat_cex = self.ax_live.scatter([], [], c=[], s=7, cmap='turbo', vmin=0, vmax=Vs+50, alpha=1.0)
+        # --- FIX: Removed the duplicate color argument here as well ---
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)
+        
+        if self.cbar_energy is not None:
+            self.cbar_energy.remove()
+        
+        self.cbar_energy = self.fig.colorbar(self.scat_prim, ax=self.ax_live, fraction=0.046, pad=0.04)
+        self.cbar_energy.set_label('Kinetic Energy (eV)')
+        
+        self.ax_live.set_title('Live Axisymmetric Plasma (Colored by Energy)')
         self.canvas.draw()
 
     def run_sim_step(self):
@@ -174,9 +302,37 @@ class DigitalTwinApp(QMainWindow):
 
         if self.sim.iteration % 5 == 0:
             prim_mask = ~self.sim.p_isCEX
-            self.scat_prim.set_offsets(np.column_stack((self.sim.p_x[prim_mask], self.sim.p_y[prim_mask])) if len(self.sim.p_x[prim_mask]) > 0 else np.empty((0, 2)))
-            self.scat_cex.set_offsets(np.column_stack((self.sim.p_x[self.sim.p_isCEX], self.sim.p_y[self.sim.p_isCEX])) if len(self.sim.p_x[self.sim.p_isCEX]) > 0 else np.empty((0, 2)))
+            cex_mask = self.sim.p_isCEX
+            
+            # Update Position Offsets
+            self.scat_prim.set_offsets(np.column_stack((self.sim.p_x[prim_mask], self.sim.p_y[prim_mask])) if np.any(prim_mask) else np.empty((0, 2)))
+            self.scat_cex.set_offsets(np.column_stack((self.sim.p_x[cex_mask], self.sim.p_y[cex_mask])) if np.any(cex_mask) else np.empty((0, 2)))
             self.scat_elec.set_offsets(np.column_stack((self.sim.e_x, self.sim.e_y)) if len(self.sim.e_x) > 0 else np.empty((0, 2)))
+
+            # Update Colors (Energies)
+            if np.any(prim_mask):
+                v_sq_prim = self.sim.p_vx[prim_mask]**2 + self.sim.p_vy[prim_mask]**2
+                E_prim = (0.5 * self.sim.m_XE * v_sq_prim) / self.sim.q
+                self.scat_prim.set_array(E_prim)
+
+            if np.any(cex_mask):
+                v_sq_cex = self.sim.p_vx[cex_mask]**2 + self.sim.p_vy[cex_mask]**2
+                E_cex = (0.5 * self.sim.m_XE * v_sq_cex) / self.sim.q
+                self.scat_cex.set_array(E_cex)
+
+            # Update IEDF Sub-Window
+            if self.iedf_window and self.iedf_window.isVisible():
+                self.iedf_window.update_histogram(
+                    self.sim.p_vx, self.sim.p_vy, self.sim.p_isCEX, 
+                    self.sim.e_x, self.sim.e_vx, self.sim.e_vy,
+                    self.sim.m_XE, self.sim.m_e, self.sim.q, self.inputs['Vs'].value()
+                )
+
+            # Record Kinematics Data
+            if self.chk_track_ptcls.isChecked():
+                ptcl_data = self.sim.get_particle_kinematics()
+                if ptcl_data.size > 0:
+                    self.tracking_buffer.append(ptcl_data)
 
             self.iter_history.append(self.sim.iteration)
             self.ebs_history.append(min_pot)
@@ -192,9 +348,9 @@ class DigitalTwinApp(QMainWindow):
             self.ax_div.set_xlim(max(0, self.sim.iteration - 400), max(100, self.sim.iteration))
             self.ax_div.set_ylim(0, 45)
 
-            if self.cbar is not None:
-                self.cbar.remove()
-                self.cbar = None
+            if self.cbar_temp is not None:
+                self.cbar_temp.remove()
+                self.cbar_temp = None
 
             self.ax_temp.clear()
             self.ax_temp.set_title('Grid Temp Map (°C)')
@@ -206,8 +362,8 @@ class DigitalTwinApp(QMainWindow):
                 
                 contour = self.ax_temp.contourf(self.sim.X, self.sim.Y, T_display_C, 15, cmap='inferno')
                 
-                self.cbar = self.fig.colorbar(contour, ax=self.ax_temp, fraction=0.046, pad=0.04)
-                self.cbar.set_label('Temperature (°C)')
+                self.cbar_temp = self.fig.colorbar(contour, ax=self.ax_temp, fraction=0.046, pad=0.04)
+                self.cbar_temp.set_label('Temperature (°C)')
                 
                 ts = self.inputs['ts'].value()
                 gap = self.inputs['gap'].value()
@@ -220,7 +376,6 @@ class DigitalTwinApp(QMainWindow):
             gy, gx = np.where(self.sim.isBound)
             self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c='grey', alpha=0.5)
 
-            # Updated status label to show current Macro Weight (Wt)
             self.lbl_status.setText(f'Ions: {len(self.sim.p_x)} | e-: {len(self.sim.e_x)} | Iter: {self.sim.iteration} | Wt: {self.sim.macro_weight:.1e}')
             self.lbl_temp.setText(f'Grid Temps: Screen: {int(T_s - 273.15)}°C | Accel: {int(T_a - 273.15)}°C')
             self.canvas.draw()
@@ -253,6 +408,30 @@ class DigitalTwinApp(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", f"Failed to write file:\n{str(e)}")
 
+    def export_tracking_data(self):
+        if not self.tracking_buffer:
+            QMessageBox.warning(self, "Error", "No tracking data recorded! Check the 'Record Kinematics' box and run the beam.")
+            return
+            
+        file_name, _ = QFileDialog.getSaveFileName(self, "Save Particle Kinematics", "", "CSV Files (*.csv)")
+        
+        if file_name:
+            try:
+                self.lbl_status.setText('Exporting huge data file. Please wait...')
+                QApplication.processEvents() 
+                
+                master_array = np.vstack(self.tracking_buffer)
+                
+                header_str = "Time_s,Z_mm,R_mm,Vz_m_s,Vr_m_s,Energy_eV,Particle_Type_ID"
+                
+                np.savetxt(file_name, master_array, delimiter=",", header=header_str, comments='', fmt='%.5e')
+                
+                self.lbl_status.setText(f'Export Complete! ({len(master_array)} rows)')
+                QMessageBox.information(self, "Success", f"Exported {len(master_array)} particle states to {file_name}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", f"Failed to write file:\n{str(e)}")
+
     def save_gif(self):
         if not self.recorded_frames:
             QMessageBox.warning(self, "Error", "No frames recorded!")
@@ -278,6 +457,6 @@ class DigitalTwinApp(QMainWindow):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyle('Fusion') 
-    ex = DigitalTwinApp()
-    ex.show()
+    window = DigitalTwinApp()
+    window.show()
     sys.exit(app.exec_())
