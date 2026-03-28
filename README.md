@@ -31,22 +31,22 @@ This repository currently includes:
 ## PY-BEMCS Demo
 
 <p align="center">
-  <i>This simulation demonstrates Xe+ beam extraction of a dual-grid ion optics system. As CEX ions erode the screen/accelerator grid, geometry and potential barriers evolve in time. The secondary electrons are emitted due to the impact of primary beam ions and the charge exchange ions on the grids.</i>
+  <i>This simulation demonstrates Xe+ beam extraction of a dual-grid ion optics system for Vscreen=4600V and Va=-350V without a neutralizer. As the primary (blue) and the CEX (red) ions erode the screen/accelerator grid, geometry and potential barriers evolve in time. The secondary electrons (green) are emitted due to the impact of primary beam ions and the charge exchange ions on the grids.</i>
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/7a36980c-458f-4a1b-a8b9-4ae7be00d4a5" width="900px" autoplay loop muted playsinline>
+  <video src="https://github.com/user-attachments/assets/331fac12-c8ef-427f-8381-171eaee8a657" width="900px" autoplay loop muted playsinline>
   </video>
 </p>
 ---
-
 ## Key Features
 
 ### Core Physics
 
 - **Vectorized particle updates** for high-throughput runtime performance.
+- **Reduced electron mass (m_e = M_Xe/100)** to speed up the simulation time.
 - **Self-consistent beam extraction** from plasma meniscus and Bohm criteria.
-- **CEX collision modeling** with probabilistic scattering, with user defined region in source code.
+- **CEX collision modeling** with probabilistic scattering, with user defined region in the source code.
 - **Dynamic erosion and failure logic** due to CEX ions with in-situ remeshing behavior.
 
 ### Python Multiphysics Additions (Latest)
