@@ -38,8 +38,9 @@ This repository currently includes:
   <video src="https://github.com/user-attachments/assets/68f347d0-b163-49d8-8dc5-8b52536709c6" width="900px" autoplay loop muted playsinline>
   </video>
 </p>
+
 ---
-## Key Features
+### Key Features
 
 ### Core Physics
 
