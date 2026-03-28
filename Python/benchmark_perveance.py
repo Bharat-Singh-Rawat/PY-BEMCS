@@ -24,7 +24,9 @@ def worker_sweep(gap, n0_sweep, result_queue):
             'gap': gap,
             'n0_plasma': n0,
             'Te_up': 3.0, 'Ti': 0.1,
-            'neut_rate': 0, 'n0': 0 
+            'neut_rate': 0, 'n0': 0 ,
+            'Accel': 10.0, 
+            'Thresh': 10000.0
         }
         
         sim.build_domain(params)
@@ -69,7 +71,7 @@ def worker_sweep(gap, n0_sweep, result_queue):
 # --- MAIN GUI THREAD ---
 def run_parallel_benchmark():
     grid_gaps = [0.5, 0.75, 1.0] # mm
-    n0_sweep = np.linspace(1e16, 2.5e17, 15) 
+    n0_sweep = np.linspace(1e15, 5e17, 20) 
     
     # 1. Setup Live Plot
     plt.ion()

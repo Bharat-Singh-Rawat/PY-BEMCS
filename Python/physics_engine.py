@@ -395,7 +395,7 @@ class DigitalTwinSimulator:
             self.e_vx, self.e_vy = self.e_vx[~dead_e], self.e_vy[~dead_e]
 
         # --- E. CEX COLLISIONS (1mm to 2mm range) ---
-        primary_mask = (~self.p_isCEX) & (self.p_x >= 1) & (self.p_x <= 2.0)
+        primary_mask = (~self.p_isCEX) & (self.p_x >= 1) & (self.p_x <= 8.0)
         if np.any(primary_mask):
             v_mag = np.sqrt(self.p_vx[primary_mask]**2 + self.p_vy[primary_mask]**2)
             g = np.maximum(v_mag, 1)
