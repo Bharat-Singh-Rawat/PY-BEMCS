@@ -287,18 +287,13 @@ class DigitalTwinSimulator:
         hit_grid = self.isBound[iy, ix]
         out_of_bounds = (self.p_x < 0) | (self.p_x > self.Lx) | (self.p_y < 0) | (self.p_y > self.Ly) | np.isnan(self.p_x)
         
-        # 1. Create a thermal filter to protect the left wall from fake heat
         valid_thermal_hit = hit_grid & (self.p_x > 0.5)
-        
         remeshed = False
         
-        # 2. Use the filtered hits for the heat calculation
         if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
             v_mag_sq = self.p_vx[valid_thermal_hit]**2 + self.p_vy[valid_thermal_hit]**2
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
-            
-            # 3. Add heat only to the valid cells and fixes the heatmap
             np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
 
         if sim_mode in ['Thermal', 'Both']:
@@ -321,60 +316,46 @@ class DigitalTwinSimulator:
                 remeshed = True
 
         # --- SECONDARY ELECTRON EMISSION (MOLYBDENUM) ---
-        # FILTER: Only emit electrons if the ion hits the actual grids (x > 0.5 mm)
         valid_see_hit = hit_grid & (self.p_x > 0.5)
         
         if np.any(valid_see_hit):
-            # 1. Calculate impact energy of hitting ions in eV
             v_mag_sq = self.p_vx[valid_see_hit]**2 + self.p_vy[valid_see_hit]**2
             E_eV = (0.5 * self.m_XE * v_mag_sq) / self.q
             
-            # 2. Empirical Yield for Xe+ on Molybdenum (starts ~0.05, scales linearly)
             gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
-            
-            # 3. Probabilistically spawn macro-electrons based on yield
             spawn_mask = np.random.rand(len(gamma)) < gamma
             
             if np.any(spawn_mask):
                 num_see = np.sum(spawn_mask)
-                
-                # 4. Step position backward slightly along trajectory so they spawn *outside* the wall
                 see_x = self.p_x[valid_see_hit][spawn_mask] - self.p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 see_y = self.p_y[valid_see_hit][spawn_mask] - self.p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 
-                # 5. Emit with random thermal energy (~2.0 eV)
                 T_see = 2.0 
                 v_see_th = np.sqrt(2 * self.q * T_see / self.m_e)
                 see_vx = np.random.randn(num_see) * v_see_th
                 see_vy = np.random.randn(num_see) * v_see_th
                 
-                # Add new electrons to the global arrays
                 self.e_x = np.concatenate((self.e_x, see_x))
                 self.e_y = np.concatenate((self.e_y, see_y))
                 self.e_vx = np.concatenate((self.e_vx, see_vx))
                 self.e_vy = np.concatenate((self.e_vy, see_vy))
 
         # --- EROSION LOGIC ---
-        is_erosion_hit = hit_grid  #delete self.p_isCEX to include all hits, not just CEX ions and uncomment the below line
-        # Protect the left injection wall by only allowing erosion if x > 0.5 mm 
         is_erosion_hit = hit_grid & (self.p_x > 0.5)
         
         if sim_mode in ['Erosion', 'Both'] and np.any(is_erosion_hit):
             E_eV = (0.5 * self.m_XE * (self.p_vx[is_erosion_hit]**2 + self.p_vy[is_erosion_hit]**2)) / self.q
             
-            #1. The True Physics: Empirical yield for Xe+ on Molybdenum
             Y_yield = np.where(E_eV > 30, 1.05e-4 * (E_eV - 30)**1.5, 0)
-            # 2. The Numerical Safety Limit: Cap max damage to 1.0 atom/ion 
-            # (Prevents instant grid deletion in the GUI if the 1650V primary beam strikes the wall)
             Y_yield = np.clip(Y_yield, 0, 1.0) 
-           
+            
             np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params['Accel'])
 
             broken_cells = (self.damage_map > params['Thresh']) & self.isBound
             if np.any(broken_cells):
                 self.isBound[broken_cells] = False
                 self.damage_map[broken_cells] = 0
-                self.build_sparse_matrix() # Re-factorize matrix after grid break
+                self.build_sparse_matrix() 
                 remeshed = True
 
         # Purge dead Ions
@@ -394,7 +375,7 @@ class DigitalTwinSimulator:
             self.e_x, self.e_y = self.e_x[~dead_e], self.e_y[~dead_e]
             self.e_vx, self.e_vy = self.e_vx[~dead_e], self.e_vy[~dead_e]
 
-        # --- E. CEX COLLISIONS (1mm to 2mm range) ---
+        # --- E. CEX COLLISIONS ---
         primary_mask = (~self.p_isCEX) & (self.p_x >= 1) & (self.p_x <= 8.0)
         if np.any(primary_mask):
             v_mag = np.sqrt(self.p_vx[primary_mask]**2 + self.p_vy[primary_mask]**2)
@@ -411,3 +392,44 @@ class DigitalTwinSimulator:
                 self.p_isCEX[c_idx] = True
 
         return remeshed, min_pot, current_div, self.T_screen, self.T_accel
+
+    # --- UPDATED: KINEMATICS DATA EXTRACTOR (IONS + ELECTRONS) ---
+    def get_particle_kinematics(self):
+        """
+        Extracts a snapshot of all particles (Ions + Electrons).
+        Columns: [Time(s), Z(mm), R(mm), Vz(m/s), Vr(m/s), Energy(eV), Particle_Type]
+        Types: 0=Primary Ion, 1=CEX Ion, 2=Grid Electron (SEE), 3=Plume Electron (Neut)
+        """
+        t_current = self.iteration * self.dt
+        
+        # --- 1. Process Ions ---
+        if len(self.p_x) > 0:
+            v_sq_i = self.p_vx**2 + self.p_vy**2
+            energy_eV_i = (0.5 * self.m_XE * v_sq_i) / self.q
+            type_i = self.p_isCEX.astype(int) # 0 for Primary, 1 for CEX
+            
+            ions = np.column_stack((
+                np.full(len(self.p_x), t_current),
+                self.p_x, self.p_y, self.p_vx, self.p_vy, energy_eV_i, type_i
+            ))
+        else:
+            ions = np.empty((0, 7))
+            
+        # --- 2. Process Electrons ---
+        if len(self.e_x) > 0:
+            v_sq_e = self.e_vx**2 + self.e_vy**2
+            energy_eV_e = (0.5 * self.m_e * v_sq_e) / self.q
+            
+            # Assign Type 2 for SEE (x <= 4mm) and Type 3 for Neutralizer (x > 4mm)
+            type_e = np.where(self.e_x <= 4.0, 2, 3)
+            
+            elecs = np.column_stack((
+                np.full(len(self.e_x), t_current),
+                self.e_x, self.e_y, self.e_vx, self.e_vy, energy_eV_e, type_e
+            ))
+        else:
+            elecs = np.empty((0, 7))
+            
+        # --- 3. Combine and Return ---
+        snapshot = np.vstack((ions, elecs))
+        return snapshot

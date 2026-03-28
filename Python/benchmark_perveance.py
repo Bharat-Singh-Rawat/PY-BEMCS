@@ -30,7 +30,7 @@ def worker_sweep(gap, n0_sweep, result_queue):
         }
         
         sim.build_domain(params)
-        steady_state_steps = 800
+        steady_state_steps = 1000
         div_history = []
         
         for step_idx in range(1, steady_state_steps + 1):
@@ -71,7 +71,7 @@ def worker_sweep(gap, n0_sweep, result_queue):
 # --- MAIN GUI THREAD ---
 def run_parallel_benchmark():
     grid_gaps = [0.5, 0.75, 1.0] # mm
-    n0_sweep = np.linspace(1e15, 5e17, 20) 
+    n0_sweep = np.linspace(0.5e16, 5e17, 20) 
     
     # 1. Setup Live Plot
     plt.ion()
