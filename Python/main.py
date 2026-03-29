@@ -171,7 +171,7 @@ class DigitalTwinApp(QMainWindow):
         self.inputs['Tn'] = add_input('Neutral Temp (K):', 300, 100, 2000, 100, 0)
         self.inputs['n0'] = add_input('Neutral Dens (m-3):', 1e20, 1e18, 1e22, 1e19, 0)
         self.inputs['Accel'] = add_input('Accel. Factor (X):', 1, 10, 1e16, 1e12, 0)
-        self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 100.0, 0.1, 100000.0, 0.1)
+        self.inputs['Thresh'] = add_input('Cell Fail Thresh:', 10000.0, 0.1, 100000.0, 0.1)
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel('<b>3. SIMULATION MODE</b>'))
@@ -181,7 +181,7 @@ class DigitalTwinApp(QMainWindow):
         
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel('<b>4. NEUTRALIZER</b>'))
-        self.inputs['neut_rate'] = add_input('e- Inject Rate:', 30, 0, 200, 10, 0)
+        self.inputs['neut_rate'] = add_input('e- Inject Rate:', 0, 0, 1e6, 10, 0)
         self.inputs['Te'] = add_input('e- Temp (eV):', 5.0, 0.1, 20.0, 0.5, 1)
         control_layout.addSpacing(15)
 
@@ -221,7 +221,7 @@ class DigitalTwinApp(QMainWindow):
         main_layout.addWidget(self.canvas)
 
         grid = plt.GridSpec(2, 3, height_ratios=[1.2, 1])
-        self.ax_live = self.fig.add_subplot(grid[0, 0:2]); self.ax_live.set_title('Live Axisymmetric Plasma')
+        self.ax_live = self.fig.add_subplot(grid[0, 0:2]); self.ax_live.set_title('Beam trajectory')
         self.ax_temp = self.fig.add_subplot(grid[0, 2]); self.ax_temp.set_title('Grid Temp Map (°C)')
         self.ax_dmg = self.fig.add_subplot(grid[1, 0]); self.ax_dmg.set_title('Damage Map')
         self.ax_ebs = self.fig.add_subplot(grid[1, 1]); self.ax_ebs.set_title('Electron Backstreaming')
@@ -305,7 +305,7 @@ class DigitalTwinApp(QMainWindow):
         # Set axis limits so they stay constant
         self.ax_live.set_xlim(0, self.sim.Lx)
         self.ax_live.set_ylim(0, self.sim.Ly)
-        self.ax_live.set_title('Live Axisymmetric Plasma (Colored by Energy)')
+        self.ax_live.set_title('Beam extraction')
         
         self.canvas.draw()
 

@@ -51,12 +51,22 @@ class DigitalTwinSimulator:
         self.reset_arrays()
 
     def reset_arrays(self):
-        self.p_x, self.p_y = np.array([]), np.array([])
-        self.p_vx, self.p_vy = np.array([]), np.array([])
-        self.p_isCEX = np.array([], dtype=bool)
-        
-        self.e_x, self.e_y = np.array([]), np.array([])
-        self.e_vx, self.e_vy = np.array([]), np.array([])
+        # --- PRE-ALLOCATED PARTICLE BUFFERS ---
+        self.max_p = 50000  # Initial capacity for Ions
+        self.max_e = 50000  # Initial capacity for Electrons
+
+        self.p_x = np.zeros(self.max_p)
+        self.p_y = np.zeros(self.max_p)
+        self.p_vx = np.zeros(self.max_p)
+        self.p_vy = np.zeros(self.max_p)
+        self.p_isCEX = np.zeros(self.max_p, dtype=bool)
+        self.num_p = 0
+
+        self.e_x = np.zeros(self.max_e)
+        self.e_y = np.zeros(self.max_e)
+        self.e_vx = np.zeros(self.max_e)
+        self.e_vy = np.zeros(self.max_e)
+        self.num_e = 0
         
         self.V = np.zeros((self.ny, self.nx))
         self.rho = np.zeros((self.ny, self.nx)) 
@@ -66,14 +76,51 @@ class DigitalTwinSimulator:
         self.Ex, self.Ey = np.zeros((self.ny, self.nx)), np.zeros((self.ny, self.nx))
         self.interp_Ex, self.interp_Ey = None, None
 
+    # --- BUFFER MANAGEMENT HELPERS ---
+    def _add_ions(self, x, y, vx, vy, is_cex):
+        n_new = len(x)
+        if self.num_p + n_new > self.max_p:
+            new_max = max(self.max_p * 2, self.num_p + n_new)
+            self.p_x = np.pad(self.p_x, (0, new_max - self.max_p))
+            self.p_y = np.pad(self.p_y, (0, new_max - self.max_p))
+            self.p_vx = np.pad(self.p_vx, (0, new_max - self.max_p))
+            self.p_vy = np.pad(self.p_vy, (0, new_max - self.max_p))
+            self.p_isCEX = np.pad(self.p_isCEX, (0, new_max - self.max_p))
+            self.max_p = new_max
+        
+        s = self.num_p
+        e = s + n_new
+        self.p_x[s:e] = x
+        self.p_y[s:e] = y
+        self.p_vx[s:e] = vx
+        self.p_vy[s:e] = vy
+        self.p_isCEX[s:e] = is_cex
+        self.num_p += n_new
+
+    def _add_electrons(self, x, y, vx, vy):
+        n_new = len(x)
+        if self.num_e + n_new > self.max_e:
+            new_max = max(self.max_e * 2, self.num_e + n_new)
+            self.e_x = np.pad(self.e_x, (0, new_max - self.max_e))
+            self.e_y = np.pad(self.e_y, (0, new_max - self.max_e))
+            self.e_vx = np.pad(self.e_vx, (0, new_max - self.max_e))
+            self.e_vy = np.pad(self.e_vy, (0, new_max - self.max_e))
+            self.max_e = new_max
+        
+        s = self.num_e
+        e = s + n_new
+        self.e_x[s:e] = x
+        self.e_y[s:e] = y
+        self.e_vx[s:e] = vx
+        self.e_vy[s:e] = vy
+        self.num_e += n_new
+
     def build_sparse_matrix(self):
-        """Builds the Laplacian Matrix and pre-computes the LU factorization for extreme speed."""
         N = self.nx * self.ny
         idx = np.arange(N)
         y = idx // self.nx
         x = idx % self.nx
 
-        # Define boundary regions
         is_bound = self.isBound.flatten()
         is_right = (x == self.nx - 1) & ~is_bound
         is_top = (y == self.ny - 1) & ~is_bound & ~is_right
@@ -85,26 +132,21 @@ class DigitalTwinSimulator:
 
         row, col, data = [], [], []
 
-        # 1. Fixed Boundaries (Dirichlet)
         idx_b = idx[is_bound]
         row.append(idx_b); col.append(idx_b); data.append(np.ones_like(idx_b))
 
-        # 2. Right Boundary (Neumann dV/dx = 0)
         idx_r = idx[is_right]
         row.append(idx_r); col.append(idx_r); data.append(np.ones_like(idx_r))
         row.append(idx_r); col.append(idx_r - 1); data.append(-np.ones_like(idx_r))
 
-        # 3. Top Boundary (Neumann dV/dy = 0)
         idx_t = idx[is_top]
         row.append(idx_t); col.append(idx_t); data.append(np.ones_like(idx_t))
         row.append(idx_t); col.append(idx_t - self.nx); data.append(-np.ones_like(idx_t))
 
-        # 4. Bottom Boundary (Symmetry axis, dV/dy = 0)
         idx_bot = idx[is_bottom]
         row.append(idx_bot); col.append(idx_bot); data.append(np.ones_like(idx_bot))
         row.append(idx_bot); col.append(idx_bot + self.nx); data.append(-np.ones_like(idx_bot))
 
-        # 5. Interior nodes (Standard 5-point Laplacian stencil)
         idx_in = idx[is_interior]
         row.append(idx_in); col.append(idx_in); data.append(np.full_like(idx_in, -4.0))
         row.append(idx_in); col.append(idx_in - 1); data.append(np.ones_like(idx_in))
@@ -112,25 +154,22 @@ class DigitalTwinSimulator:
         row.append(idx_in); col.append(idx_in - self.nx); data.append(np.ones_like(idx_in))
         row.append(idx_in); col.append(idx_in + self.nx); data.append(np.ones_like(idx_in))
 
-        # Assemble Sparse Matrix
         row = np.concatenate(row)
         col = np.concatenate(col)
         data = np.concatenate(data)
         
         A = sp.coo_matrix((data, (row, col)), shape=(N, N)).tocsc()
-        self.laplacian_lu = factorized(A) # Pre-factorize for instant solves
+        self.laplacian_lu = factorized(A)
 
     def build_domain(self, params):
         self.reset_arrays()
         self.iteration = 0
 
-        # --- AUTO-SCALE MACRO WEIGHT FOR OPTIMAL PERFORMANCE ---
         cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3 
         n0 = params.get('n0_plasma', 1e17) 
         target_ppc = 40.0 
         self.macro_weight = max((n0 * cell_vol) / target_ppc, 1e3)
 
-        # --- MESH GENERATION ---
         screen_start = 1.0
         screen_end = screen_start + params['ts']
         accel_start = screen_end + params['gap']
@@ -155,10 +194,7 @@ class DigitalTwinSimulator:
         
         self.T_map[~self.isBound] = 300.0
         
-        # Build Sparse Math Operator
         self.build_sparse_matrix()
-        
-        # Initial settle (30 iterations is enough with a direct solver)
         self.recalc_poisson(iterations=30, params=params)
 
     def recalc_poisson(self, iterations=5, params=None):
@@ -171,30 +207,25 @@ class DigitalTwinSimulator:
         Te_up = params.get('Te_up', 3.0) 
         n0 = params.get('n0_plasma', 1e17) 
         
-        omega = 0.2 # Under-relaxation for Picard Iterations
+        omega = 0.2 
 
         b = np.zeros(self.nx * self.ny)
         V_fixed_flat = self.V_fixed.flatten()
 
         for _ in range(iterations):
-            # Calculate Boltzmann electrons
             rho_e = -self.q * n0 * np.exp((np.minimum(self.V, V_plasma) - V_plasma) / Te_up)
             rho_total = self.rho + rho_e
             rho_flat = rho_total.flatten()
 
-            # Assemble RHS vector (b)
             b.fill(0.0)
             b[self.is_bound_mask] = V_fixed_flat[self.is_bound_mask]
             b[self.is_interior_mask] = -coeff * rho_flat[self.is_interior_mask]
 
-            # Direct Solve (Instant)
             V_new_flat = self.laplacian_lu(b)
             V_new = V_new_flat.reshape((self.ny, self.nx))
 
-            # Apply Under-relaxation
             self.V = (1 - omega) * self.V + omega * V_new
 
-        # Compute Electric Fields
         self.Ey, self.Ex = np.gradient(-self.V, self.dy * 1e-3, self.dx * 1e-3)
         self.interp_Ex = RegularGridInterpolator((self.y_pts, self.x_pts), self.Ex, bounds_error=False, fill_value=0)
         self.interp_Ey = RegularGridInterpolator((self.y_pts, self.x_pts), self.Ey, bounds_error=False, fill_value=0)
@@ -214,19 +245,16 @@ class DigitalTwinSimulator:
         
         charge_per_macro = self.q * self.macro_weight
         num_inject_float = (I_ion * self.dt) / charge_per_macro
-        
         num_inject = int(num_inject_float) + (1 if np.random.rand() < (num_inject_float % 1) else 0)
 
         if num_inject > 0:
             new_y = np.random.uniform(0.02, params['rs'] - 0.05, num_inject)
             new_x = np.full(num_inject, 0.1)
             v_spread = np.sqrt(self.q * params.get('Ti', 0.1) / self.m_XE)
-
-            self.p_x = np.concatenate((self.p_x, new_x))
-            self.p_y = np.concatenate((self.p_y, new_y))
-            self.p_vx = np.concatenate((self.p_vx, np.full(num_inject, v_bohm) + np.random.randn(num_inject) * v_spread))
-            self.p_vy = np.concatenate((self.p_vy, np.random.randn(num_inject) * v_spread))
-            self.p_isCEX = np.concatenate((self.p_isCEX, np.zeros(num_inject, dtype=bool)))
+            new_vx = np.full(num_inject, v_bohm) + np.random.randn(num_inject) * v_spread
+            new_vy = np.random.randn(num_inject) * v_spread
+            new_cex = np.zeros(num_inject, dtype=bool)
+            self._add_ions(new_x, new_y, new_vx, new_vy, new_cex)
 
         # --- DYNAMIC NEUTRALIZER CONTROL ---
         num_e = int(params.get('neut_rate', 30))
@@ -236,62 +264,75 @@ class DigitalTwinSimulator:
             new_ey = np.random.rand(num_e) * self.Ly
             new_ex = np.full(num_e, self.Lx - 0.1)
             v_e_th = np.sqrt(2 * self.q * Te_eV / self.m_e)
-            
-            self.e_x = np.concatenate((self.e_x, new_ex))
-            self.e_y = np.concatenate((self.e_y, new_ey))
-            self.e_vx = np.concatenate((self.e_vx, -np.abs(np.random.randn(num_e)) * v_e_th - v_e_th*0.2)) 
-            self.e_vy = np.concatenate((self.e_vy, np.random.randn(num_e) * v_e_th))
+            new_evx = -np.abs(np.random.randn(num_e)) * v_e_th - v_e_th*0.2
+            new_evy = np.random.randn(num_e) * v_e_th
+            self._add_electrons(new_ex, new_ey, new_evx, new_evy)
+
+        # --- CREATE ACTIVE VIEWS FOR FAST MATH ---
+        # Slicing the pre-allocated buffer gives us access to only "alive" particles 
+        # without creating copies in memory. Modifying these slices modifies the buffer.
+        p_x = self.p_x[:self.num_p]
+        p_y = self.p_y[:self.num_p]
+        p_vx = self.p_vx[:self.num_p]
+        p_vy = self.p_vy[:self.num_p]
+        p_cex = self.p_isCEX[:self.num_p]
+
+        e_x = self.e_x[:self.num_e]
+        e_y = self.e_y[:self.num_e]
+        e_vx = self.e_vx[:self.num_e]
+        e_vy = self.e_vy[:self.num_e]
 
         # --- B. POISSON & SPACE CHARGE ---
         self.rho.fill(0.0)
         cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3 
         charge_per_particle = self.q * self.macro_weight
         
-        if len(self.p_x) > 0:
-            ix_rho = np.clip(np.round(self.p_x / self.dx).astype(int), 1, self.nx - 2)
-            iy_rho = np.clip(np.round(self.p_y / self.dy).astype(int), 1, self.ny - 2)
+        if self.num_p > 0:
+            ix_rho = np.clip(np.round(p_x / self.dx).astype(int), 1, self.nx - 2)
+            iy_rho = np.clip(np.round(p_y / self.dy).astype(int), 1, self.ny - 2)
             np.add.at(self.rho, (iy_rho, ix_rho), charge_per_particle / cell_vol)
             
-        if len(self.e_x) > 0:
-            ix_rho_e = np.clip(np.round(self.e_x / self.dx).astype(int), 1, self.nx - 2)
-            iy_rho_e = np.clip(np.round(self.e_y / self.dy).astype(int), 1, self.ny - 2)
+        if self.num_e > 0:
+            ix_rho_e = np.clip(np.round(e_x / self.dx).astype(int), 1, self.nx - 2)
+            iy_rho_e = np.clip(np.round(e_y / self.dy).astype(int), 1, self.ny - 2)
             np.add.at(self.rho, (iy_rho_e, ix_rho_e), -charge_per_particle / cell_vol)
 
         if self.iteration % 2 == 0:
             self.recalc_poisson(iterations=5, params=params)
 
         # --- C. PUSH PARTICLES ---
-        pts = np.column_stack((self.p_y, self.p_x))
-        Ex_p, Ey_p = self.interp_Ex(pts), self.interp_Ey(pts)
-        self.p_vx += (self.q / self.m_XE) * Ex_p * self.dt
-        self.p_vy += (self.q / self.m_XE) * Ey_p * self.dt
-        self.p_x += self.p_vx * self.dt * 1000
-        self.p_y += self.p_vy * self.dt * 1000
+        if self.num_p > 0:
+            pts = np.column_stack((p_y, p_x))
+            Ex_p, Ey_p = self.interp_Ex(pts), self.interp_Ey(pts)
+            p_vx += (self.q / self.m_XE) * Ex_p * self.dt
+            p_vy += (self.q / self.m_XE) * Ey_p * self.dt
+            p_x += p_vx * self.dt * 1000
+            p_y += p_vy * self.dt * 1000
 
-        if len(self.e_x) > 0:
-            pts_e = np.column_stack((self.e_y, self.e_x))
+        if self.num_e > 0:
+            pts_e = np.column_stack((e_y, e_x))
             Ex_e, Ey_e = self.interp_Ex(pts_e), self.interp_Ey(pts_e)
-            self.e_vx += (-self.q / self.m_e) * Ex_e * self.dt
-            self.e_vy += (-self.q / self.m_e) * Ey_e * self.dt
-            self.e_x += self.e_vx * self.dt * 1000
-            self.e_y += self.e_vy * self.dt * 1000
+            e_vx += (-self.q / self.m_e) * Ex_e * self.dt
+            e_vy += (-self.q / self.m_e) * Ey_e * self.dt
+            e_x += e_vx * self.dt * 1000
+            e_y += e_vy * self.dt * 1000
 
         max_grid_x = 1.0 + params['ts'] + params['gap'] + params['ta']
-        post_grid = (~self.p_isCEX) & (self.p_x > max_grid_x)
-        current_div = np.percentile(np.abs(np.arctan2(self.p_vy[post_grid], self.p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
+        post_grid = (~p_cex) & (p_x > max_grid_x)
+        current_div = np.percentile(np.abs(np.arctan2(p_vy[post_grid], p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
         min_pot = np.min(self.V[0, :])
 
         # --- D. 2D THERMAL MULTIPHYSICS & HIT DETECTION ---
-        ix = np.clip(np.round(self.p_x / self.dx).astype(int), 0, self.nx - 1)
-        iy = np.clip(np.round(self.p_y / self.dy).astype(int), 0, self.ny - 1)
+        ix = np.clip(np.round(p_x / self.dx).astype(int), 0, self.nx - 1)
+        iy = np.clip(np.round(p_y / self.dy).astype(int), 0, self.ny - 1)
         hit_grid = self.isBound[iy, ix]
-        out_of_bounds = (self.p_x < 0) | (self.p_x > self.Lx) | (self.p_y < 0) | (self.p_y > self.Ly) | np.isnan(self.p_x)
+        out_of_bounds = (p_x < 0) | (p_x > self.Lx) | (p_y < 0) | (p_y > self.Ly) | np.isnan(p_x)
         
-        valid_thermal_hit = hit_grid & (self.p_x > 0.5)
+        valid_thermal_hit = hit_grid & (p_x > 0.5)
         remeshed = False
         
         if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
-            v_mag_sq = self.p_vx[valid_thermal_hit]**2 + self.p_vy[valid_thermal_hit]**2
+            v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
             np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
@@ -316,10 +357,10 @@ class DigitalTwinSimulator:
                 remeshed = True
 
         # --- SECONDARY ELECTRON EMISSION (MOLYBDENUM) ---
-        valid_see_hit = hit_grid & (self.p_x > 0.5)
+        valid_see_hit = hit_grid & (p_x > 0.5)
         
         if np.any(valid_see_hit):
-            v_mag_sq = self.p_vx[valid_see_hit]**2 + self.p_vy[valid_see_hit]**2
+            v_mag_sq = p_vx[valid_see_hit]**2 + p_vy[valid_see_hit]**2
             E_eV = (0.5 * self.m_XE * v_mag_sq) / self.q
             
             gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
@@ -327,27 +368,30 @@ class DigitalTwinSimulator:
             
             if np.any(spawn_mask):
                 num_see = np.sum(spawn_mask)
-                see_x = self.p_x[valid_see_hit][spawn_mask] - self.p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
-                see_y = self.p_y[valid_see_hit][spawn_mask] - self.p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
+                see_x = p_x[valid_see_hit][spawn_mask] - p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
+                see_y = p_y[valid_see_hit][spawn_mask] - p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 
                 T_see = 2.0 
                 v_see_th = np.sqrt(2 * self.q * T_see / self.m_e)
                 see_vx = np.random.randn(num_see) * v_see_th
                 see_vy = np.random.randn(num_see) * v_see_th
                 
-                self.e_x = np.concatenate((self.e_x, see_x))
-                self.e_y = np.concatenate((self.e_y, see_y))
-                self.e_vx = np.concatenate((self.e_vx, see_vx))
-                self.e_vy = np.concatenate((self.e_vy, see_vy))
+                self._add_electrons(see_x, see_y, see_vx, see_vy)
+                
+                # Re-establish electron active views because buffer may have grown
+                e_x = self.e_x[:self.num_e]
+                e_y = self.e_y[:self.num_e]
+                e_vx = self.e_vx[:self.num_e]
+                e_vy = self.e_vy[:self.num_e]
 
         # --- EROSION LOGIC ---
-        is_erosion_hit = hit_grid & (self.p_x > 0.5)
+        is_erosion_hit = hit_grid & (p_x > 0.5)
         
         if sim_mode in ['Erosion', 'Both'] and np.any(is_erosion_hit):
-            E_eV = (0.5 * self.m_XE * (self.p_vx[is_erosion_hit]**2 + self.p_vy[is_erosion_hit]**2)) / self.q
+            E_eV = (0.5 * self.m_XE * (p_vx[is_erosion_hit]**2 + p_vy[is_erosion_hit]**2)) / self.q
             
-            Y_yield = np.where(E_eV > 30, 1.05e-4 * (E_eV - 30)**1.5, 0)
-            Y_yield = np.clip(Y_yield, 0, 1.0) 
+            # Applying the mathematical fix for Y_yield
+            Y_yield = np.minimum(1.05e-4 * (np.maximum(E_eV - 30, 0))**1.5, 1.0)
             
             np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params['Accel'])
 
@@ -358,74 +402,100 @@ class DigitalTwinSimulator:
                 self.build_sparse_matrix() 
                 remeshed = True
 
-        # Purge dead Ions
+        # --- COMPACT BUFFERS (PURGE DEAD PARTICLES) ---
         dead_mask = hit_grid | out_of_bounds
-        self.p_x, self.p_y = self.p_x[~dead_mask], self.p_y[~dead_mask]
-        self.p_vx, self.p_vy = self.p_vx[~dead_mask], self.p_vy[~dead_mask]
-        self.p_isCEX = self.p_isCEX[~dead_mask]
+        alive_mask = ~dead_mask
+        n_alive = np.sum(alive_mask)
         
-        # Purge dead Electrons
-        if len(self.e_x) > 0:
-            ix_e = np.clip(np.round(self.e_x / self.dx).astype(int), 0, self.nx - 1)
-            iy_e = np.clip(np.round(self.e_y / self.dy).astype(int), 0, self.ny - 1)
+        if n_alive < self.num_p:
+            # Shift alive particles to the front of the array. No new memory allocation!
+            self.p_x[:n_alive] = p_x[alive_mask]
+            self.p_y[:n_alive] = p_y[alive_mask]
+            self.p_vx[:n_alive] = p_vx[alive_mask]
+            self.p_vy[:n_alive] = p_vy[alive_mask]
+            self.p_isCEX[:n_alive] = p_cex[alive_mask]
+            self.num_p = n_alive
+            
+            # Update slices
+            p_x = self.p_x[:self.num_p]
+            p_y = self.p_y[:self.num_p]
+            p_vx = self.p_vx[:self.num_p]
+            p_vy = self.p_vy[:self.num_p]
+            p_cex = self.p_isCEX[:self.num_p]
+
+        if self.num_e > 0:
+            ix_e = np.clip(np.round(e_x / self.dx).astype(int), 0, self.nx - 1)
+            iy_e = np.clip(np.round(e_y / self.dy).astype(int), 0, self.ny - 1)
             hit_grid_e = self.isBound[iy_e, ix_e]
-            out_e = (self.e_x < 0) | (self.e_x > self.Lx) | (self.e_y < 0) | (self.e_y > self.Ly) | np.isnan(self.e_x)
+            out_e = (e_x < 0) | (e_x > self.Lx) | (e_y < 0) | (e_y > self.Ly) | np.isnan(e_x)
             
             dead_e = hit_grid_e | out_e
-            self.e_x, self.e_y = self.e_x[~dead_e], self.e_y[~dead_e]
-            self.e_vx, self.e_vy = self.e_vx[~dead_e], self.e_vy[~dead_e]
+            alive_e = ~dead_e
+            n_alive_e = np.sum(alive_e)
+            
+            if n_alive_e < self.num_e:
+                self.e_x[:n_alive_e] = e_x[alive_e]
+                self.e_y[:n_alive_e] = e_y[alive_e]
+                self.e_vx[:n_alive_e] = e_vx[alive_e]
+                self.e_vy[:n_alive_e] = e_vy[alive_e]
+                self.num_e = n_alive_e
 
         # --- E. CEX COLLISIONS ---
-        primary_mask = (~self.p_isCEX) & (self.p_x >= 1) & (self.p_x <= 8.0)
-        if np.any(primary_mask):
-            v_mag = np.sqrt(self.p_vx[primary_mask]**2 + self.p_vy[primary_mask]**2)
-            g = np.maximum(v_mag, 1)
-            sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
-            prob = 1 - np.exp(-params['n0'] * sigma * g * self.dt)
-            collided = np.random.rand(np.sum(primary_mask)) < prob
-            
-            if np.any(collided):
-                c_idx = np.where(primary_mask)[0][collided]
-                neut_vth = np.sqrt(2 * self.kB * params['Tn'] / self.m_XE)
-                self.p_vx[c_idx] = np.random.randn(len(c_idx)) * neut_vth
-                self.p_vy[c_idx] = np.random.randn(len(c_idx)) * neut_vth
-                self.p_isCEX[c_idx] = True
+        if self.num_p > 0:
+            primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= 8.0)
+            if np.any(primary_mask):
+                v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2)
+                g = np.maximum(v_mag, 1)
+                sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
+                prob = 1 - np.exp(-params['n0'] * sigma * g * self.dt)
+                collided = np.random.rand(np.sum(primary_mask)) < prob
+                
+                if np.any(collided):
+                    c_idx = np.where(primary_mask)[0][collided]
+                    neut_vth = np.sqrt(2 * self.kB * params['Tn'] / self.m_XE)
+                    p_vx[c_idx] = np.random.randn(len(c_idx)) * neut_vth
+                    p_vy[c_idx] = np.random.randn(len(c_idx)) * neut_vth
+                    p_cex[c_idx] = True
 
         return remeshed, min_pot, current_div, self.T_screen, self.T_accel
 
-    # --- UPDATED: KINEMATICS DATA EXTRACTOR (IONS + ELECTRONS) ---
     def get_particle_kinematics(self):
-        """
-        Extracts a snapshot of all particles (Ions + Electrons).
-        Columns: [Time(s), Z(mm), R(mm), Vz(m/s), Vr(m/s), Energy(eV), Particle_Type]
-        Types: 0=Primary Ion, 1=CEX Ion, 2=Grid Electron (SEE), 3=Plume Electron (Neut)
-        """
         t_current = self.iteration * self.dt
         
         # --- 1. Process Ions ---
-        if len(self.p_x) > 0:
-            v_sq_i = self.p_vx**2 + self.p_vy**2
+        if self.num_p > 0:
+            p_x = self.p_x[:self.num_p]
+            p_y = self.p_y[:self.num_p]
+            p_vx = self.p_vx[:self.num_p]
+            p_vy = self.p_vy[:self.num_p]
+            p_cex = self.p_isCEX[:self.num_p]
+            
+            v_sq_i = p_vx**2 + p_vy**2
             energy_eV_i = (0.5 * self.m_XE * v_sq_i) / self.q
-            type_i = self.p_isCEX.astype(int) # 0 for Primary, 1 for CEX
+            type_i = p_cex.astype(int) 
             
             ions = np.column_stack((
-                np.full(len(self.p_x), t_current),
-                self.p_x, self.p_y, self.p_vx, self.p_vy, energy_eV_i, type_i
+                np.full(self.num_p, t_current),
+                p_x, p_y, p_vx, p_vy, energy_eV_i, type_i
             ))
         else:
             ions = np.empty((0, 7))
             
         # --- 2. Process Electrons ---
-        if len(self.e_x) > 0:
-            v_sq_e = self.e_vx**2 + self.e_vy**2
+        if self.num_e > 0:
+            e_x = self.e_x[:self.num_e]
+            e_y = self.e_y[:self.num_e]
+            e_vx = self.e_vx[:self.num_e]
+            e_vy = self.e_vy[:self.num_e]
+            
+            v_sq_e = e_vx**2 + e_vy**2
             energy_eV_e = (0.5 * self.m_e * v_sq_e) / self.q
             
-            # Assign Type 2 for SEE (x <= 4mm) and Type 3 for Neutralizer (x > 4mm)
-            type_e = np.where(self.e_x <= 4.0, 2, 3)
+            type_e = np.where(e_x <= 4.0, 2, 3)
             
             elecs = np.column_stack((
-                np.full(len(self.e_x), t_current),
-                self.e_x, self.e_y, self.e_vx, self.e_vy, energy_eV_e, type_e
+                np.full(self.num_e, t_current),
+                e_x, e_y, e_vx, e_vy, energy_eV_e, type_e
             ))
         else:
             elecs = np.empty((0, 7))

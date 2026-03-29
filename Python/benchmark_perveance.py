@@ -20,7 +20,7 @@ def worker_sweep(gap, n0_sweep, result_queue):
             'ts': 1, 'ta': 1, 
             'rs': 1.0, 'ra': 0.6,
             'cham_s': 0, 'cham_a': 0,
-            'Vs': 1650, 'Va': -350, 
+            'Vs': 1650, 'Va': -500, 
             'gap': gap,
             'n0_plasma': n0,
             'Te_up': 3.0, 'Ti': 0.1,
@@ -71,7 +71,7 @@ def worker_sweep(gap, n0_sweep, result_queue):
 # --- MAIN GUI THREAD ---
 def run_parallel_benchmark():
     grid_gaps = [0.5, 0.75, 1.0] # mm
-    n0_sweep = np.linspace(0.5e16, 5e17, 20) 
+    n0_sweep = np.linspace(0.4e16, 5e17, 60) 
     
     # 1. Setup Live Plot
     plt.ion()
