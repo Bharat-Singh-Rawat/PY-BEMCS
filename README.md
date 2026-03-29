@@ -31,15 +31,16 @@ This repository currently includes:
 ## PY-BEMCS Demo
 
 <p align="center">
-  <i>This simulation demonstrates Xe+ beam extraction of a dual-grid ion optics system for Vscreen=4600V and Va=-350V without a neutralizer. As the primary (blue) and the CEX (red) ions erode the screen/accelerator grid, geometry and potential barriers evolve in time. The secondary electrons (green) are emitted due to the impact of primary beam ions and the charge exchange ions on the grids.</i>
+  <i>This simulation demonstrates Xe+ beam extraction of a dual-grid ion optics system for Vscreen=1650V and Va=-350V without a neutralizer. As the primary and the CEX ions erode the screen/accelerator grid, geometry and potential barriers evolve in time. The secondary electrons are emitted due to the impact of primary beam ions and the charge exchange ions on the grids.</i>
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/331fac12-c8ef-427f-8381-171eaee8a657" width="900px" autoplay loop muted playsinline>
+  <video src="https://github.com/user-attachments/assets/68f347d0-b163-49d8-8dc5-8b52536709c6" width="900px" autoplay loop muted playsinline>
   </video>
 </p>
+
 ---
-## Key Features
+### Key Features
 
 ### Core Physics
 
