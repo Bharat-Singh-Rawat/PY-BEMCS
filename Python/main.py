@@ -1,3 +1,7 @@
+"""
+# This code handles the primary for the GUI/UI design. One can use this
+section to add or modify any new features to the screen.
+"""
 import sys 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,7 +13,6 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt5.QtCore import QTimer, Qt
 import csv
 from physics_engine import DigitalTwinSimulator
-
 # --- IEDF & EEDF SUB-WINDOW CLASS ---
 class IEDFWindow(QWidget):
     def __init__(self):
@@ -19,15 +22,15 @@ class IEDFWindow(QWidget):
         
         layout = QVBoxLayout(self)
         
-        # Dropdown to toggle particle types (Now includes electrons)
+        # Dropdown to toggle particle types
         self.combo_type = QComboBox()
         self.combo_type.addItems([
             'All Ions', 
             'Primary Ions Only', 
             'CEX Ions Only',
             'All Electrons',
-            'Grid Electrons (SEE) [x <= 4mm]',
-            'Plume Electrons (Neut) [x > 4mm]'
+            'Grid Secondary Electrons (SEE) [x <= 4mm]',
+            'Neutralizer Electrons (Neut) [x > 4mm]'
         ])
         layout.addWidget(QLabel("<b>Select Particle Population:</b>"))
         layout.addWidget(self.combo_type)
@@ -44,12 +47,12 @@ class IEDFWindow(QWidget):
         mode = self.combo_type.currentText()
         data = np.array([])
         color = 'gray'
-        x_max = Vs + 100 # Default axis for ions
-        title = 'Live Energy Distribution'
+        x_max = Vs + 100 
+        title = 'Energy Distribution'
 
         # --- ION LOGIC ---
         if 'Ions' in mode:
-            self.ax.set_xlabel('Kinetic Energy (eV)')
+            self.ax.set_xlabel('Energy (eV)')
             self.ax.set_ylabel('Ion Count')
             if len(p_vx) > 0:
                 v_sq = p_vx**2 + p_vy**2
@@ -108,7 +111,7 @@ class IEDFWindow(QWidget):
 class DigitalTwinApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('2-Grid Digital Twin: Morphing, Telemetry & Neutralizer')
+        self.setWindowTitle('PY-BEMCS')
         self.setGeometry(20, 30, 1400, 800) 
 
         self.sim = DigitalTwinSimulator()
@@ -151,9 +154,15 @@ class DigitalTwinApp(QMainWindow):
             control_layout.addLayout(row)
             return spin
 
+<<<<<<< HEAD
         control_layout.addWidget(QLabel('<b>1. GRID DESIGN</b>'))
         self.inputs['Vs'] = add_input('Screen Volts (V):', 1650, 0, 10000, 100, 0)
         self.inputs['Va'] = add_input('Accel Volts (V):', -350, -1000, 0, 50, 0)
+=======
+        control_layout.addWidget(QLabel('<b>1. OPTICS DESIGN</b>'))
+        self.inputs['Vs'] = add_input('Screen Grid  (V):', 1650, 0, 10000, 100, 0)
+        self.inputs['Va'] = add_input('Accel Grid (V):', -350, -1000, 0, 50, 0)
+>>>>>>> main
         self.inputs['gap'] = add_input('Grid Gap (mm):', 1.0, 0.1, 5.0, 0.1)
         self.inputs['ts'] = add_input('Screen Thick (mm):', 1, 0.1, 5.0, 0.1)
         self.inputs['ta'] = add_input('Accel Thick (mm):', 1, 0.1, 5.0, 0.1)
@@ -190,11 +199,11 @@ class DigitalTwinApp(QMainWindow):
         self.btn_toggle = QPushButton('2. START BEAM')
         self.btn_toggle.clicked.connect(self.toggle_sim)
         
-        self.btn_csv = QPushButton('Export Telemetry (.csv)')
+        self.btn_csv = QPushButton('Export Data (.csv)')
         self.btn_csv.clicked.connect(self.export_csv)
         self.btn_csv.setStyleSheet("background-color: #E6E6FA; font-weight: bold;")
         
-        self.chk_track_ptcls = QCheckBox('Record Kinematics (RAM Heavy)')
+        self.chk_track_ptcls = QCheckBox('Record Kinematics')
         self.btn_export_trk = QPushButton('Export Particle Data (.csv)')
         self.btn_export_trk.clicked.connect(self.export_tracking_data)
         self.btn_export_trk.setStyleSheet("background-color: #FFDAB9; font-weight: bold;")
@@ -224,7 +233,7 @@ class DigitalTwinApp(QMainWindow):
         self.ax_live = self.fig.add_subplot(grid[0, 0:2]); self.ax_live.set_title('Beam trajectory')
         self.ax_temp = self.fig.add_subplot(grid[0, 2]); self.ax_temp.set_title('Grid Temp Map (°C)')
         self.ax_dmg = self.fig.add_subplot(grid[1, 0]); self.ax_dmg.set_title('Damage Map')
-        self.ax_ebs = self.fig.add_subplot(grid[1, 1]); self.ax_ebs.set_title('Electron Backstreaming')
+        self.ax_ebs = self.fig.add_subplot(grid[1, 1]); self.ax_ebs.set_title('Saddle Point Potential')
         self.ax_div = self.fig.add_subplot(grid[1, 2]); self.ax_div.set_title('Beam Divergence')
         
         self.line_ebs, = self.ax_ebs.plot([], [], 'm-', lw=2)
@@ -232,7 +241,6 @@ class DigitalTwinApp(QMainWindow):
         
         self.scat_prim = None
         self.scat_cex = None
-        # --- FIX: Removed the duplicate 'c' argument and added proper X, Y empty lists ---
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5) 
         self.fig.tight_layout()
 
@@ -281,13 +289,13 @@ class DigitalTwinApp(QMainWindow):
         
         Vs = self.inputs['Vs'].value()
         
-        # Initialize scatter plots
+        # Scatter plots
         self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=Vs+50, alpha=0.8)
         self.scat_cex = self.ax_live.scatter([], [], c=[], s=7, cmap='turbo', vmin=0, vmax=Vs+50, alpha=1.0)
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)
         
-        # --- FIXED COLORBAR LOGIC ---
-        # 1. Safely remove old colorbar
+        # --- COLORBAR ---
+        
         if self.cbar_energy is not None:
             try:
                 self.cbar_energy.remove()
@@ -295,14 +303,14 @@ class DigitalTwinApp(QMainWindow):
                 pass
             self.cbar_energy = None
 
-        # 2. Use a divider to reserve space so the plot NEVER rescales
+        
         divider = make_axes_locatable(self.ax_live)
-        cax = divider.append_axes("right", size="3%", pad=0.1) # Reserves 3% width on the right
+        cax = divider.append_axes("right", size="3%", pad=0.1) 
         
         self.cbar_energy = self.fig.colorbar(self.scat_prim, cax=cax)
         self.cbar_energy.set_label('Kinetic Energy (eV)')
         
-        # Set axis limits so they stay constant
+        # Axis limits 
         self.ax_live.set_xlim(0, self.sim.Lx)
         self.ax_live.set_ylim(0, self.sim.Ly)
         self.ax_live.set_title('Beam extraction')
@@ -383,7 +391,7 @@ class DigitalTwinApp(QMainWindow):
                 
                 contour = self.ax_temp.contourf(self.sim.X, self.sim.Y, T_display_C, 15, cmap='inferno')
                 
-                # Reserving space for Temperature colorbar
+                # Temperature colorbar
                 divider_t = make_axes_locatable(self.ax_temp)
                 cax_t = divider_t.append_axes("right", size="5%", pad=0.1)
                 
