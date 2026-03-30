@@ -154,9 +154,15 @@ class DigitalTwinApp(QMainWindow):
             control_layout.addLayout(row)
             return spin
 
+<<<<<<< HEAD
+        control_layout.addWidget(QLabel('<b>1. GRID DESIGN</b>'))
+        self.inputs['Vs'] = add_input('Screen Volts (V):', 1650, 0, 10000, 100, 0)
+        self.inputs['Va'] = add_input('Accel Volts (V):', -350, -1000, 0, 50, 0)
+=======
         control_layout.addWidget(QLabel('<b>1. OPTICS DESIGN</b>'))
         self.inputs['Vs'] = add_input('Screen Grid  (V):', 1650, 0, 10000, 100, 0)
         self.inputs['Va'] = add_input('Accel Grid (V):', -350, -1000, 0, 50, 0)
+>>>>>>> main
         self.inputs['gap'] = add_input('Grid Gap (mm):', 1.0, 0.1, 5.0, 0.1)
         self.inputs['ts'] = add_input('Screen Thick (mm):', 1, 0.1, 5.0, 0.1)
         self.inputs['ta'] = add_input('Accel Thick (mm):', 1, 0.1, 5.0, 0.1)
