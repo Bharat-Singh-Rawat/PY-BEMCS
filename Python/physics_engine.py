@@ -299,8 +299,22 @@ class DigitalTwinSimulator:
 
         if self.iteration % 2 == 0:
             self.recalc_poisson(iterations=5, params=params)
+        
 
-        # C. PARTICLE PUSH ALGORITHM
+        # # Leapfrog 
+        # if self.num_p > 0:
+        #     pts_init = np.column_stack((p_y, p_x))
+        #     Ex_init, Ey_init = self.interp_Ex(pts_init), self.interp_Ey(pts_init) 
+        #     p_vx -= (self.q / self.m_XE) * Ex_init * (self.dt / 2.0)
+        #     p_vy -= (self.q / self.m_XE) * Ey_init * (self.dt / 2.0)
+
+        # if self.num_e > 0:
+        #     pts_e_init = np.column_stack((e_y, e_x))
+        #     Ex_e_init, Ey_e_init = self.interp_Ex(pts_e_init), self.interp_Ey(pts_e_init)
+        #     e_vx -= (-self.q / self.m_e) * Ex_e_init * (self.dt / 2.0)
+        #     e_vy -= (-self.q / self.m_e) * Ey_e_init * (self.dt / 2.0)
+
+        # C. PARTICLE PUSH ALGORITHM (Symplectic Euler-1st order accurate)
         if self.num_p > 0:
             pts = np.column_stack((p_y, p_x))
             Ex_p, Ey_p = self.interp_Ex(pts), self.interp_Ey(pts)
@@ -322,7 +336,15 @@ class DigitalTwinSimulator:
         
         # Divergence calculator. It calculates the 95% beam divergence of particles post acc grid.
         current_div = np.percentile(np.abs(np.arctan2(p_vy[post_grid], p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
-        min_pot = np.min(self.V[0, :])
+        
+        #Calculates the saddle potential by scanning the centre line(x,y)
+        #min_pot = np.min(self.V[0, :])
+
+        # Fixing the saddle point at the centre of acc grid electrode
+        accel_start = 1.0 + params['ts'] + params['gap']
+        accel_center_mm = accel_start + (params['ta'] / 2.0)
+        x_idx = int(accel_center_mm / self.dx)
+        min_pot = self.V[0, x_idx]
 
         # D. 2D THERMAL CALCULATIONS & HIT DETECTION 
         ix = np.clip(np.round(p_x / self.dx).astype(int), 0, self.nx - 1)
@@ -420,7 +442,7 @@ class DigitalTwinSimulator:
         n_alive = np.sum(alive_mask)
         
         if n_alive < self.num_p:
-            # Shift alive particles to the front of the array. No new memory allocation!
+            
             self.p_x[:n_alive] = p_x[alive_mask]
             self.p_y[:n_alive] = p_y[alive_mask]
             self.p_vx[:n_alive] = p_vx[alive_mask]
@@ -461,6 +483,7 @@ class DigitalTwinSimulator:
             if np.any(primary_mask):
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2)
                 g = np.maximum(v_mag, 1)
+                                   
                 #Estimating cross section for Xenon using Rapp and Francis empirical fit constants
                 sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
                 #Calculating the collision probability

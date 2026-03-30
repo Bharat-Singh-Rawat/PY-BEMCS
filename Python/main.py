@@ -172,7 +172,7 @@ class DigitalTwinApp(QMainWindow):
         self.inputs['cham_a'] = add_input('Accel Chamfer (°):', 0, 0, 45, 1)
 
         control_layout.addSpacing(15)
-        control_layout.addWidget(QLabel('<b>2. PLASMA & MORPHING</b>'))
+        control_layout.addWidget(QLabel('<b>2. PLASMA & SPUTTERING</b>'))
         self.inputs['n0_plasma'] = add_input('Plasma Dens (m-3):', 1e17, 1e15, 1e19, 1e16, 0)
         self.inputs['Te_up'] = add_input('Upstream Te (eV):', 3.0, 0.1, 20.0, 0.5, 1)
         
@@ -294,7 +294,7 @@ class DigitalTwinApp(QMainWindow):
         self.scat_cex = self.ax_live.scatter([], [], c=[], s=7, cmap='turbo', vmin=0, vmax=Vs+50, alpha=1.0)
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)
         
-        # --- COLORBAR ---
+        #  COLORBAR 
         
         if self.cbar_energy is not None:
             try:
