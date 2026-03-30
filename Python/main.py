@@ -29,8 +29,8 @@ class IEDFWindow(QWidget):
             'Primary Ions Only', 
             'CEX Ions Only',
             'All Electrons',
-            'Grid Electrons (SEE) [x <= 4mm]',
-            'Plume Electrons (Neut) [x > 4mm]'
+            'Grid Secondary Electrons (SEE) [x <= 4mm]',
+            'Neutralizer Electrons (Neut) [x > 4mm]'
         ])
         layout.addWidget(QLabel("<b>Select Particle Population:</b>"))
         layout.addWidget(self.combo_type)
@@ -235,7 +235,6 @@ class DigitalTwinApp(QMainWindow):
         
         self.scat_prim = None
         self.scat_cex = None
-        # --- FIX: Removed the duplicate 'c' argument and added proper X, Y empty lists ---
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5) 
         self.fig.tight_layout()
 
@@ -284,7 +283,7 @@ class DigitalTwinApp(QMainWindow):
         
         Vs = self.inputs['Vs'].value()
         
-        # Initialize scatter plots
+        # Scatter plots
         self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=Vs+50, alpha=0.8)
         self.scat_cex = self.ax_live.scatter([], [], c=[], s=7, cmap='turbo', vmin=0, vmax=Vs+50, alpha=1.0)
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)

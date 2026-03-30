@@ -12,11 +12,12 @@ class DigitalTwinSimulator:
         self.kB = 1.380649e-23
         self.eps0 = 8.854e-12
         
-        # ARTIFICIAL ELECTRON MASS:%To be more accurate
-        #one can change the mass ration but it might take longer time and smaller timesteps
+        """To be more accurate one can change 
+        the mass ration but it might take longer time
+         and smaller timesteps"""
         self.m_e = self.m_XE / 100.0 
         
-        # --- Material constants for Molybdenum
+        #Material properties for Molybdenum
         self.macro_weight = 3e5  
         self.alpha_moly = 4.8e-6 #Coefficient of thermal expansion
         self.sb_sigma = 5.67e-8  
@@ -52,7 +53,7 @@ class DigitalTwinSimulator:
         self.reset_arrays()
 
     def reset_arrays(self):
-        # --- PRE-ALLOCATED PARTICLE BUFFERS TO SAVE SOME MEMORY
+        # PRE-ALLOCATED PARTICLE BUFFERS
         self.max_p = 50000  # Initial capacity for Ions
         self.max_e = 50000  # Initial capacity for Electrons
 
@@ -77,7 +78,7 @@ class DigitalTwinSimulator:
         self.Ex, self.Ey = np.zeros((self.ny, self.nx)), np.zeros((self.ny, self.nx))
         self.interp_Ex, self.interp_Ey = None, None
 
-    # --- BUFFER MANAGEMENT ---
+    # BUFFER MANAGEMENT
     def _add_ions(self, x, y, vx, vy, is_cex):
         n_new = len(x)
         if self.num_p + n_new > self.max_p:
@@ -269,7 +270,6 @@ class DigitalTwinSimulator:
             new_evy = np.random.randn(num_e) * v_e_th
             self._add_electrons(new_ex, new_ey, new_evx, new_evy)
 
-        # --- CREATE ACTIVE VIEWS FOR FAST MATH ---
         # Slicing the pre-allocated buffer gives us access to only "alive" particles 
         p_x = self.p_x[:self.num_p]
         p_y = self.p_y[:self.num_p]
@@ -282,7 +282,7 @@ class DigitalTwinSimulator:
         e_vx = self.e_vx[:self.num_e]
         e_vy = self.e_vy[:self.num_e]
 
-        # --- B. POISSON & SPACE CHARGE ---
+        # B. POISSON SOLVER
         self.rho.fill(0.0)
         cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3 
         charge_per_particle = self.q * self.macro_weight
@@ -300,29 +300,31 @@ class DigitalTwinSimulator:
         if self.iteration % 2 == 0:
             self.recalc_poisson(iterations=5, params=params)
 
-        # --- C. PUSH PARTICLES ---
+        # C. PARTICLE PUSH ALGORITHM
         if self.num_p > 0:
             pts = np.column_stack((p_y, p_x))
             Ex_p, Ey_p = self.interp_Ex(pts), self.interp_Ey(pts)
             p_vx += (self.q / self.m_XE) * Ex_p * self.dt
             p_vy += (self.q / self.m_XE) * Ey_p * self.dt
-            p_x += p_vx * self.dt * 1000
-            p_y += p_vy * self.dt * 1000
+            p_x += p_vx * self.dt * 1000 #mm to meter conversion
+            p_y += p_vy * self.dt * 1000 #mm to meter conversion
 
         if self.num_e > 0:
             pts_e = np.column_stack((e_y, e_x))
             Ex_e, Ey_e = self.interp_Ex(pts_e), self.interp_Ey(pts_e)
             e_vx += (-self.q / self.m_e) * Ex_e * self.dt
             e_vy += (-self.q / self.m_e) * Ey_e * self.dt
-            e_x += e_vx * self.dt * 1000
-            e_y += e_vy * self.dt * 1000
+            e_x += e_vx * self.dt * 1000 #mm to meter conversion
+            e_y += e_vy * self.dt * 1000 #mm to meter conversion
 
         max_grid_x = 1.0 + params['ts'] + params['gap'] + params['ta']
         post_grid = (~p_cex) & (p_x > max_grid_x)
+        
+        # Divergence calculator. It calculates the 95% beam divergence of particles post acc grid.
         current_div = np.percentile(np.abs(np.arctan2(p_vy[post_grid], p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
         min_pot = np.min(self.V[0, :])
 
-        # --- D. 2D THERMAL CALCULATIONS & HIT DETECTION ---
+        # D. 2D THERMAL CALCULATIONS & HIT DETECTION 
         ix = np.clip(np.round(p_x / self.dx).astype(int), 0, self.nx - 1)
         iy = np.clip(np.round(p_y / self.dy).astype(int), 0, self.ny - 1)
         hit_grid = self.isBound[iy, ix]
@@ -333,6 +335,8 @@ class DigitalTwinSimulator:
         
         if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
             v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2
+            
+            # Estimating the kinetic energy
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
             np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
@@ -359,12 +363,15 @@ class DigitalTwinSimulator:
         # --- SECONDARY ELECTRON EMISSION (MOLYBDENUM)
         #This is a very preliminary model for secondary emission of electrons
         #More advanced model will be applied in the upcoming releases.
+        
+        # only estimating secondary emission after a distance of 0.5mm
         valid_see_hit = hit_grid & (p_x > 0.5)
         
         if np.any(valid_see_hit):
             v_mag_sq = p_vx[valid_see_hit]**2 + p_vy[valid_see_hit]**2
             E_eV = (0.5 * self.m_XE * v_mag_sq) / self.q
             
+            # Secondary electron emission yield formula
             gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
             spawn_mask = np.random.rand(len(gamma)) < gamma
             
@@ -373,6 +380,7 @@ class DigitalTwinSimulator:
                 see_x = p_x[valid_see_hit][spawn_mask] - p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 see_y = p_y[valid_see_hit][spawn_mask] - p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 
+                #Temperature of the formed secondary electron (assumed constant)
                 T_see = 2.0 
                 v_see_th = np.sqrt(2 * self.q * T_see / self.m_e)
                 see_vx = np.random.randn(num_see) * v_see_th
@@ -453,7 +461,9 @@ class DigitalTwinSimulator:
             if np.any(primary_mask):
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2)
                 g = np.maximum(v_mag, 1)
+                #Estimating cross section for Xenon using Rapp and Francis empirical fit constants
                 sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
+                #Calculating the collision probability
                 prob = 1 - np.exp(-params['n0'] * sigma * g * self.dt)
                 collided = np.random.rand(np.sum(primary_mask)) < prob
                 
