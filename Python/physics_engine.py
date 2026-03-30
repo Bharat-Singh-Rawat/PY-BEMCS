@@ -29,7 +29,7 @@ class DigitalTwinSimulator:
         self.T_accel = 300.0 
         
         # Mesh parameters (High Accuracy)
-        self.Lx = 8
+        self.Lx = 20
         self.Ly = 3
         self.dx = 0.01
         self.dy = 0.01
@@ -203,7 +203,7 @@ class DigitalTwinSimulator:
         dx_m2 = (self.dx * 1e-3)**2 
         coeff = dx_m2 / self.eps0
         
-        V_plasma = params['Vs'] + 50 if params else 1050 
+        V_plasma = params['Vs'] + 20 if params else 1020 
         Te_up = params.get('Te_up', 3.0) 
         n0 = params.get('n0_plasma', 1e17) 
         
@@ -442,7 +442,7 @@ class DigitalTwinSimulator:
 
         # --- E. CEX COLLISIONS ---
         if self.num_p > 0:
-            primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= 8.0)
+            primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= 20.0)
             if np.any(primary_mask):
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2)
                 g = np.maximum(v_mag, 1)

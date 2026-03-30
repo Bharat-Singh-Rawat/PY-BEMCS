@@ -1,0 +1,12 @@
+# Python cache files
+__pycache__/
+*.pyc
+
+# PyInstaller build and distribution folders
+build/
+dist/
+*.spec
+
+# OS generated files
+.DS_Store
+Thumbs.db
