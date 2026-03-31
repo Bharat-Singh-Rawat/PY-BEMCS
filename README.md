@@ -116,8 +116,25 @@ This means you are free to use, share, and adapt this code for academic, researc
 *For commercial inquiries or alternative licensing, please contact the author.*
 
 ---
-## Author
+## Citation
 
+If you use this software in your work, please cite it using the following formats:
+
+**Plain Text:**
+Bharat Singh Rawat. (2026). *Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)* [Source code]. GitHub. https://github.com/Bharat26031992/PY-BEMCS
+
+**BibTeX:**
+@software{PY-BEMCS,
+  author       = {Bharat Singh Rawat},
+  title        = {Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)},
+  year         = {2026},
+  publisher    = {GitHub},
+  journal      = {GitHub repository},
+  howpublished = {\url{[https://github.com/Bharat26031992/PY-BEMCS](https://github.com/Bharat26031992/PY-BEMCS)}},
+}
+---
+
+## Author
 **Dr.Bharat Singh Rawat** 
 
 Feel free to reach out for collaborations or questions regarding the code on bharat.bharat22@gmail.com!
