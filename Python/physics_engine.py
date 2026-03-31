@@ -122,7 +122,7 @@ class DigitalTwinSimulator:
         self.e_x[s:e] = x
         self.e_y[s:e] = y
         self.e_vx[s:e] = vx
-        self.e_vy[s:e] = vx
+        self.e_vy[s:e] = vy
         self.num_e += n_new
 
     def build_sparse_matrix(self):
