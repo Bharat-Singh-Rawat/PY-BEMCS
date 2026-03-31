@@ -360,7 +360,33 @@ class DigitalTwinSimulator:
         post_grid = (~p_cex) & (p_x > max_grid_x)
         current_div = np.percentile(np.abs(np.arctan2(p_vy[post_grid], p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
         
-        min_pot = np.min(self.V[0, :])
+        #min_pot = np.min(self.V[0, :])
+        
+    # Calculate limits dynamically
+        max_grid_x = 1.0 + sum([g['t'] + g['gap'] for g in grids]) if grids else 3.0
+        post_grid = (~p_cex) & (p_x > max_grid_x)
+        current_div = np.percentile(np.abs(np.arctan2(p_vy[post_grid], p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
+        
+        # Fixing the saddle point at the centre of the SECOND grid
+        if len(grids) >= 2:
+            # 1.0 is the fixed start position of the first grid
+            grid2_start_mm = 1.0 + grids[0]['t'] + grids[0]['gap']
+            grid2_center_mm = grid2_start_mm + (grids[1]['t'] / 2.0)
+            
+            x_idx = int(grid2_center_mm / self.dx)
+            # Clip index to ensure it doesn't go out of bounds
+            x_idx = np.clip(x_idx, 0, self.nx - 1) 
+            min_pot = self.V[0, x_idx]
+            
+        elif len(grids) == 1:
+            # Fallback if only 1 grid exists
+            grid1_center_mm = 1.0 + (grids[0]['t'] / 2.0)
+            x_idx = int(grid1_center_mm / self.dx)
+            min_pot = self.V[0, np.clip(x_idx, 0, self.nx - 1)]
+            
+        else:
+            # Fallback if no grids exist
+            min_pot = np.min(self.V[0, :])
 
         # D. 2D THERMAL CALCULATIONS & HIT DETECTION 
         ix = np.clip(np.round(p_x / self.dx).astype(int), 0, self.nx - 1)
