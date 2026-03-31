@@ -5,7 +5,7 @@ from scipy.sparse.linalg import factorized
 
 class DigitalTwinSimulator:
     def __init__(self):
-        # Constants for sumulation
+        # Constants for simulation
         self.dt = 1e-9
         self.q = 1.602e-19
         self.m_XE = 131.293 * 1.6605e-27
@@ -13,7 +13,7 @@ class DigitalTwinSimulator:
         self.eps0 = 8.854e-12
         
         """To be more accurate one can change 
-        the mass ration but it might take longer time
+        the mass ratio but it might take longer time
          and smaller timesteps"""
         self.m_e = self.m_XE / 100.0 
         
@@ -27,8 +27,10 @@ class DigitalTwinSimulator:
         self.C_cell = 10280 * (0.05e-3)**2 * 1e-3 * 250 
         self.A_cell = 2 * (0.05e-3) * 1e-3 
         
-        self.T_screen = 300.0 # Intial temperature in K for the screen grid
-        self.T_accel = 300.0 # Initial temperature in K for the acceleration grid
+        # Dynamic Grid Arrays
+        self.T_grids = []
+        self.mask_grids = []
+        self.V_dc = None
         
         # Mesh parameters (High Accuracy)
         self.Lx = 20
@@ -172,27 +174,34 @@ class DigitalTwinSimulator:
         target_ppc = 40.0 
         self.macro_weight = max((n0 * cell_vol) / target_ppc, 1e3)
 
-        screen_start = 1.0
-        screen_end = screen_start + params['ts']
-        accel_start = screen_end + params['gap']
-        accel_end = accel_start + params['ta']
+        self.mask_grids = []
+        self.T_grids = []
+        grids = params.get('grids', [])
+        
+        current_x = 1.0 # Starting position for the first grid
+        
+        for i, grid in enumerate(grids):
+            g_start = current_x
+            g_end = g_start + grid['t']
+            
+            in_grid = (self.X >= g_start) & (self.X <= g_end)
+            R_grid = grid['r'] + np.maximum(0, self.X - g_start) * np.tan(np.radians(grid['cham']))
+            
+            mask = in_grid & (self.Y >= R_grid)
+            self.isBound[mask] = True
+            self.V_fixed[mask] = grid['V']
+            
+            self.mask_grids.append(mask)
+            self.T_grids.append(300.0)
+            
+            current_x = g_end + grid['gap']
 
-        in_screen = (self.X >= screen_start) & (self.X <= screen_end)
-        in_accel = (self.X >= accel_start) & (self.X <= accel_end)
-
-        R_screen = params['rs'] + np.maximum(0, self.X - screen_start) * np.tan(np.radians(params['cham_s']))
-        R_accel = params['ra'] + np.maximum(0, self.X - accel_start) * np.tan(np.radians(params['cham_a']))
-
-        self.mask_s = in_screen & (self.Y >= R_screen)
-        self.isBound[self.mask_s] = True
-        self.V_fixed[self.mask_s] = params['Vs']
-
-        self.mask_a = in_accel & (self.Y >= R_accel)
-        self.isBound[self.mask_a] = True
-        self.V_fixed[self.mask_a] = params['Va']
+        self.V_dc = np.copy(self.V_fixed) # Store DC potentials for RF superimposition
 
         self.isBound[:, 0] = True
-        self.V_fixed[:, 0] = params['Vs'] + 50
+        # Set left boundary to first grid voltage + 50V for plasma boundary
+        v_plasma_bound = grids[0]['V'] + 50 if grids else 1050
+        self.V_fixed[:, 0] = v_plasma_bound
         
         self.T_map[~self.isBound] = 300.0
         
@@ -205,7 +214,8 @@ class DigitalTwinSimulator:
         dx_m2 = (self.dx * 1e-3)**2 
         coeff = dx_m2 / self.eps0
         
-        V_plasma = params['Vs'] + 20 if params else 1020 
+        grids = params.get('grids', [{'V': 1000}]) if params else [{'V': 1000}]
+        V_plasma = grids[0]['V'] + 20 
         Te_up = params.get('Te_up', 3.0) 
         n0 = params.get('n0_plasma', 1e17) 
         
@@ -233,30 +243,59 @@ class DigitalTwinSimulator:
         self.interp_Ey = RegularGridInterpolator((self.y_pts, self.x_pts), self.Ey, bounds_error=False, fill_value=0)
 
     def step(self, params):
-        if not np.any(self.Ex): return False, np.nan, np.nan, self.T_screen, self.T_accel
+        if not np.any(self.Ex): return False, np.nan, np.nan, self.T_grids
         sim_mode = params.get('sim_mode', 'Both')
         self.iteration += 1
         
+        t_current = self.iteration * self.dt
+        grids = params.get('grids', [])
+        
+        # --- RF CO-EXTRACTION LOGIC ---
+        if params.get('rf_enable') and grids:
+            rf_idx = params.get('rf_grid_idx', 0)
+            if rf_idx < len(grids):
+                f_hz = params.get('rf_freq', 13.56) * 1e6
+                v_rf = params.get('rf_amp', 100) * np.sin(2 * np.pi * f_hz * t_current)
+                self.V_fixed[self.mask_grids[rf_idx]] = self.V_dc[self.mask_grids[rf_idx]] + v_rf
+                # Force rapid poisson update due to changing boundary
+                self.recalc_poisson(iterations=2, params=params)
+
         # --- A. INJECT PARTICLES ---
         n0 = params.get('n0_plasma', 1e17) 
         Te_up = params.get('Te_up', 3.0)
         v_bohm = np.sqrt(self.q * Te_up / self.m_XE)
         
-        injection_area = (params['rs'] - 0.05) * 1e-3 * 1.0 
+        injection_area = (grids[0]['r'] - 0.05) * 1e-3 * 1.0 if grids else 1e-3
         I_ion = self.q * 0.61 * n0 * v_bohm * injection_area 
         
         charge_per_macro = self.q * self.macro_weight
         num_inject_float = (I_ion * self.dt) / charge_per_macro
         num_inject = int(num_inject_float) + (1 if np.random.rand() < (num_inject_float % 1) else 0)
 
+        r_max = grids[0]['r'] - 0.05 if grids else 1.0
+
         if num_inject > 0:
-            new_y = np.random.uniform(0.02, params['rs'] - 0.05, num_inject)
+            new_y = np.random.uniform(0.02, r_max, num_inject)
             new_x = np.full(num_inject, 0.1)
             v_spread = np.sqrt(self.q * params.get('Ti', 0.1) / self.m_XE)
             new_vx = np.full(num_inject, v_bohm) + np.random.randn(num_inject) * v_spread
             new_vy = np.random.randn(num_inject) * v_spread
             new_cex = np.zeros(num_inject, dtype=bool)
             self._add_ions(new_x, new_y, new_vx, new_vy, new_cex)
+            
+        # Source Electrons (for true RF Co-extraction)
+        if params.get('rf_enable'):
+            v_e_th_source = np.sqrt(2 * self.q * Te_up / self.m_e)
+            I_e = self.q * 0.25 * n0 * v_e_th_source * injection_area
+            num_e_float = (I_e * self.dt) / charge_per_macro
+            num_inj_e = int(num_e_float) + (1 if np.random.rand() < (num_e_float % 1) else 0)
+            
+            if num_inj_e > 0:
+                new_ey = np.random.uniform(0.02, r_max, num_inj_e)
+                new_ex = np.full(num_inj_e, 0.1)
+                new_evx = np.abs(np.random.randn(num_inj_e)) * v_e_th_source + v_bohm
+                new_evy = np.random.randn(num_inj_e) * v_e_th_source
+                self._add_electrons(new_ex, new_ey, new_evx, new_evy)
 
         # --- NEUTRALIZER CONTROL ---
         num_e = int(params.get('neut_rate', 30))
@@ -270,7 +309,6 @@ class DigitalTwinSimulator:
             new_evy = np.random.randn(num_e) * v_e_th
             self._add_electrons(new_ex, new_ey, new_evx, new_evy)
 
-        # Slicing the pre-allocated buffer gives us access to only "alive" particles 
         p_x = self.p_x[:self.num_p]
         p_y = self.p_y[:self.num_p]
         p_vx = self.p_vx[:self.num_p]
@@ -299,52 +337,30 @@ class DigitalTwinSimulator:
 
         if self.iteration % 2 == 0:
             self.recalc_poisson(iterations=5, params=params)
-        
 
-        # # Leapfrog 
-        # if self.num_p > 0:
-        #     pts_init = np.column_stack((p_y, p_x))
-        #     Ex_init, Ey_init = self.interp_Ex(pts_init), self.interp_Ey(pts_init) 
-        #     p_vx -= (self.q / self.m_XE) * Ex_init * (self.dt / 2.0)
-        #     p_vy -= (self.q / self.m_XE) * Ey_init * (self.dt / 2.0)
-
-        # if self.num_e > 0:
-        #     pts_e_init = np.column_stack((e_y, e_x))
-        #     Ex_e_init, Ey_e_init = self.interp_Ex(pts_e_init), self.interp_Ey(pts_e_init)
-        #     e_vx -= (-self.q / self.m_e) * Ex_e_init * (self.dt / 2.0)
-        #     e_vy -= (-self.q / self.m_e) * Ey_e_init * (self.dt / 2.0)
-
-        # C. PARTICLE PUSH ALGORITHM (Symplectic Euler-1st order accurate)
+        # C. PARTICLE PUSH ALGORITHM 
         if self.num_p > 0:
             pts = np.column_stack((p_y, p_x))
             Ex_p, Ey_p = self.interp_Ex(pts), self.interp_Ey(pts)
             p_vx += (self.q / self.m_XE) * Ex_p * self.dt
             p_vy += (self.q / self.m_XE) * Ey_p * self.dt
-            p_x += p_vx * self.dt * 1000 #mm to meter conversion
-            p_y += p_vy * self.dt * 1000 #mm to meter conversion
+            p_x += p_vx * self.dt * 1000 
+            p_y += p_vy * self.dt * 1000 
 
         if self.num_e > 0:
             pts_e = np.column_stack((e_y, e_x))
             Ex_e, Ey_e = self.interp_Ex(pts_e), self.interp_Ey(pts_e)
             e_vx += (-self.q / self.m_e) * Ex_e * self.dt
             e_vy += (-self.q / self.m_e) * Ey_e * self.dt
-            e_x += e_vx * self.dt * 1000 #mm to meter conversion
-            e_y += e_vy * self.dt * 1000 #mm to meter conversion
+            e_x += e_vx * self.dt * 1000 
+            e_y += e_vy * self.dt * 1000 
 
-        max_grid_x = 1.0 + params['ts'] + params['gap'] + params['ta']
+        # Calculate limits dynamically
+        max_grid_x = 1.0 + sum([g['t'] + g['gap'] for g in grids]) if grids else 3.0
         post_grid = (~p_cex) & (p_x > max_grid_x)
-        
-        # Divergence calculator. It calculates the 95% beam divergence of particles post acc grid.
         current_div = np.percentile(np.abs(np.arctan2(p_vy[post_grid], p_vx[post_grid])) * 180 / np.pi, 95) if np.sum(post_grid) > 5 else np.nan
         
-        #Calculates the saddle potential by scanning the centre line(x,y)
-        #min_pot = np.min(self.V[0, :])
-
-        # Fixing the saddle point at the centre of acc grid electrode
-        accel_start = 1.0 + params['ts'] + params['gap']
-        accel_center_mm = accel_start + (params['ta'] / 2.0)
-        x_idx = int(accel_center_mm / self.dx)
-        min_pot = self.V[0, x_idx]
+        min_pot = np.min(self.V[0, :])
 
         # D. 2D THERMAL CALCULATIONS & HIT DETECTION 
         ix = np.clip(np.round(p_x / self.dx).astype(int), 0, self.nx - 1)
@@ -357,8 +373,6 @@ class DigitalTwinSimulator:
         
         if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
             v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2
-            
-            # Estimating the kinetic energy
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
             np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
@@ -371,29 +385,29 @@ class DigitalTwinSimulator:
             self.T_map[self.isBound] -= dT_cool
             self.T_map[self.isBound] = np.maximum(self.T_map[self.isBound], 300.0) 
             
-            if hasattr(self, 'mask_s') and np.any(self.mask_s): 
-                self.T_screen = np.mean(self.T_map[self.mask_s])
-            if hasattr(self, 'mask_a') and np.any(self.mask_a): 
-                self.T_accel = np.mean(self.T_map[self.mask_a])
-
-            delta_gap = self.alpha_moly * params['gap'] * (self.T_accel - 300) 
-            if abs(delta_gap) > 0.05:
-                params['gap'] -= delta_gap 
-                self.build_domain(params) 
+            needs_remesh = False
+            for i, mask in enumerate(self.mask_grids):
+                if np.any(mask):
+                    self.T_grids[i] = np.mean(self.T_map[mask])
+                    
+                if i > 0 and i < len(grids):
+                    # Estimate delta gap from previous grid expansion
+                    delta_gap = self.alpha_moly * grids[i-1]['gap'] * (self.T_grids[i] - 300) 
+                    if abs(delta_gap) > 0.05:
+                        params['grids'][i-1]['gap'] -= delta_gap 
+                        needs_remesh = True
+                        
+            if needs_remesh:
+                self.build_domain(params)
                 remeshed = True
 
-        # --- SECONDARY ELECTRON EMISSION (MOLYBDENUM)
-        #This is a very preliminary model for secondary emission of electrons
-        #More advanced model will be applied in the upcoming releases.
-        
-        # only estimating secondary emission after a distance of 0.5mm
+        # --- SECONDARY ELECTRON EMISSION 
         valid_see_hit = hit_grid & (p_x > 0.5)
         
         if np.any(valid_see_hit):
             v_mag_sq = p_vx[valid_see_hit]**2 + p_vy[valid_see_hit]**2
             E_eV = (0.5 * self.m_XE * v_mag_sq) / self.q
             
-            # Secondary electron emission yield formula
             gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
             spawn_mask = np.random.rand(len(gamma)) < gamma
             
@@ -402,7 +416,6 @@ class DigitalTwinSimulator:
                 see_x = p_x[valid_see_hit][spawn_mask] - p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 see_y = p_y[valid_see_hit][spawn_mask] - p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
                 
-                #Temperature of the formed secondary electron (assumed constant)
                 T_see = 2.0 
                 v_see_th = np.sqrt(2 * self.q * T_see / self.m_e)
                 see_vx = np.random.randn(num_see) * v_see_th
@@ -416,20 +429,13 @@ class DigitalTwinSimulator:
                 e_vy = self.e_vy[:self.num_e]
 
         # --- EROSION LOGIC (Sputtering)
-        #Again this is a very naive way of interpreting erosion/sputtering.
-        #I am working on adding more advanced features for sputtering such as
-        #material dependence,lookup tables,angular dependence and angular yields as well.
         is_erosion_hit = hit_grid & (p_x > 0.5)
-        
         if sim_mode in ['Erosion', 'Both'] and np.any(is_erosion_hit):
             E_eV = (0.5 * self.m_XE * (p_vx[is_erosion_hit]**2 + p_vy[is_erosion_hit]**2)) / self.q
-            
-            # Applying the mathematical fix for Y_yield
             Y_yield = np.minimum(1.05e-4 * (np.maximum(E_eV - 30, 0))**1.5, 1.0)
-            
-            np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params['Accel'])
+            np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params.get('Accel', 1))
 
-            broken_cells = (self.damage_map > params['Thresh']) & self.isBound
+            broken_cells = (self.damage_map > params.get('Thresh', 1e5)) & self.isBound
             if np.any(broken_cells):
                 self.isBound[broken_cells] = False
                 self.damage_map[broken_cells] = 0
@@ -442,7 +448,6 @@ class DigitalTwinSimulator:
         n_alive = np.sum(alive_mask)
         
         if n_alive < self.num_p:
-            
             self.p_x[:n_alive] = p_x[alive_mask]
             self.p_y[:n_alive] = p_y[alive_mask]
             self.p_vx[:n_alive] = p_vx[alive_mask]
@@ -450,7 +455,6 @@ class DigitalTwinSimulator:
             self.p_isCEX[:n_alive] = p_cex[alive_mask]
             self.num_p = n_alive
             
-            # Update slices
             p_x = self.p_x[:self.num_p]
             p_y = self.p_y[:self.num_p]
             p_vx = self.p_vx[:self.num_p]
@@ -475,71 +479,47 @@ class DigitalTwinSimulator:
                 self.num_e = n_alive_e
 
         # --- E. CEX COLLISIONS ---
-        #Again a very basic formula for CEX collision. Working on to include the
-        # cross section dependence and the pressure profile dependence along the axial
-        #and radial direction to get more accurate predictions.
         if self.num_p > 0:
             primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= 20.0)
             if np.any(primary_mask):
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2)
                 g = np.maximum(v_mag, 1)
                                    
-                #Estimating cross section for Xenon using Rapp and Francis empirical fit constants
                 sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
-                #Calculating the collision probability
-                prob = 1 - np.exp(-params['n0'] * sigma * g * self.dt)
+                prob = 1 - np.exp(-params.get('n0', 1e20) * sigma * g * self.dt)
                 collided = np.random.rand(np.sum(primary_mask)) < prob
                 
                 if np.any(collided):
                     c_idx = np.where(primary_mask)[0][collided]
-                    neut_vth = np.sqrt(2 * self.kB * params['Tn'] / self.m_XE)
+                    neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_XE)
                     p_vx[c_idx] = np.random.randn(len(c_idx)) * neut_vth
                     p_vy[c_idx] = np.random.randn(len(c_idx)) * neut_vth
                     p_cex[c_idx] = True
 
-        return remeshed, min_pot, current_div, self.T_screen, self.T_accel
+        return remeshed, min_pot, current_div, self.T_grids
 
     def get_particle_kinematics(self):
         t_current = self.iteration * self.dt
         
-        # --- 1. Process Ions ---
         if self.num_p > 0:
-            p_x = self.p_x[:self.num_p]
-            p_y = self.p_y[:self.num_p]
-            p_vx = self.p_vx[:self.num_p]
-            p_vy = self.p_vy[:self.num_p]
+            p_x, p_y = self.p_x[:self.num_p], self.p_y[:self.num_p]
+            p_vx, p_vy = self.p_vx[:self.num_p], self.p_vy[:self.num_p]
             p_cex = self.p_isCEX[:self.num_p]
-            
             v_sq_i = p_vx**2 + p_vy**2
             energy_eV_i = (0.5 * self.m_XE * v_sq_i) / self.q
             type_i = p_cex.astype(int) 
-            
-            ions = np.column_stack((
-                np.full(self.num_p, t_current),
-                p_x, p_y, p_vx, p_vy, energy_eV_i, type_i
-            ))
+            ions = np.column_stack((np.full(self.num_p, t_current), p_x, p_y, p_vx, p_vy, energy_eV_i, type_i))
         else:
             ions = np.empty((0, 7))
             
-        # --- 2. Process Electrons ---
         if self.num_e > 0:
-            e_x = self.e_x[:self.num_e]
-            e_y = self.e_y[:self.num_e]
-            e_vx = self.e_vx[:self.num_e]
-            e_vy = self.e_vy[:self.num_e]
-            
+            e_x, e_y = self.e_x[:self.num_e], self.e_y[:self.num_e]
+            e_vx, e_vy = self.e_vx[:self.num_e], self.e_vy[:self.num_e]
             v_sq_e = e_vx**2 + e_vy**2
             energy_eV_e = (0.5 * self.m_e * v_sq_e) / self.q
-            
             type_e = np.where(e_x <= 4.0, 2, 3)
-            
-            elecs = np.column_stack((
-                np.full(self.num_e, t_current),
-                e_x, e_y, e_vx, e_vy, energy_eV_e, type_e
-            ))
+            elecs = np.column_stack((np.full(self.num_e, t_current), e_x, e_y, e_vx, e_vy, energy_eV_e, type_e))
         else:
             elecs = np.empty((0, 7))
             
-        # --- 3. Combine and Return ---
-        snapshot = np.vstack((ions, elecs))
-        return snapshot
+        return np.vstack((ions, elecs))
