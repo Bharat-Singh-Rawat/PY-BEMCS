@@ -124,6 +124,7 @@ If you use this software in your work, please cite it using the following format
 Bharat Singh Rawat. (2026). *Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)* [Source code]. GitHub. https://github.com/Bharat26031992/PY-BEMCS
 
 **BibTeX:**
+```bibtex
 @software{PY-BEMCS,
   author       = {Bharat Singh Rawat},
   title        = {Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)},
@@ -132,7 +133,7 @@ Bharat Singh Rawat. (2026). *Python Beam Extraction and Monte Carlo Simulator (P
   journal      = {GitHub repository},
   howpublished = {\url{[https://github.com/Bharat26031992/PY-BEMCS](https://github.com/Bharat26031992/PY-BEMCS)}},
 }
----
+```
 
 ## Author
 **Dr.Bharat Singh Rawat** 
