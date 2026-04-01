@@ -25,16 +25,22 @@ def worker_sweep(gap, n0_sweep, result_queue):
             'n0_plasma': n0,
             'Te_up': 3.0, 'Ti': 0.1,
             'neut_rate': 0, 'n0': 0 ,
-            'Accel': 10.0, 
-            'Thresh': 10000.0
+            'Accel': 1.0, 
+            'Thresh': 10000000000.0
         }
+        
+        # NEW: Construct the expected grids array for the physics engine
+        params['grids'] = [
+            {'V': params['Vs'], 't': params['ts'], 'gap': params['gap'], 'r': params['rs'], 'cham': params['cham_s']},
+            {'V': params['Va'], 't': params['ta'], 'gap': 1.0, 'r': params['ra'], 'cham': params['cham_a']}
+        ]
         
         sim.build_domain(params)
         steady_state_steps = 1000
         div_history = []
         
         for step_idx in range(1, steady_state_steps + 1):
-            _, _, current_div, _, _ = sim.step(params)
+            _, _, current_div, _ = sim.step(params)
             
             if not np.isnan(current_div):
                 div_history.append(current_div)
@@ -71,7 +77,7 @@ def worker_sweep(gap, n0_sweep, result_queue):
 # --- MAIN GUI THREAD ---
 def run_parallel_benchmark():
     grid_gaps = [0.5, 0.75, 1.0] # mm
-    n0_sweep = np.linspace(0.4e16, 5e17, 60) 
+    n0_sweep = np.linspace(0.4e15, 5e17, 60) 
     
     # 1. Setup Live Plot
     plt.ion()

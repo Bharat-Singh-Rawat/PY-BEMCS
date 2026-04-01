@@ -19,12 +19,18 @@ def worker_sweep(gap, Va_sweep, result_queue):
             'neut_rate': 0, 'n0': 0 
         }
         
+        # NEW: Construct the expected grids array for the physics engine
+        params['grids'] = [
+            {'V': params['Vs'], 't': params['ts'], 'gap': params['gap'], 'r': params['rs'], 'cham': params['cham_s']},
+            {'V': params['Va'], 't': params['ta'], 'gap': 1.0, 'r': params['ra'], 'cham': params['cham_a']}
+        ]
+        
         sim.build_domain(params)
         steady_state_steps = 500
         pot_history = []
         
         for step_idx in range(1, steady_state_steps + 1):
-            _, min_pot, _, _, _ = sim.step(params)
+            _, min_pot, _, _ = sim.step(params)
             
             pot_history.append(min_pot)
             if len(pot_history) > 50:

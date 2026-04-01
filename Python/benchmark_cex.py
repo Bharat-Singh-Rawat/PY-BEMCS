@@ -23,6 +23,12 @@ def worker_sweep(gap, nn_sweep, result_queue):
             'Thresh': 1e9        # Keep high so grid doesn't break during benchmark
         }
         
+        # NEW: Construct the expected grids array for the physics engine
+        params['grids'] = [
+            {'V': params['Vs'], 't': params['ts'], 'gap': params['gap'], 'r': params['rs'], 'cham': params['cham_s']},
+            {'V': params['Va'], 't': params['ta'], 'gap': 1.0, 'r': params['ra'], 'cham': params['cham_a']}
+        ]
+        
         sim.build_domain(params)
         steady_state_steps = 500
         
@@ -31,11 +37,11 @@ def worker_sweep(gap, nn_sweep, result_queue):
             
             if step_idx % 50 == 0 or step_idx == 1:
                 # Calculate normalized damage rate
-                current_damage = np.sum(sim.damage_map[sim.mask_a]) / step_idx
+                current_damage = np.sum(sim.damage_map[sim.mask_grids[1]]) / step_idx
                 print(f"[Core Gap {gap}mm | nn: {nn:.1e}] Step {step_idx}/{steady_state_steps} -> Erosion Rate: {current_damage:.2e}", flush=True)
 
         # Final Erosion Rate (Damage per timestep)
-        final_erosion_rate = np.sum(sim.damage_map[sim.mask_a]) / steady_state_steps
+        final_erosion_rate = np.sum(sim.damage_map[sim.mask_grids[1]]) / steady_state_steps
         result_queue.put(('data', gap, nn, final_erosion_rate))
         
     result_queue.put(('done', gap))

@@ -366,14 +366,13 @@ class DigitalTwinApp(QMainWindow):
         self.scat_cex = self.ax_live.scatter([], [], c=[], s=7, cmap='turbo', vmin=0, vmax=max_v+50, alpha=1.0)
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)
         
-        if self.cbar_energy is not None:
-            try: self.cbar_energy.remove()
-            except: pass
-            self.cbar_energy = None
-
-        divider = make_axes_locatable(self.ax_live)
-        cax = divider.append_axes("right", size="3%", pad=0.1) 
-        self.cbar_energy = self.fig.colorbar(self.scat_prim, cax=cax)
+        if not hasattr(self, 'cax_live'):
+            divider = make_axes_locatable(self.ax_live)
+            self.cax_live = divider.append_axes("right", size="3%", pad=0.1) 
+        else:
+            self.cax_live.clear()
+            
+        self.cbar_energy = self.fig.colorbar(self.scat_prim, cax=self.cax_live)
         self.cbar_energy.set_label('Kinetic Energy (eV)')
         
         self.ax_live.set_xlim(0, self.sim.Lx)
@@ -432,11 +431,6 @@ class DigitalTwinApp(QMainWindow):
             self.ax_div.set_xlim(max(0, self.sim.iteration - 400), max(100, self.sim.iteration))
             self.ax_div.set_ylim(0, 45)
 
-            if self.cbar_temp is not None:
-                try: self.cbar_temp.remove()
-                except Exception: pass
-                self.cbar_temp = None
-
             self.ax_temp.clear()
             self.ax_temp.set_title('Grid Temp Map (°C)')
             self.ax_temp.set_facecolor('black')
@@ -447,9 +441,13 @@ class DigitalTwinApp(QMainWindow):
                 
                 contour = self.ax_temp.contourf(self.sim.X, self.sim.Y, T_display_C, 15, cmap='inferno')
                 
-                divider_t = make_axes_locatable(self.ax_temp)
-                cax_t = divider_t.append_axes("right", size="5%", pad=0.1)
-                self.cbar_temp = self.fig.colorbar(contour, cax=cax_t)
+                if not hasattr(self, 'cax_temp'):
+                    divider_t = make_axes_locatable(self.ax_temp)
+                    self.cax_temp = divider_t.append_axes("right", size="5%", pad=0.1)
+                else:
+                    self.cax_temp.clear()
+                    
+                self.cbar_temp = self.fig.colorbar(contour, cax=self.cax_temp)
                 self.cbar_temp.set_label('Temperature (°C)')
                 
                 total_len = 1.0 + sum([g['t'].value() + g['gap'].value() for g in self.grid_widgets])
@@ -460,6 +458,8 @@ class DigitalTwinApp(QMainWindow):
             self.ax_dmg.contourf(self.sim.X, self.sim.Y, self.sim.damage_map, 15, cmap='hot')
             gy, gx = np.where(self.sim.isBound)
             self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c='grey', alpha=0.5)
+            self.ax_dmg.set_xlim(0, self.sim.Lx)
+            self.ax_dmg.set_ylim(0, self.sim.Ly)
 
             self.lbl_status.setText(f'Ions: {len(self.sim.p_x)} | e-: {len(self.sim.e_x)} | Iter: {self.sim.iteration}')
             t_str = ' | '.join([f'G{i+1}: {int(T-273.15)}°C' for i, T in enumerate(T_grids)])

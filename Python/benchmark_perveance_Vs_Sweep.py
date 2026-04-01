@@ -29,12 +29,18 @@ def worker_sweep_voltage(gap, Vs_sweep, n0_constant, result_queue):
             'Thresh': 10000.0
         }
         
+        # NEW: Construct the expected grids array for the physics engine
+        params['grids'] = [
+            {'V': params['Vs'], 't': params['ts'], 'gap': params['gap'], 'r': params['rs'], 'cham': params['cham_s']},
+            {'V': params['Va'], 't': params['ta'], 'gap': 1.0, 'r': params['ra'], 'cham': params['cham_a']}
+        ]
+        
         sim.build_domain(params)
         steady_state_steps = 1000
         div_history = []
         
         for step_idx in range(1, steady_state_steps + 1):
-            _, _, current_div, _, _ = sim.step(params)
+            _, _, current_div, _ = sim.step(params)
             
             if not np.isnan(current_div):
                 div_history.append(current_div)

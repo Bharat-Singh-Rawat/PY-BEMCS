@@ -25,6 +25,12 @@ def worker_sweep(gap, n0_sweep, result_queue):
             'neut_rate': 0, 'n0': 0 
         }
         
+        # NEW: Construct the expected grids array for the physics engine
+        params['grids'] = [
+            {'V': params['Vs'], 't': params['ts'], 'gap': params['gap'], 'r': params['rs'], 'cham': params['cham_s']},
+            {'V': params['Va'], 't': params['ta'], 'gap': 1.0, 'r': params['ra'], 'cham': params['cham_a']}
+        ]
+        
         sim.build_domain(params)
         steady_state_steps = 500
         
@@ -48,8 +54,8 @@ def worker_sweep(gap, n0_sweep, result_queue):
                 ix = np.clip(np.round(next_x / sim.dx).astype(int), 0, sim.nx - 1)
                 iy = np.clip(np.round(next_y / sim.dy).astype(int), 0, sim.ny - 1)
                 
-                # Filter for primary ions hitting the 'mask_a' (accelerator grid)
-                step_hits = np.sum(sim.mask_a[iy, ix] & ~sim.p_isCEX)
+                # Filter for primary ions hitting the accelerator grid
+                step_hits = np.sum(sim.mask_grids[1][iy, ix] & ~sim.p_isCEX)
             else:
                 step_exits = 0
                 step_hits = 0
