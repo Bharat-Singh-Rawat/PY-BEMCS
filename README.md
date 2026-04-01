@@ -35,7 +35,7 @@ This repository currently includes:
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/0c6d243d-daea-444e-beed-82dcb215ad47" width="900px" autoplay loop muted playsinline>
+  <video src="https://github.com/user-attachments/assets/0c6d243d-daea-444e-beed-82dcb215ad47" width="500px" autoplay loop muted playsinline>
   </video>
 </p>
 
@@ -46,7 +46,7 @@ This repository currently includes:
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/ce1ca173-62e1-433d-aff4-9aaafdbe117a" width="900px" autoplay loop muted playsinline>
+  <video src="https://github.com/user-attachments/assets/ce1ca173-62e1-433d-aff4-9aaafdbe117a" width="500px" autoplay loop muted playsinline>
   </video>
 </p>
 
