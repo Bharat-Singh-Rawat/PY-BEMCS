@@ -47,8 +47,10 @@ This repository currently includes:
 - **Vectorized particle updates** for high-throughput runtime performance.
 - **Reduced electron mass (m_e = M_Xe/100)** to speed up the simulation time.
 - **Self-consistent beam extraction** from plasma meniscus and Bohm criteria.
-- **CEX collision modeling** with probabilistic scattering, with user defined region in the source code.
+- **CEX collision modeling** with probabilistic scattering, with a user-defined region in the source code.
 - **Dynamic erosion and failure logic** due to CEX ions with in-situ remeshing behavior.
+- **RF-based Coextraction** of electron and ion beam.
+- **User-defined multi-grid beam extraction** for different kinds of sources.
 
 ### Python Multiphysics Additions (Latest)
 - **Poisson field update with space charge** using both ion and electron density contributions.
