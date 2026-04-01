@@ -1,7 +1,139 @@
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
 import scipy.sparse as sp
 from scipy.sparse.linalg import factorized
+import taichi as ti
+
+# =============================================================================
+# ARCHITECTURE & PRECISION SWITCHING GUIDE
+# =============================================================================
+# To switch how this simulation runs, change the `ti.init` line below.
+# 
+# OPTION 1: Max Speed / Broad GPU Compatibility (Standard Consumer GPUs, Apple Silicon)
+# ti.init(arch=ti.gpu, default_fp=ti.f32)
+# -> IMPORTANT: If using this, all kernel type hints must be `ti.f32`
+#
+# OPTION 2: High Precision / CPU Fallback (Use if f64 is strictly required)
+# ti.init(arch=ti.cpu, default_fp=ti.f64)
+# -> IMPORTANT: If using this, all kernel type hints must be changed to `ti.f64`
+# =============================================================================
+
+ti.init(arch=ti.gpu, default_fp=ti.f32)
+
+# =============================================================================
+# TAICHI KERNELS (Compiled for GPU/Multi-core CPU using 32-bit floats)
+# =============================================================================
+
+@ti.kernel
+def accumulate_rho_taichi(
+    x: ti.types.ndarray(dtype=ti.f32),
+    y: ti.types.ndarray(dtype=ti.f32),
+    rho: ti.types.ndarray(dtype=ti.f32),
+    num_p: ti.i32,
+    dx: ti.f32,
+    dy: ti.f32,
+    nx: ti.i32,
+    ny: ti.i32,
+    charge_density: ti.f32
+):
+    """Parallel density accumulation replacing np.add.at"""
+    for i in range(num_p):
+        ix = ti.cast(ti.round(x[i] / dx), ti.i32)
+        iy = ti.cast(ti.round(y[i] / dy), ti.i32)
+
+        # Clamp to avoid out-of-bounds access
+        ix = ti.max(1, ti.min(ix, nx - 2))
+        iy = ti.max(1, ti.min(iy, ny - 2))
+
+        # Taichi handles atomic additions automatically on the GPU
+        rho[iy, ix] += charge_density
+
+@ti.kernel
+def push_particles_taichi(
+    x: ti.types.ndarray(dtype=ti.f32),
+    y: ti.types.ndarray(dtype=ti.f32),
+    vx: ti.types.ndarray(dtype=ti.f32),
+    vy: ti.types.ndarray(dtype=ti.f32),
+    Ex: ti.types.ndarray(dtype=ti.f32),
+    Ey: ti.types.ndarray(dtype=ti.f32),
+    num_p: ti.i32,
+    dx: ti.f32,
+    dy: ti.f32,
+    nx: ti.i32,
+    ny: ti.i32,
+    dt: ti.f32,
+    q_m: ti.f32
+):
+    """Parallel bilinear interpolation and particle pusher replacing SciPy Interpolator"""
+    for i in range(num_p):
+        px = x[i]
+        py = y[i]
+
+        idx_x = px / dx
+        idx_y = py / dy
+
+        ix0 = ti.cast(ti.floor(idx_x), ti.i32)
+        iy0 = ti.cast(ti.floor(idx_y), ti.i32)
+
+        ix0 = ti.max(0, ti.min(ix0, nx - 2))
+        iy0 = ti.max(0, ti.min(iy0, ny - 2))
+
+        fx = idx_x - ti.cast(ix0, ti.f32)
+        fy = idx_y - ti.cast(iy0, ti.f32)
+
+        ex00 = Ex[iy0, ix0]
+        ex10 = Ex[iy0, ix0 + 1]
+        ex01 = Ex[iy0 + 1, ix0]
+        ex11 = Ex[iy0 + 1, ix0 + 1]
+
+        ey00 = Ey[iy0, ix0]
+        ey10 = Ey[iy0, ix0 + 1]
+        ey01 = Ey[iy0 + 1, ix0]
+        ey11 = Ey[iy0 + 1, ix0 + 1]
+
+        Ex_p = ex00 * (1.0 - fx) * (1.0 - fy) + ex10 * fx * (1.0 - fy) + \
+               ex01 * (1.0 - fx) * fy + ex11 * fx * fy
+        Ey_p = ey00 * (1.0 - fx) * (1.0 - fy) + ey10 * fx * (1.0 - fy) + \
+               ey01 * (1.0 - fx) * fy + ey11 * fx * fy
+
+        vx[i] += q_m * Ex_p * dt
+        vy[i] += q_m * Ey_p * dt
+
+        x[i] += vx[i] * dt * 1000.0
+        y[i] += vy[i] * dt * 1000.0
+
+@ti.kernel
+def thermal_conduction_taichi(
+    T: ti.types.ndarray(dtype=ti.f32),
+    T_new: ti.types.ndarray(dtype=ti.f32),
+    mask: ti.types.ndarray(dtype=ti.i32),
+    nx: ti.i32,
+    ny: ti.i32,
+    Fo_x: ti.f32,
+    Fo_y: ti.f32
+):
+    """Parallel 2D Finite Difference Thermal Conduction"""
+    for iy, ix in ti.ndrange(ny, nx):
+        if mask[iy, ix] == 1:
+            T_l = T[iy, ix]
+            if ix > 0 and mask[iy, ix-1] == 1: T_l = T[iy, ix-1]
+            
+            T_r = T[iy, ix]
+            if ix < nx-1 and mask[iy, ix+1] == 1: T_r = T[iy, ix+1]
+            
+            T_u = T[iy, ix]
+            if iy < ny-1 and mask[iy+1, ix] == 1: T_u = T[iy+1, ix]
+            
+            T_d = T[iy, ix]
+            if iy > 0 and mask[iy-1, ix] == 1: T_d = T[iy-1, ix]
+
+            dT = Fo_x * (T_l - 2.0*T[iy, ix] + T_r) + Fo_y * (T_d - 2.0*T[iy, ix] + T_u)
+            T_new[iy, ix] = ti.max(T[iy, ix] + dT, 300.0)
+        else:
+            T_new[iy, ix] = T[iy, ix]
+
+# =============================================================================
+# MAIN SIMULATOR CLASS
+# =============================================================================
 
 class DigitalTwinSimulator:
     def __init__(self):
@@ -12,19 +144,16 @@ class DigitalTwinSimulator:
         self.kB = 1.380649e-23
         self.eps0 = 8.854e-12
         
-        """To be more accurate one can change 
-        the mass ratio but it might take longer time
-         and smaller timesteps"""
         self.m_e = self.m_XE / 100.0 
         
         #Material properties for Molybdenum
         self.macro_weight = 3e5  
-        self.alpha_moly = 4.8e-6 #Coefficient of thermal expansion
-        self.sb_sigma = 5.67e-8  #Stefan-Boltzmann constant
+        self.alpha_moly = 4.8e-6 
+        self.sb_sigma = 5.67e-8  
         self.emissivity = 0.8    
-        self.thermal_accel = 1e7 #Acceleration constant
+        self.thermal_accel = 1e7 
         
-        # Mesh parameters (High Accuracy)
+        # Mesh parameters 
         self.Lx = 20
         self.Ly = 3
         self.dx = 0.01
@@ -32,13 +161,7 @@ class DigitalTwinSimulator:
         self.nx = int(self.Lx / self.dx) + 1
         self.ny = int(self.Ly / self.dy) + 1
         
-        #Calculating the heat capacity of a cell based on Molybdenum properties
-        #10280 J/kg-K is the specific heat capacity of Molybdenum, 
-        #250 is the specific heat capacity of Molybdenum in J/kg-K, and the cell volume is (dx x dy x 1mm) in m^3
-        # and we multiply by the mass of the cell to get total heat capacity
         self.C_cell = 10280 * (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3 * 250 
-        #This is just the front face area of the cell for radiative cooling calculations, 
-        # #we assume 1mm depth (This needs to be dynamically updated if the grid dimension change)
         self.A_cell = 2 * (self.dx * 1e-3) * 1e-3 
         
         # Dynamic Grid Arrays
@@ -51,7 +174,8 @@ class DigitalTwinSimulator:
         self.X, self.Y = np.meshgrid(self.x_pts, self.y_pts)
         
         self.iteration = 0
-        self.T_map = np.full((self.ny, self.nx), 300.0)
+        self.T_map = np.full((self.ny, self.nx), 300.0, dtype=np.float32)
+        self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=np.float32) 
         
         # Sparse Matrix 
         self.laplacian_lu = None
@@ -62,31 +186,30 @@ class DigitalTwinSimulator:
 
     def reset_arrays(self):
         # PRE-ALLOCATED PARTICLE BUFFERS
-        self.max_p = 50000  # Initial capacity for Ions
-        self.max_e = 50000  # Initial capacity for Electrons
+        self.max_p = 50000  
+        self.max_e = 50000  
 
-        self.p_x = np.zeros(self.max_p)
-        self.p_y = np.zeros(self.max_p)
-        self.p_vx = np.zeros(self.max_p)
-        self.p_vy = np.zeros(self.max_p)
+        self.p_x = np.zeros(self.max_p, dtype=np.float32)
+        self.p_y = np.zeros(self.max_p, dtype=np.float32)
+        self.p_vx = np.zeros(self.max_p, dtype=np.float32)
+        self.p_vy = np.zeros(self.max_p, dtype=np.float32)
         self.p_isCEX = np.zeros(self.max_p, dtype=bool)
         self.num_p = 0
 
-        self.e_x = np.zeros(self.max_e)
-        self.e_y = np.zeros(self.max_e)
-        self.e_vx = np.zeros(self.max_e)
-        self.e_vy = np.zeros(self.max_e)
+        self.e_x = np.zeros(self.max_e, dtype=np.float32)
+        self.e_y = np.zeros(self.max_e, dtype=np.float32)
+        self.e_vx = np.zeros(self.max_e, dtype=np.float32)
+        self.e_vy = np.zeros(self.max_e, dtype=np.float32)
         self.num_e = 0
         
-        self.V = np.zeros((self.ny, self.nx))
-        self.rho = np.zeros((self.ny, self.nx)) 
+        self.V = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.rho = np.zeros((self.ny, self.nx), dtype=np.float32) 
         self.isBound = np.zeros((self.ny, self.nx), dtype=bool)
-        self.V_fixed = np.zeros((self.ny, self.nx))
-        self.damage_map = np.zeros((self.ny, self.nx))
-        self.Ex, self.Ey = np.zeros((self.ny, self.nx)), np.zeros((self.ny, self.nx))
-        self.interp_Ex, self.interp_Ey = None, None
+        self.V_fixed = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.Ex = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.Ey = np.zeros((self.ny, self.nx), dtype=np.float32)
 
-    # BUFFER MANAGEMENT
     def _add_ions(self, x, y, vx, vy, is_cex):
         n_new = len(x)
         if self.num_p + n_new > self.max_p:
@@ -227,7 +350,8 @@ class DigitalTwinSimulator:
         
         omega = 0.2 
 
-        b = np.zeros(self.nx * self.ny)
+        # Explicitly declare b as float32
+        b = np.zeros(self.nx * self.ny, dtype=np.float32)
         V_fixed_flat = self.V_fixed.flatten()
 
         for _ in range(iterations):
@@ -239,14 +363,16 @@ class DigitalTwinSimulator:
             b[self.is_bound_mask] = V_fixed_flat[self.is_bound_mask]
             b[self.is_interior_mask] = -coeff * rho_flat[self.is_interior_mask]
 
+            # SciPy Sparse Solver returns 64-bit float, we cast it back to 32 immediately
             V_new_flat = self.laplacian_lu(b)
             V_new = V_new_flat.reshape((self.ny, self.nx))
+            
+            self.V = ((1 - omega) * self.V + omega * V_new).astype(np.float32)
 
-            self.V = (1 - omega) * self.V + omega * V_new
-
+        # np.gradient generates 64-bit arrays, we cast them to 32 right after
         self.Ey, self.Ex = np.gradient(-self.V, self.dy * 1e-3, self.dx * 1e-3)
-        self.interp_Ex = RegularGridInterpolator((self.y_pts, self.x_pts), self.Ex, bounds_error=False, fill_value=0)
-        self.interp_Ey = RegularGridInterpolator((self.y_pts, self.x_pts), self.Ey, bounds_error=False, fill_value=0)
+        self.Ey = self.Ey.astype(np.float32)
+        self.Ex = self.Ex.astype(np.float32)
 
     def step(self, params):
         if not np.any(self.Ex): return False, np.nan, np.nan, self.T_grids
@@ -263,7 +389,6 @@ class DigitalTwinSimulator:
                 f_hz = params.get('rf_freq', 13.56) * 1e6
                 v_rf = params.get('rf_amp', 100) * np.sin(2 * np.pi * f_hz * t_current)
                 self.V_fixed[self.mask_grids[rf_idx]] = self.V_dc[self.mask_grids[rf_idx]] + v_rf
-                # Force rapid poisson update due to changing boundary
                 self.recalc_poisson(iterations=2, params=params)
 
         # --- A. INJECT PARTICLES ---
@@ -281,11 +406,11 @@ class DigitalTwinSimulator:
         r_max = grids[0]['r'] - 0.05 if grids else 1.0
 
         if num_inject > 0:
-            new_y = np.random.uniform(0.02, r_max, num_inject)
-            new_x = np.full(num_inject, 0.1)
+            new_y = np.random.uniform(0.02, r_max, num_inject).astype(np.float32)
+            new_x = np.full(num_inject, 0.1, dtype=np.float32)
             v_spread = np.sqrt(self.q * params.get('Ti', 0.1) / self.m_XE)
-            new_vx = np.full(num_inject, v_bohm) + np.random.randn(num_inject) * v_spread
-            new_vy = np.random.randn(num_inject) * v_spread
+            new_vx = np.full(num_inject, v_bohm, dtype=np.float32) + np.random.randn(num_inject).astype(np.float32) * v_spread
+            new_vy = (np.random.randn(num_inject) * v_spread).astype(np.float32)
             new_cex = np.zeros(num_inject, dtype=bool)
             self._add_ions(new_x, new_y, new_vx, new_vy, new_cex)
             
@@ -297,22 +422,22 @@ class DigitalTwinSimulator:
             num_inj_e = int(num_e_float) + (1 if np.random.rand() < (num_e_float % 1) else 0)
             
             if num_inj_e > 0:
-                new_ey = np.random.uniform(0.02, r_max, num_inj_e)
-                new_ex = np.full(num_inj_e, 0.1)
-                new_evx = np.abs(np.random.randn(num_inj_e)) * v_e_th_source + v_bohm
-                new_evy = np.random.randn(num_inj_e) * v_e_th_source
+                new_ey = np.random.uniform(0.02, r_max, num_inj_e).astype(np.float32)
+                new_ex = np.full(num_inj_e, 0.1, dtype=np.float32)
+                new_evx = (np.abs(np.random.randn(num_inj_e)) * v_e_th_source + v_bohm).astype(np.float32)
+                new_evy = (np.random.randn(num_inj_e) * v_e_th_source).astype(np.float32)
                 self._add_electrons(new_ex, new_ey, new_evx, new_evy)
 
         # --- NEUTRALIZER CONTROL ---
-        num_e = int(params.get('neut_rate', 30))
+        num_e_neut = int(params.get('neut_rate', 30))
         Te_eV = params.get('Te', 5.0)
 
-        if num_e > 0:
-            new_ey = np.random.rand(num_e) * self.Ly
-            new_ex = np.full(num_e, self.Lx - 0.1)
+        if num_e_neut > 0:
+            new_ey = (np.random.rand(num_e_neut) * self.Ly).astype(np.float32)
+            new_ex = np.full(num_e_neut, self.Lx - 0.1, dtype=np.float32)
             v_e_th = np.sqrt(2 * self.q * Te_eV / self.m_e)
-            new_evx = -np.abs(np.random.randn(num_e)) * v_e_th - v_e_th*0.2
-            new_evy = np.random.randn(num_e) * v_e_th
+            new_evx = (-np.abs(np.random.randn(num_e_neut)) * v_e_th - v_e_th*0.2).astype(np.float32)
+            new_evy = (np.random.randn(num_e_neut) * v_e_th).astype(np.float32)
             self._add_electrons(new_ex, new_ey, new_evx, new_evy)
 
         p_x = self.p_x[:self.num_p]
@@ -331,35 +456,38 @@ class DigitalTwinSimulator:
         cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3 
         charge_per_particle = self.q * self.macro_weight
         
+        # TAICHI: Parallel Density Accumulation
         if self.num_p > 0:
-            ix_rho = np.clip(np.round(p_x / self.dx).astype(int), 1, self.nx - 2)
-            iy_rho = np.clip(np.round(p_y / self.dy).astype(int), 1, self.ny - 2)
-            np.add.at(self.rho, (iy_rho, ix_rho), charge_per_particle / cell_vol)
+            accumulate_rho_taichi(
+                p_x, p_y, self.rho, self.num_p, 
+                self.dx, self.dy, self.nx, self.ny, 
+                charge_per_particle / cell_vol
+            )
             
         if self.num_e > 0:
-            ix_rho_e = np.clip(np.round(e_x / self.dx).astype(int), 1, self.nx - 2)
-            iy_rho_e = np.clip(np.round(e_y / self.dy).astype(int), 1, self.ny - 2)
-            np.add.at(self.rho, (iy_rho_e, ix_rho_e), -charge_per_particle / cell_vol)
+            accumulate_rho_taichi(
+                e_x, e_y, self.rho, self.num_e, 
+                self.dx, self.dy, self.nx, self.ny, 
+                -charge_per_particle / cell_vol
+            )
 
         if self.iteration % 2 == 0:
             self.recalc_poisson(iterations=5, params=params)
 
-        # C. PARTICLE PUSH ALGORITHM 
+        # C. PARTICLE PUSH ALGORITHM (TAICHI)
         if self.num_p > 0:
-            pts = np.column_stack((p_y, p_x))
-            Ex_p, Ey_p = self.interp_Ex(pts), self.interp_Ey(pts)
-            p_vx += (self.q / self.m_XE) * Ex_p * self.dt
-            p_vy += (self.q / self.m_XE) * Ey_p * self.dt
-            p_x += p_vx * self.dt * 1000 
-            p_y += p_vy * self.dt * 1000 
+            push_particles_taichi(
+                p_x, p_y, p_vx, p_vy, self.Ex, self.Ey, 
+                self.num_p, self.dx, self.dy, self.nx, self.ny, 
+                self.dt, self.q / self.m_XE
+            )
 
         if self.num_e > 0:
-            pts_e = np.column_stack((e_y, e_x))
-            Ex_e, Ey_e = self.interp_Ex(pts_e), self.interp_Ey(pts_e)
-            e_vx += (-self.q / self.m_e) * Ex_e * self.dt
-            e_vy += (-self.q / self.m_e) * Ey_e * self.dt
-            e_x += e_vx * self.dt * 1000 
-            e_y += e_vy * self.dt * 1000 
+            push_particles_taichi(
+                e_x, e_y, e_vx, e_vy, self.Ex, self.Ey, 
+                self.num_e, self.dx, self.dy, self.nx, self.ny, 
+                self.dt, -self.q / self.m_e
+            )
 
         # Calculate limits dynamically
         max_grid_x = 1.0 + sum([g['t'] + g['gap'] for g in grids]) if grids else 3.0
@@ -368,23 +496,16 @@ class DigitalTwinSimulator:
         
         # Fixing the saddle point at the centre of the SECOND grid
         if len(grids) >= 2:
-            # 1.0 is the fixed start position of the first grid
             grid2_start_mm = 1.0 + grids[0]['t'] + grids[0]['gap']
             grid2_center_mm = grid2_start_mm + (grids[1]['t'] / 2.0)
-            
             x_idx = int(grid2_center_mm / self.dx)
-            # Clip index to ensure it doesn't go out of bounds
             x_idx = np.clip(x_idx, 0, self.nx - 1) 
             min_pot = self.V[0, x_idx]
-            
         elif len(grids) == 1:
-            # Fallback if only 1 grid exists
             grid1_center_mm = 1.0 + (grids[0]['t'] / 2.0)
             x_idx = int(grid1_center_mm / self.dx)
             min_pot = self.V[0, np.clip(x_idx, 0, self.nx - 1)]
-            
         else:
-            # Fallback if no grids exist
             min_pot = np.min(self.V[0, :])
 
         # D. 2D THERMAL CALCULATIONS & HIT DETECTION 
@@ -400,6 +521,8 @@ class DigitalTwinSimulator:
             v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
+            
+            # Use Numpy's add.at for this small subset
             np.add.at(self.T_map, (iy[valid_thermal_hit], ix[valid_thermal_hit]), dT_heat)
 
         if sim_mode in ['Thermal', 'Both']:
@@ -408,13 +531,15 @@ class DigitalTwinSimulator:
             dT_cool = cooling_factor * (T_bound**4 - 300.0**4)
             
             self.T_map[self.isBound] -= dT_cool
+
+            # Force cast back to 32-bit before sending to Taichi
+            self.T_map = self.T_map.astype(np.float32)
             
-            # --- THERMAL CONDUCTION (2D Finite Difference) ---
-            # Using properties for Molybdenum
-            k_moly = 138.0       # Thermal conductivity W/m-K
-            rho_moly = 10280.0   # Density kg/m^3
-            cp_moly = 250.0      # Specific heat J/kg-K
-            alpha_diff = k_moly / (rho_moly * cp_moly) # Thermal diffusivity
+            # --- THERMAL CONDUCTION (TAICHI) ---
+            k_moly = 138.0       
+            rho_moly = 10280.0   
+            cp_moly = 250.0      
+            alpha_diff = k_moly / (rho_moly * cp_moly) 
             
             dt_thermal = self.dt * self.thermal_accel
             dx_m = self.dx * 1e-3
@@ -423,7 +548,6 @@ class DigitalTwinSimulator:
             Fo_x = alpha_diff * dt_thermal / (dx_m**2)
             Fo_y = alpha_diff * dt_thermal / (dy_m**2)
             
-            # Numerical stability cap for explicit Euler method
             max_Fo = 0.2
             scale = 1.0
             if Fo_x > max_Fo or Fo_y > max_Fo:
@@ -432,23 +556,14 @@ class DigitalTwinSimulator:
             Fo_x *= scale
             Fo_y *= scale
             
-            T = self.T_map
-            mask = self.isBound
+            # Pass arrays to Taichi for massive 2D finite difference speedup
+            thermal_conduction_taichi(
+                self.T_map, self.T_map_new, self.isBound.astype(np.int32), 
+                self.nx, self.ny, Fo_x, Fo_y
+            )
             
-            T_up = np.roll(T, -1, axis=0)
-            T_down = np.roll(T, 1, axis=0)
-            T_left = np.roll(T, 1, axis=1)
-            T_right = np.roll(T, -1, axis=1)
-            
-            # Adiabatic boundaries (no heat conducts into the vacuum)
-            T_up = np.where(np.roll(mask, -1, axis=0), T_up, T)
-            T_down = np.where(np.roll(mask, 1, axis=0), T_down, T)
-            T_left = np.where(np.roll(mask, 1, axis=1), T_left, T)
-            T_right = np.where(np.roll(mask, -1, axis=1), T_right, T)
-            
-            dT_cond = Fo_x * (T_left - 2*T + T_right) + Fo_y * (T_up - 2*T + T_down)
-            
-            self.T_map[mask] += dT_cond[mask]
+            # Swap buffers
+            self.T_map[:] = self.T_map_new[:]
             # -------------------------------------------------
 
             self.T_map[self.isBound] = np.maximum(self.T_map[self.isBound], 300.0) 
@@ -459,7 +574,6 @@ class DigitalTwinSimulator:
                     self.T_grids[i] = np.mean(self.T_map[mask])
                     
                 if i > 0 and i < len(grids):
-                    # Estimate delta gap from previous grid expansion
                     delta_gap = self.alpha_moly * grids[i-1]['gap'] * (self.T_grids[i] - 300) 
                     if abs(delta_gap) > 0.05:
                         params['grids'][i-1]['gap'] -= delta_gap 
@@ -481,13 +595,13 @@ class DigitalTwinSimulator:
             
             if np.any(spawn_mask):
                 num_see = np.sum(spawn_mask)
-                see_x = p_x[valid_see_hit][spawn_mask] - p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
-                see_y = p_y[valid_see_hit][spawn_mask] - p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5
+                see_x = (p_x[valid_see_hit][spawn_mask] - p_vx[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5).astype(np.float32)
+                see_y = (p_y[valid_see_hit][spawn_mask] - p_vy[valid_see_hit][spawn_mask] * self.dt * 1000 * 1.5).astype(np.float32)
                 
                 T_see = 2.0 
                 v_see_th = np.sqrt(2 * self.q * T_see / self.m_e)
-                see_vx = np.random.randn(num_see) * v_see_th
-                see_vy = np.random.randn(num_see) * v_see_th
+                see_vx = (np.random.randn(num_see) * v_see_th).astype(np.float32)
+                see_vy = (np.random.randn(num_see) * v_see_th).astype(np.float32)
                 
                 self._add_electrons(see_x, see_y, see_vx, see_vy)
                 
@@ -560,8 +674,8 @@ class DigitalTwinSimulator:
                 if np.any(collided):
                     c_idx = np.where(primary_mask)[0][collided]
                     neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_XE)
-                    p_vx[c_idx] = np.random.randn(len(c_idx)) * neut_vth
-                    p_vy[c_idx] = np.random.randn(len(c_idx)) * neut_vth
+                    p_vx[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
+                    p_vy[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
                     p_cex[c_idx] = True
 
         return remeshed, min_pot, current_div, self.T_grids
