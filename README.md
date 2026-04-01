@@ -40,6 +40,17 @@ This repository currently includes:
 </p>
 
 ---
+
+<p align="center">
+  <i>Example of RF based co extraction of electrons and ions.</i>
+</p>
+
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/ce1ca173-62e1-433d-aff4-9aaafdbe117a" width="900px" autoplay loop muted playsinline>
+  </video>
+</p>
+
+---
 ### Key Features
 
 ### Core Physics
