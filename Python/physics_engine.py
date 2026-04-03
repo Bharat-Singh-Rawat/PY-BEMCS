@@ -48,13 +48,17 @@ def accumulate_rho_taichi(
         rho[iy, ix] += charge_density
 
 @ti.kernel
-def push_particles_taichi(
+def push_particles_boris_taichi(
     x: ti.types.ndarray(dtype=ti.f32),
     y: ti.types.ndarray(dtype=ti.f32),
     vx: ti.types.ndarray(dtype=ti.f32),
     vy: ti.types.ndarray(dtype=ti.f32),
+    vz: ti.types.ndarray(dtype=ti.f32), # NEW: 3rd Velocity Component
     Ex: ti.types.ndarray(dtype=ti.f32),
     Ey: ti.types.ndarray(dtype=ti.f32),
+    Bx: ti.types.ndarray(dtype=ti.f32), # NEW: Magnetic Field grids
+    By: ti.types.ndarray(dtype=ti.f32),
+    Bz: ti.types.ndarray(dtype=ti.f32),
     num_p: ti.i32,
     dx: ti.f32,
     dy: ti.f32,
@@ -63,7 +67,7 @@ def push_particles_taichi(
     dt: ti.f32,
     q_m: ti.f32
 ):
-    """Parallel bilinear interpolation and particle pusher replacing SciPy Interpolator"""
+    """Parallel bilinear interpolation with 2D3V Boris Algorithm"""
     for i in range(num_p):
         px = x[i]
         py = y[i]
@@ -80,24 +84,57 @@ def push_particles_taichi(
         fx = idx_x - ti.cast(ix0, ti.f32)
         fy = idx_y - ti.cast(iy0, ti.f32)
 
-        ex00 = Ex[iy0, ix0]
-        ex10 = Ex[iy0, ix0 + 1]
-        ex01 = Ex[iy0 + 1, ix0]
-        ex11 = Ex[iy0 + 1, ix0 + 1]
+        # Interpolate Electric Field (Assuming Ez = 0 for 2D electrostatics)
+        Ex_p = Ex[iy0, ix0] * (1.0 - fx) * (1.0 - fy) + Ex[iy0, ix0 + 1] * fx * (1.0 - fy) + \
+               Ex[iy0 + 1, ix0] * (1.0 - fx) * fy + Ex[iy0 + 1, ix0 + 1] * fx * fy
+        Ey_p = Ey[iy0, ix0] * (1.0 - fx) * (1.0 - fy) + Ey[iy0, ix0 + 1] * fx * (1.0 - fy) + \
+               Ey[iy0 + 1, ix0] * (1.0 - fx) * fy + Ey[iy0 + 1, ix0 + 1] * fx * fy
 
-        ey00 = Ey[iy0, ix0]
-        ey10 = Ey[iy0, ix0 + 1]
-        ey01 = Ey[iy0 + 1, ix0]
-        ey11 = Ey[iy0 + 1, ix0 + 1]
+        # Interpolate Magnetic Field
+        Bx_p = Bx[iy0, ix0] * (1.0 - fx) * (1.0 - fy) + Bx[iy0, ix0 + 1] * fx * (1.0 - fy) + \
+               Bx[iy0 + 1, ix0] * (1.0 - fx) * fy + Bx[iy0 + 1, ix0 + 1] * fx * fy
+        By_p = By[iy0, ix0] * (1.0 - fx) * (1.0 - fy) + By[iy0, ix0 + 1] * fx * (1.0 - fy) + \
+               By[iy0 + 1, ix0] * (1.0 - fx) * fy + By[iy0 + 1, ix0 + 1] * fx * fy
+        Bz_p = Bz[iy0, ix0] * (1.0 - fx) * (1.0 - fy) + Bz[iy0, ix0 + 1] * fx * (1.0 - fy) + \
+               Bz[iy0 + 1, ix0] * (1.0 - fx) * fy + Bz[iy0 + 1, ix0 + 1] * fx * fy
 
-        Ex_p = ex00 * (1.0 - fx) * (1.0 - fy) + ex10 * fx * (1.0 - fy) + \
-               ex01 * (1.0 - fx) * fy + ex11 * fx * fy
-        Ey_p = ey00 * (1.0 - fx) * (1.0 - fy) + ey10 * fx * (1.0 - fy) + \
-               ey01 * (1.0 - fx) * fy + ey11 * fx * fy
+        # =====================================================================
+        # BORIS PUSHER ALGORITHM
+        # =====================================================================
+        # STEP 1: First half E-field acceleration (v_minus)
+        v_minus_x = vx[i] + (q_m * Ex_p * dt) / 2.0
+        v_minus_y = vy[i] + (q_m * Ey_p * dt) / 2.0
+        v_minus_z = vz[i] # Ez is 0
 
-        vx[i] += q_m * Ex_p * dt
-        vy[i] += q_m * Ey_p * dt
+        # STEP 2: Magnetic Field Rotation (v_plus)
+        # Calculates rotation vectors t and s
+        t_x = (q_m * Bx_p * dt) / 2.0
+        t_y = (q_m * By_p * dt) / 2.0
+        t_z = (q_m * Bz_p * dt) / 2.0
+        t_mag_sq = t_x**2 + t_y**2 + t_z**2
+        
+        s_x = 2.0 * t_x / (1.0 + t_mag_sq)
+        s_y = 2.0 * t_y / (1.0 + t_mag_sq)
+        s_z = 2.0 * t_z / (1.0 + t_mag_sq)
 
+        # Cross product 1: v_prime = v_minus + (v_minus x t)
+        v_prime_x = v_minus_x + (v_minus_y * t_z - v_minus_z * t_y)
+        v_prime_y = v_minus_y + (v_minus_z * t_x - v_minus_x * t_z)
+        v_prime_z = v_minus_z + (v_minus_x * t_y - v_minus_y * t_x)
+
+        # Cross product 2: v_plus = v_minus + (v_prime x s)
+        v_plus_x = v_minus_x + (v_prime_y * s_z - v_prime_z * s_y)
+        v_plus_y = v_minus_y + (v_prime_z * s_x - v_prime_x * s_z)
+        v_plus_z = v_minus_z + (v_prime_x * s_y - v_prime_y * s_x)
+
+        # STEP 3: Second half E-field acceleration
+        vx[i] = v_plus_x + (q_m * Ex_p * dt) / 2.0
+        vy[i] = v_plus_y + (q_m * Ey_p * dt) / 2.0
+        vz[i] = v_plus_z # Ez is 0
+
+        # =====================================================================
+        # KINEMATIC UPDATE
+        # =====================================================================
         x[i] += vx[i] * dt * 1000.0
         y[i] += vy[i] * dt * 1000.0
 
@@ -144,8 +181,7 @@ class DigitalTwinSimulator:
         self.kB = 1.380649e-23
         self.eps0 = 8.854e-12
         
-        #self.m_e = self.m_XE / 100.0 
-        self.m_e = self.m_XE / 900.0 
+        self.m_e = self.m_XE / 1000.0 
         
         #Material properties for Molybdenum
         self.macro_weight = 3e5  
@@ -157,8 +193,8 @@ class DigitalTwinSimulator:
         # Mesh parameters 
         self.Lx = 20
         self.Ly = 3
-        self.dx = 0.02
-        self.dy = 0.02
+        self.dx = 0.015
+        self.dy = 0.015
         self.nx = int(self.Lx / self.dx) + 1
         self.ny = int(self.Ly / self.dy) + 1
         
@@ -194,6 +230,7 @@ class DigitalTwinSimulator:
         self.p_y = np.zeros(self.max_p, dtype=np.float32)
         self.p_vx = np.zeros(self.max_p, dtype=np.float32)
         self.p_vy = np.zeros(self.max_p, dtype=np.float32)
+        self.p_vz = np.zeros(self.max_p, dtype=np.float32) # Added vz
         self.p_isCEX = np.zeros(self.max_p, dtype=bool)
         self.num_p = 0
 
@@ -201,6 +238,7 @@ class DigitalTwinSimulator:
         self.e_y = np.zeros(self.max_e, dtype=np.float32)
         self.e_vx = np.zeros(self.max_e, dtype=np.float32)
         self.e_vy = np.zeros(self.max_e, dtype=np.float32)
+        self.e_vz = np.zeros(self.max_e, dtype=np.float32) # Added vz
         self.num_e = 0
         
         self.V = np.zeros((self.ny, self.nx), dtype=np.float32)
@@ -210,8 +248,13 @@ class DigitalTwinSimulator:
         self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.Ex = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.Ey = np.zeros((self.ny, self.nx), dtype=np.float32)
+        
+        # Static Magnetic Field Grids (Initialize to Zero)
+        self.Bx = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.By = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.Bz = np.zeros((self.ny, self.nx), dtype=np.float32)
 
-    def _add_ions(self, x, y, vx, vy, is_cex):
+    def _add_ions(self, x, y, vx, vy, vz, is_cex):
         n_new = len(x)
         if self.num_p + n_new > self.max_p:
             new_max = max(self.max_p * 2, self.num_p + n_new)
@@ -219,6 +262,7 @@ class DigitalTwinSimulator:
             self.p_y = np.pad(self.p_y, (0, new_max - self.max_p))
             self.p_vx = np.pad(self.p_vx, (0, new_max - self.max_p))
             self.p_vy = np.pad(self.p_vy, (0, new_max - self.max_p))
+            self.p_vz = np.pad(self.p_vz, (0, new_max - self.max_p))
             self.p_isCEX = np.pad(self.p_isCEX, (0, new_max - self.max_p))
             self.max_p = new_max
         
@@ -228,10 +272,11 @@ class DigitalTwinSimulator:
         self.p_y[s:e] = y
         self.p_vx[s:e] = vx
         self.p_vy[s:e] = vy
+        self.p_vz[s:e] = vz
         self.p_isCEX[s:e] = is_cex
         self.num_p += n_new
 
-    def _add_electrons(self, x, y, vx, vy):
+    def _add_electrons(self, x, y, vx, vy, vz):
         n_new = len(x)
         if self.num_e + n_new > self.max_e:
             new_max = max(self.max_e * 2, self.num_e + n_new)
@@ -239,6 +284,7 @@ class DigitalTwinSimulator:
             self.e_y = np.pad(self.e_y, (0, new_max - self.max_e))
             self.e_vx = np.pad(self.e_vx, (0, new_max - self.max_e))
             self.e_vy = np.pad(self.e_vy, (0, new_max - self.max_e))
+            self.e_vz = np.pad(self.e_vz, (0, new_max - self.max_e))
             self.max_e = new_max
         
         s = self.num_e
@@ -247,6 +293,7 @@ class DigitalTwinSimulator:
         self.e_y[s:e] = y
         self.e_vx[s:e] = vx
         self.e_vy[s:e] = vy
+        self.e_vz[s:e] = vz
         self.num_e += n_new
 
     def build_sparse_matrix(self):
@@ -329,8 +376,8 @@ class DigitalTwinSimulator:
         self.V_dc = np.copy(self.V_fixed) # Store DC potentials for RF superimposition
 
         self.isBound[:, 0] = True
-        # Set left boundary to first grid voltage + 50V for plasma boundary
-        v_plasma_bound = grids[0]['V'] + 50 if grids else 1050
+        # Set left boundary to first grid voltage + 20V for plasma boundary
+        v_plasma_bound = grids[0]['V'] + 20 if grids else 1020
         self.V_fixed[:, 0] = v_plasma_bound
         
         self.T_map[~self.isBound] = 300.0
@@ -351,10 +398,10 @@ class DigitalTwinSimulator:
         
         omega = 0.2 
 
-        # Explicitly declare b as float32
         b = np.zeros(self.nx * self.ny, dtype=np.float32)
         V_fixed_flat = self.V_fixed.flatten()
 
+        #Fluid model for plasma sheath with boltzman electorn distribution
         for _ in range(iterations):
             rho_e = -self.q * n0 * np.exp((np.minimum(self.V, V_plasma) - V_plasma) / Te_up)
             rho_total = self.rho + rho_e
@@ -364,13 +411,11 @@ class DigitalTwinSimulator:
             b[self.is_bound_mask] = V_fixed_flat[self.is_bound_mask]
             b[self.is_interior_mask] = -coeff * rho_flat[self.is_interior_mask]
 
-            # SciPy Sparse Solver returns 64-bit float, we cast it back to 32 immediately
             V_new_flat = self.laplacian_lu(b)
             V_new = V_new_flat.reshape((self.ny, self.nx))
             
             self.V = ((1 - omega) * self.V + omega * V_new).astype(np.float32)
 
-        # np.gradient generates 64-bit arrays, we cast them to 32 right after
         self.Ey, self.Ex = np.gradient(-self.V, self.dy * 1e-3, self.dx * 1e-3)
         self.Ey = self.Ey.astype(np.float32)
         self.Ex = self.Ex.astype(np.float32)
@@ -412,8 +457,9 @@ class DigitalTwinSimulator:
             v_spread = np.sqrt(self.q * params.get('Ti', 0.1) / self.m_XE)
             new_vx = np.full(num_inject, v_bohm, dtype=np.float32) + np.random.randn(num_inject).astype(np.float32) * v_spread
             new_vy = (np.random.randn(num_inject) * v_spread).astype(np.float32)
+            new_vz = (np.random.randn(num_inject) * v_spread).astype(np.float32)
             new_cex = np.zeros(num_inject, dtype=bool)
-            self._add_ions(new_x, new_y, new_vx, new_vy, new_cex)
+            self._add_ions(new_x, new_y, new_vx, new_vy, new_vz, new_cex)
             
         # Source Electrons (for true RF Co-extraction)
         if params.get('rf_enable'):
@@ -427,7 +473,8 @@ class DigitalTwinSimulator:
                 new_ex = np.full(num_inj_e, 0.1, dtype=np.float32)
                 new_evx = (np.abs(np.random.randn(num_inj_e)) * v_e_th_source + v_bohm).astype(np.float32)
                 new_evy = (np.random.randn(num_inj_e) * v_e_th_source).astype(np.float32)
-                self._add_electrons(new_ex, new_ey, new_evx, new_evy)
+                new_evz = (np.random.randn(num_inj_e) * v_e_th_source).astype(np.float32)
+                self._add_electrons(new_ex, new_ey, new_evx, new_evy, new_evz)
 
         # --- NEUTRALIZER CONTROL ---
         num_e_neut = int(params.get('neut_rate', 30))
@@ -439,18 +486,21 @@ class DigitalTwinSimulator:
             v_e_th = np.sqrt(2 * self.q * Te_eV / self.m_e)
             new_evx = (-np.abs(np.random.randn(num_e_neut)) * v_e_th - v_e_th*0.2).astype(np.float32)
             new_evy = (np.random.randn(num_e_neut) * v_e_th).astype(np.float32)
-            self._add_electrons(new_ex, new_ey, new_evx, new_evy)
+            new_evz = (np.random.randn(num_e_neut) * v_e_th).astype(np.float32)
+            self._add_electrons(new_ex, new_ey, new_evx, new_evy, new_evz)
 
         p_x = self.p_x[:self.num_p]
         p_y = self.p_y[:self.num_p]
         p_vx = self.p_vx[:self.num_p]
         p_vy = self.p_vy[:self.num_p]
+        p_vz = self.p_vz[:self.num_p]
         p_cex = self.p_isCEX[:self.num_p]
 
         e_x = self.e_x[:self.num_e]
         e_y = self.e_y[:self.num_e]
         e_vx = self.e_vx[:self.num_e]
         e_vy = self.e_vy[:self.num_e]
+        e_vz = self.e_vz[:self.num_e]
 
         # B. POISSON SOLVER
         self.rho.fill(0.0)
@@ -475,17 +525,19 @@ class DigitalTwinSimulator:
         if self.iteration % 2 == 0:
             self.recalc_poisson(iterations=5, params=params)
 
-        # C. PARTICLE PUSH ALGORITHM (TAICHI)
+        # C. PARTICLE PUSH ALGORITHM (TAICHI BORIS PUSHER)
         if self.num_p > 0:
-            push_particles_taichi(
-                p_x, p_y, p_vx, p_vy, self.Ex, self.Ey, 
+            push_particles_boris_taichi(
+                p_x, p_y, p_vx, p_vy, p_vz, 
+                self.Ex, self.Ey, self.Bx, self.By, self.Bz,
                 self.num_p, self.dx, self.dy, self.nx, self.ny, 
                 self.dt, self.q / self.m_XE
             )
 
         if self.num_e > 0:
-            push_particles_taichi(
-                e_x, e_y, e_vx, e_vy, self.Ex, self.Ey, 
+            push_particles_boris_taichi(
+                e_x, e_y, e_vx, e_vy, e_vz, 
+                self.Ex, self.Ey, self.Bx, self.By, self.Bz,
                 self.num_e, self.dx, self.dy, self.nx, self.ny, 
                 self.dt, -self.q / self.m_e
             )
@@ -519,7 +571,7 @@ class DigitalTwinSimulator:
         remeshed = False
         
         if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
-            v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2
+            v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2 + p_vz[valid_thermal_hit]**2
             E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
             
@@ -588,7 +640,7 @@ class DigitalTwinSimulator:
         valid_see_hit = hit_grid & (p_x > 0.5)
         
         if np.any(valid_see_hit):
-            v_mag_sq = p_vx[valid_see_hit]**2 + p_vy[valid_see_hit]**2
+            v_mag_sq = p_vx[valid_see_hit]**2 + p_vy[valid_see_hit]**2 + p_vz[valid_see_hit]**2
             E_eV = (0.5 * self.m_XE * v_mag_sq) / self.q
             
             gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
@@ -603,18 +655,20 @@ class DigitalTwinSimulator:
                 v_see_th = np.sqrt(2 * self.q * T_see / self.m_e)
                 see_vx = (np.random.randn(num_see) * v_see_th).astype(np.float32)
                 see_vy = (np.random.randn(num_see) * v_see_th).astype(np.float32)
+                see_vz = (np.random.randn(num_see) * v_see_th).astype(np.float32)
                 
-                self._add_electrons(see_x, see_y, see_vx, see_vy)
+                self._add_electrons(see_x, see_y, see_vx, see_vy, see_vz)
                 
                 e_x = self.e_x[:self.num_e]
                 e_y = self.e_y[:self.num_e]
                 e_vx = self.e_vx[:self.num_e]
                 e_vy = self.e_vy[:self.num_e]
+                e_vz = self.e_vz[:self.num_e]
 
         # --- EROSION LOGIC (Sputtering)
         is_erosion_hit = hit_grid & (p_x > 0.5)
         if sim_mode in ['Erosion', 'Both'] and np.any(is_erosion_hit):
-            E_eV = (0.5 * self.m_XE * (p_vx[is_erosion_hit]**2 + p_vy[is_erosion_hit]**2)) / self.q
+            E_eV = (0.5 * self.m_XE * (p_vx[is_erosion_hit]**2 + p_vy[is_erosion_hit]**2 + p_vz[is_erosion_hit]**2)) / self.q
             Y_yield = np.minimum(1.05e-4 * (np.maximum(E_eV - 30, 0))**1.5, 1.0)
             np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params.get('Accel', 1))
 
@@ -635,6 +689,7 @@ class DigitalTwinSimulator:
             self.p_y[:n_alive] = p_y[alive_mask]
             self.p_vx[:n_alive] = p_vx[alive_mask]
             self.p_vy[:n_alive] = p_vy[alive_mask]
+            self.p_vz[:n_alive] = p_vz[alive_mask]
             self.p_isCEX[:n_alive] = p_cex[alive_mask]
             self.num_p = n_alive
             
@@ -642,6 +697,7 @@ class DigitalTwinSimulator:
             p_y = self.p_y[:self.num_p]
             p_vx = self.p_vx[:self.num_p]
             p_vy = self.p_vy[:self.num_p]
+            p_vz = self.p_vz[:self.num_p]
             p_cex = self.p_isCEX[:self.num_p]
 
         if self.num_e > 0:
@@ -659,13 +715,14 @@ class DigitalTwinSimulator:
                 self.e_y[:n_alive_e] = e_y[alive_e]
                 self.e_vx[:n_alive_e] = e_vx[alive_e]
                 self.e_vy[:n_alive_e] = e_vy[alive_e]
+                self.e_vz[:n_alive_e] = e_vz[alive_e]
                 self.num_e = n_alive_e
 
         # --- E. CEX COLLISIONS ---
         if self.num_p > 0:
             primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= 20.0)
             if np.any(primary_mask):
-                v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2)
+                v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2 + p_vz[primary_mask]**2)
                 g = np.maximum(v_mag, 1)
                                    
                 sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
@@ -677,6 +734,7 @@ class DigitalTwinSimulator:
                     neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_XE)
                     p_vx[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
                     p_vy[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
+                    p_vz[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
                     p_cex[c_idx] = True
 
         return remeshed, min_pot, current_div, self.T_grids
@@ -684,25 +742,27 @@ class DigitalTwinSimulator:
     def get_particle_kinematics(self):
         t_current = self.iteration * self.dt
         
+        # Note: Added p_vz and e_vz to the output stack to provide the full 3D velocity vector.
+        # This means the output now has 8 columns: [time, x, y, vx, vy, vz, energy_eV, type]
         if self.num_p > 0:
             p_x, p_y = self.p_x[:self.num_p], self.p_y[:self.num_p]
-            p_vx, p_vy = self.p_vx[:self.num_p], self.p_vy[:self.num_p]
+            p_vx, p_vy, p_vz = self.p_vx[:self.num_p], self.p_vy[:self.num_p], self.p_vz[:self.num_p]
             p_cex = self.p_isCEX[:self.num_p]
-            v_sq_i = p_vx**2 + p_vy**2
+            v_sq_i = p_vx**2 + p_vy**2 + p_vz**2
             energy_eV_i = (0.5 * self.m_XE * v_sq_i) / self.q
             type_i = p_cex.astype(int) 
-            ions = np.column_stack((np.full(self.num_p, t_current), p_x, p_y, p_vx, p_vy, energy_eV_i, type_i))
+            ions = np.column_stack((np.full(self.num_p, t_current), p_x, p_y, p_vx, p_vy, p_vz, energy_eV_i, type_i))
         else:
-            ions = np.empty((0, 7))
+            ions = np.empty((0, 8))
             
         if self.num_e > 0:
             e_x, e_y = self.e_x[:self.num_e], self.e_y[:self.num_e]
-            e_vx, e_vy = self.e_vx[:self.num_e], self.e_vy[:self.num_e]
-            v_sq_e = e_vx**2 + e_vy**2
+            e_vx, e_vy, e_vz = self.e_vx[:self.num_e], self.e_vy[:self.num_e], self.e_vz[:self.num_e]
+            v_sq_e = e_vx**2 + e_vy**2 + e_vz**2
             energy_eV_e = (0.5 * self.m_e * v_sq_e) / self.q
             type_e = np.where(e_x <= 4.0, 2, 3)
-            elecs = np.column_stack((np.full(self.num_e, t_current), e_x, e_y, e_vx, e_vy, energy_eV_e, type_e))
+            elecs = np.column_stack((np.full(self.num_e, t_current), e_x, e_y, e_vx, e_vy, e_vz, energy_eV_e, type_e))
         else:
-            elecs = np.empty((0, 7))
+            elecs = np.empty((0, 8))
             
         return np.vstack((ions, elecs))
