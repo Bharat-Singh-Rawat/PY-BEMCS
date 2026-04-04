@@ -114,7 +114,7 @@ charge_exchange_code  % Plume/CEX study
 2. Install dependencies:
 
 ```bash
-pip install numpy scipy matplotlib PyQt5 Pillow
+pip install numpy scipy matplotlib PyQt5 Pillow taichi
 ```
 
 3. Launch the modular app:
