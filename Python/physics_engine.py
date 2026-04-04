@@ -343,6 +343,24 @@ class DigitalTwinSimulator:
         self.laplacian_lu = factorized(A)
 
     def build_domain(self, params):
+        # Apply GUI Advanced Parameters
+        self.Lx = params.get('Lx', self.Lx)
+        self.Ly = params.get('Ly', self.Ly)
+        self.nx = int(self.Lx / self.dx) + 1
+        self.ny = int(self.Ly / self.dy) + 1
+        
+        self.m_e = self.m_XE / params.get('m_e_ratio', 1000.0)
+        v_offset = params.get('V_plasma_offset', 20.0)
+
+        # Re-initialize coordinates and thermal arrays with potentially new shape
+        self.x_pts = np.linspace(0, self.Lx, self.nx)
+        self.y_pts = np.linspace(0, self.Ly, self.ny)
+        self.X, self.Y = np.meshgrid(self.x_pts, self.y_pts)
+        
+        self.T_map = np.full((self.ny, self.nx), 300.0, dtype=np.float32)
+        self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=np.float32)
+
+        # Reset particle and field arrays to matching shape
         self.reset_arrays()
         self.iteration = 0
 
@@ -376,8 +394,8 @@ class DigitalTwinSimulator:
         self.V_dc = np.copy(self.V_fixed) # Store DC potentials for RF superimposition
 
         self.isBound[:, 0] = True
-        # Set left boundary to first grid voltage + 20V for plasma boundary
-        v_plasma_bound = grids[0]['V'] + 20 if grids else 1020
+        # Set left boundary to first grid voltage + dynamic offset
+        v_plasma_bound = grids[0]['V'] + v_offset if grids else 1000 + v_offset
         self.V_fixed[:, 0] = v_plasma_bound
         
         self.T_map[~self.isBound] = 300.0
@@ -392,7 +410,11 @@ class DigitalTwinSimulator:
         coeff = dx_m2 / self.eps0
         
         grids = params.get('grids', [{'V': 1000}]) if params else [{'V': 1000}]
-        V_plasma = grids[0]['V'] + 20 
+        
+        # Pull plasma offset from advanced parameters (default to 20 if missing)
+        v_offset = params.get('V_plasma_offset', 20.0) if params else 20.0
+        V_plasma = grids[0]['V'] + v_offset 
+        
         Te_up = params.get('Te_up', 3.0) 
         n0 = params.get('n0_plasma', 1e17) 
         
@@ -480,11 +502,19 @@ class DigitalTwinSimulator:
         num_e_neut = int(params.get('neut_rate', 30))
         Te_eV = params.get('Te', 5.0)
 
+        # 1. Fetch custom position and radius (fallback to domain edges)
+        neut_x = params.get('neut_x', self.Lx - 0.1)
+        neut_r = params.get('neut_r', self.Ly)
+
         if num_e_neut > 0:
-            new_ey = (np.random.rand(num_e_neut) * self.Ly).astype(np.float32)
-            new_ex = np.full(num_e_neut, self.Lx - 0.1, dtype=np.float32)
+            # Emit uniformly between the centerline (0) and the specified radius (neut_r)
+            new_ey = np.random.uniform(0.0, neut_r, num_e_neut).astype(np.float32)
+            new_ex = np.full(num_e_neut, neut_x, dtype=np.float32)
             v_e_th = np.sqrt(2 * self.q * Te_eV / self.m_e)
-            new_evx = (-np.abs(np.random.randn(num_e_neut)) * v_e_th - v_e_th*0.2).astype(np.float32)
+            
+            # 2. Purely thermal emission (Gaussian centered at 0)
+            # This shoots ~50% of electrons left and ~50% right automatically
+            new_evx = (np.random.randn(num_e_neut) * v_e_th).astype(np.float32)
             new_evy = (np.random.randn(num_e_neut) * v_e_th).astype(np.float32)
             new_evz = (np.random.randn(num_e_neut) * v_e_th).astype(np.float32)
             self._add_electrons(new_ex, new_ey, new_evx, new_evy, new_evz)
@@ -720,7 +750,8 @@ class DigitalTwinSimulator:
 
         # --- E. CEX COLLISIONS ---
         if self.num_p > 0:
-            primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= 20.0)
+            # Scaled upper bound dynamically using self.Lx instead of hardcoded 20.0
+            primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= self.Lx)
             if np.any(primary_mask):
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2 + p_vz[primary_mask]**2)
                 g = np.maximum(v_mag, 1)

@@ -10,10 +10,52 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QDoubleSpinBox, QPushButton, QCheckBox, 
                              QFrame, QMessageBox, QFileDialog, QApplication, QComboBox,
-                             QScrollArea, QGroupBox)
+                             QScrollArea, QGroupBox, QAction, QDialog, QFormLayout)
 from PyQt5.QtCore import QTimer, Qt
 import csv
 from physics_engine import DigitalTwinSimulator
+
+# --- ADVANCED SETTINGS DIALOG ---
+class AdvancedSettingsDialog(QDialog):
+    def __init__(self, current_params, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Advanced Simulation Parameters")
+        self.setMinimumWidth(350)
+        self.layout = QVBoxLayout(self)
+        
+        self.form = QFormLayout()
+        self.inputs = {}
+        
+        def add_spin(key, label, min_v, max_v, default_v, decimals=1, step=1.0):
+            spin = QDoubleSpinBox()
+            spin.setRange(min_v, max_v)
+            spin.setDecimals(decimals)
+            spin.setSingleStep(step)
+            spin.setValue(default_v)
+            self.form.addRow(label, spin)
+            self.inputs[key] = spin
+
+        add_spin('neut_x', 'Neutralizer Axial Dist (x, mm):', 0, 100, current_params.get('neut_x', 19.9))
+        add_spin('neut_r', 'Neutralizer Radius (y, mm):', 0.1, 50, current_params.get('neut_r', 3.0))
+        add_spin('V_plasma_offset', 'Plasma Potential Offset (V):', 0, 500, current_params.get('V_plasma_offset', 20.0))
+        add_spin('m_e_ratio', 'Electron Mass Ratio (m_Xe / X):', 1, 100000, current_params.get('m_e_ratio', 1000.0), 0, 100)
+        add_spin('Lx', 'Domain Length (Lx, mm):', 5, 200, current_params.get('Lx', 20.0))
+        add_spin('Ly', 'Domain Height (Ly, mm):', 1, 50, current_params.get('Ly', 3.0))
+        
+        self.layout.addLayout(self.form)
+        
+        btn_box = QHBoxLayout()
+        save_btn = QPushButton("Save & Apply")
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        btn_box.addWidget(save_btn)
+        btn_box.addWidget(cancel_btn)
+        self.layout.addLayout(btn_box)
+
+    def get_values(self):
+        return {k: v.value() for k, v in self.inputs.items()}
 
 # --- IEDF & EEDF SUB-WINDOW CLASS ---
 class IEDFWindow(QWidget):
@@ -112,10 +154,52 @@ class DigitalTwinApp(QMainWindow):
 
         self.grid_widgets = []
         
+        # Advanced settings defaults
+        self.adv_params = {
+            'neut_x': 19.9,
+            'neut_r': 3.0,
+            'V_plasma_offset': 20.0,
+            'm_e_ratio': 1000.0,
+            'Lx': 20.0,
+            'Ly': 3.0
+        }
+        
+        self.setup_menu_bar()
         self.setup_ui()
         self.timer = QTimer()
         self.timer.timeout.connect(self.run_sim_step)
         self.timer.start(10)
+
+    def setup_menu_bar(self):
+        menubar = self.menuBar()
+        settings_menu = menubar.addMenu('Settings')
+        
+        adv_action = QAction('Advanced Parameters...', self)
+        adv_action.triggered.connect(self.open_advanced_settings)
+        settings_menu.addAction(adv_action)
+
+    def open_advanced_settings(self):
+        dialog = AdvancedSettingsDialog(self.adv_params, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.adv_params.update(dialog.get_values())
+            QMessageBox.information(self, "Settings Updated", "Settings saved. Click '1. BUILD DOMAIN' to apply geometry or mass changes.")
+
+    def apply_advanced_settings_to_sim(self):
+        """Injects advanced parameters into the sim engine before building"""
+        self.sim.Lx = self.adv_params['Lx']
+        self.sim.Ly = self.adv_params['Ly']
+        self.sim.nx = int(self.sim.Lx / self.sim.dx) + 1
+        self.sim.ny = int(self.sim.Ly / self.sim.dy) + 1
+        self.sim.m_e = self.sim.m_XE / self.adv_params['m_e_ratio']
+        
+        self.sim.x_pts = np.linspace(0, self.sim.Lx, self.sim.nx)
+        self.sim.y_pts = np.linspace(0, self.sim.Ly, self.sim.ny)
+        self.sim.X, self.sim.Y = np.meshgrid(self.sim.x_pts, self.sim.y_pts)
+        
+        self.sim.T_map = np.full((self.sim.ny, self.sim.nx), 300.0, dtype=np.float32)
+        self.sim.T_map_new = np.full((self.sim.ny, self.sim.nx), 300.0, dtype=np.float32)
+        
+        # We don't need to call reset_arrays here because sim.build_domain calls it natively
 
     def create_input(self, label_text, default_val, min_v, max_v, step, decimals=1):
         row = QHBoxLayout()
@@ -196,7 +280,7 @@ class DigitalTwinApp(QMainWindow):
 
         control_layout.addSpacing(15)
         
-        # 2. RF CO-EXTRACTION
+        
         # 2. RF CO-EXTRACTION
         control_layout.addWidget(QLabel('<b>2. RF CO-EXTRACTION</b>'))
         self.chk_rf = QCheckBox('Enable RF Modulated Potential')
@@ -305,8 +389,12 @@ class DigitalTwinApp(QMainWindow):
 
     def get_params(self):
         params = {k: v.value() for k, v in self.inputs.items()}
-        params['sim_mode'] = self.combo_mode.currentText()
         
+        # Inject the advanced dialog settings directly into the params dictionary 
+        # so the physics engine can receive them without modification
+        params.update(self.adv_params)
+        
+        params['sim_mode'] = self.combo_mode.currentText()
         params['rf_enable'] = self.chk_rf.isChecked()
         params['rf_grid_idx'] = self.combo_rf_grid.currentIndex()
         params['rf_freq'] = self.spin_rf_freq.value()
@@ -346,6 +434,9 @@ class DigitalTwinApp(QMainWindow):
         
         self.lbl_status.setText('Building Multi-Grid Domain...')
         QApplication.processEvents() 
+        
+        # Apply the advanced properties BEFORE generating the domain mesh
+        self.apply_advanced_settings_to_sim()
         
         self.sim.build_domain(self.get_params())
         self.draw_static_domain()
