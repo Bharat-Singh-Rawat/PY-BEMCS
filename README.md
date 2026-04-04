@@ -42,11 +42,22 @@ This repository currently includes:
 ---
 
 <p align="center">
-  <i>Example of RF based co extraction of electrons and ions.</i>
+  <i>Example of RF-based co-extraction of electrons and ions.</i>
 </p>
 
 <p align="center">
   <video src="https://github.com/user-attachments/assets/ce1ca173-62e1-433d-aff4-9aaafdbe117a" width="500px" autoplay loop muted playsinline>
+  </video>
+</p>
+
+---
+
+<p align="center">
+  <i>Space charge neutralization of the ion beam at Vs=800V and Va=600V for different electron injection rates.</i>
+</p>
+
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/f541d3a0-647e-4827-9dda-5e4ce4f7e235" width="500px" autoplay loop muted playsinline>
   </video>
 </p>
 
