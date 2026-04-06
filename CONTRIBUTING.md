@@ -14,4 +14,4 @@ To keep the engine stable for all researchers and students, this repository uses
 1. **Fork the Repository:** Click the "Fork" button at the top right of this page to create a copy of the repo on your own GitHub account.
 2. **Clone your Fork:** Download it to your local machine.
    ```bash
-   git clone https://github.com/Bharat26031992/PY-BEMCS.git
+   git clone https://github.com/Bharat-Singh-Rawat/PY-BEMCS.git
