@@ -101,8 +101,7 @@ def run_simulation():
     sim.build_domain(params)
     print("Domain built successfully.")
 
-    print("
-Starting simulation...")
+    print("Starting simulation...")
     print("Press Ctrl+C to stop.")
 
     try:
@@ -139,11 +138,9 @@ Starting simulation...")
                 print("Domain has been remeshed due to thermal or erosion effects.")
 
     except KeyboardInterrupt:
-        print("
-Simulation stopped by user.")
+        print("Simulation stopped by user.")
     except Exception as e:
-        print(f"
-An error occurred during the simulation: {e}")
+        print(f"An error occurred during the simulation: {e}")
 
 if __name__ == '__main__':
     run_simulation()
