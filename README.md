@@ -81,7 +81,7 @@ This repository currently includes:
   - `Both`
   - `Thermal`
   - `Erosion`
-- **Thermal telemetry** for screen and accelerator grids.
+- **Thermal monitoring** for screen and accelerator grids.
 
 ### Visualization and Data export
 
