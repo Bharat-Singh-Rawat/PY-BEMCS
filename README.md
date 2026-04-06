@@ -7,7 +7,7 @@
 </h1>
 
 <p align="center">
-  <strong>A simulation tool for ion beam extraction, charge-exchange (CEX) physics, ion optics erosion, and multiphysics studies in ion thrusters.</strong>
+  <strong>A simulation tool for ion beam extraction, charge-exchange (CEX) physics, ion optics erosion, and multiphysics studies in ion thrusters, NBI, and Ion sources.</strong>
 </p>
 
 ---
