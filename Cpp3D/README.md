@@ -222,4 +222,4 @@ Rapp-Francis parameterization:
 
 ## License
 
-This project is part of the PYBEMCS suite developed at the University of Liverpool.
+This project is part of the PYBEMCS suite developed by Dr.Bharat Singh Rawat.
