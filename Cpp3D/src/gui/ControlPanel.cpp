@@ -145,7 +145,7 @@ void ControlPanel::setupUI() {
     mainLay->addLayout(row);
     row = createSpinRow("Lz beam (mm):", spinLz_, 0.1, 200, 10, 0.5, 1);
     mainLay->addLayout(row);
-    row = createSpinRow("Cell Size (mm):", spinDx_, 0.01, 1.0, 0.05, 0.01, 3);
+    row = createSpinRow("Cell Size (mm):", spinDx_, 0.001, 1.0, 0.05, 0.001, 4);
     mainLay->addLayout(row);
 
     // Dimensional scaling for Debye length resolution

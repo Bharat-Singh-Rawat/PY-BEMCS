@@ -125,7 +125,7 @@ struct SimParams {
     // Neutralizer
     int    neutRate         = 0;
     double neutElectronTemp = 5.0;
-    double neutX_mm        = 19.9;
+    double neutX_mm        = 9.0; // Neutralizer Z position along beam
     double neutR_mm        = 3.0;
 
     // Advanced

@@ -286,13 +286,12 @@ void MainWindow::onSimStep() {
     currentParams_ = controlPanel_->getParams();
 
     // Batch multiple physics steps per render frame to reduce GUI lag
-    // Run 10 sim steps before updating the display
     for (int batch = 0; batch < 10; batch++) {
         simulator_.step(currentParams_);
     }
 
-    // Update visualization every 10th render call (= every 100 physics steps)
-    if (simulator_.getIteration() % 100 < 10) {
+    // Update visualization every render call
+    {
         view3D_->updateFromSimulator(simulator_, currentParams_);
 
         double div = simulator_.getBeamDivergence(currentParams_);
@@ -306,19 +305,17 @@ void MainWindow::onSimStep() {
             div, saddle, meanE,
             simulator_.getGrid().gridTemps);
 
-        // Update contour map views only every 500 steps (expensive)
-        if (simulator_.getIteration() % 500 < 10) {
-            sputterView_->updateFromSimulator(simulator_, currentParams_);
-            thermalView_->updateFromSimulator(simulator_, currentParams_);
-        }
+        // Update contour map views
+        sputterView_->updateFromSimulator(simulator_, currentParams_);
+        thermalView_->updateFromSimulator(simulator_, currentParams_);
 
-        // Capture GIF frame during recording
+        // Capture GIF frame every render
         if (gifRecording_) {
             captureGifFrame();
         }
 
-        // Log diagnostics every 500 iterations
-        if (simulator_.getIteration() % 500 < 10) {
+        // Log diagnostics every 100 iterations
+        if (simulator_.getIteration() % 100 == 0) {
             logMessage(QString("Step %1: %2 ions, %3 electrons, div=%4 deg, E=%5 eV")
                 .arg(simulator_.getIteration())
                 .arg(simulator_.getIonCount())
@@ -395,7 +392,7 @@ void MainWindow::onExportData() {
     const auto& elecs = simulator_.getElectrons();
     for (size_t i = 0; i < elecs.count; i++) {
         if (!elecs.alive[i]) continue;
-        double m_e = M_XE / 1000.0;
+        double m_e = M_ELECTRON;
         double v2 = elecs.vx[i]*elecs.vx[i] + elecs.vy[i]*elecs.vy[i] + elecs.vz[i]*elecs.vz[i];
         double E = 0.5 * m_e * v2 / Q_E;
         file << "ELEC,"

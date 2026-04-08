@@ -15,11 +15,16 @@ void Simulator3D::buildDomain(const SimParams& params) {
     dt_ = params.dt;
     iteration_ = 0;
 
-    // Compute macro weight from target particles per cell
-    double cellVol = (params.dx * 1e-3) * (params.dy * 1e-3) * (params.dz * 1e-3);
-    double targetPPC = 20.0;
+    // Compute macro weight to ensure ~50 macro-ions injected per timestep
+    double rAperture = params.grids.empty() ? 1.0 : params.grids[0].hole_radius_mm;
+    double apertureArea = PI * (rAperture * 1e-3) * (rAperture * 1e-3);
+    double v_bohm = std::sqrt(Q_E * params.electronTemp_eV / M_XE);
+    double I_ion = Q_E * 0.61 * params.plasmaDensity * v_bohm * apertureArea;
+    double targetIonsPerStep = 50.0;
+    double autoWeight = (I_ion * params.dt) / (Q_E * targetIonsPerStep);
+
     SimParams p = params;
-    p.macroWeight = std::max((params.plasmaDensity * cellVol) / targetPPC, 1e3);
+    p.macroWeight = std::max(autoWeight, 1.0);
 
     grid_.buildDomain(p);
     ions_.clear();
@@ -60,24 +65,20 @@ bool Simulator3D::step(const SimParams& params) {
     particleMgr_.accumulateCharge(ions_, grid_, +1.0, params.macroWeight);
     particleMgr_.accumulateCharge(electrons_, grid_, -1.0, params.macroWeight);
 
-    // ── C. Poisson solve (every 2nd iteration for speed) ───────────────
-    if (iteration_ % 2 == 0) {
-        poisson_.solveWithBoltzmann(grid_, params, 5, 200);
-    }
+    // ── C. Poisson solve ────────────────────────────────────────────────
+    poisson_.solveWithBoltzmann(grid_, params, 5, 200);
 
     // ── D. Boris push ──────────────────────────────────────────────────
     if (ions_.count > 0) {
         pusher_.push(ions_, grid_, dt_, Q_E / M_XE);
     }
     if (electrons_.count > 0) {
-        // Use scaled electron mass (same as 2D code)
-        double m_e_scaled = M_XE / 1000.0;
-        pusher_.push(electrons_, grid_, dt_, -Q_E / m_e_scaled);
+        pusher_.push(electrons_, grid_, dt_, -Q_E / M_ELECTRON);
     }
 
     // ── E. Hit detection & removal ─────────────────────────────────────
     auto ionHits = particleMgr_.removeDeadParticles(ions_, grid_, M_XE, true);
-    particleMgr_.removeDeadParticles(electrons_, grid_, M_XE / 1000.0, false);
+    particleMgr_.removeDeadParticles(electrons_, grid_, M_ELECTRON, false);
 
     // ── F. Thermal effects ─────────────────────────────────────────────
     if (params.simMode == SimParams::Both || params.simMode == SimParams::Thermal) {
