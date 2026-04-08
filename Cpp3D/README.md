@@ -1,4 +1,6 @@
-# PYBEMCS-3D
+# BEMCS-3D
+
+<img width="1280" height="720" alt="3D" src="https://github.com/user-attachments/assets/3768c522-2b8a-4171-b665-2929015710a0" />
 
 **3D Particle-In-Cell Beam Extraction & Monte Carlo Simulation**
 
