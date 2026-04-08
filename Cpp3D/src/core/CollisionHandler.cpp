@@ -56,7 +56,7 @@ void CollisionHandler::processSecondaryEmission(
     if (ionHits.hitIndices.empty()) return;
 
     double T_see = 2.0; // SEE electron temperature [eV]
-    double v_see_th = std::sqrt(2.0 * Q_E * T_see / M_E);
+    double v_see_th = std::sqrt(2.0 * Q_E * T_see / M_ELECTRON);
 
     for (size_t h = 0; h < ionHits.hitIndices.size(); h++) {
         double E_eV = ionHits.hitEnergies_eV[h];

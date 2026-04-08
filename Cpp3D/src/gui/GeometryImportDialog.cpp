@@ -6,6 +6,7 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QApplication>
 
 namespace BEMCS {
 

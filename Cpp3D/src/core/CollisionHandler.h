@@ -1,6 +1,7 @@
 #pragma once
 #include "Particle.h"
 #include "Grid3D.h"
+#include "ParticleManager.h"
 #include <random>
 
 namespace BEMCS {

@@ -14,7 +14,7 @@ void BorisPusher3D::push(ParticleArray& particles, const Grid3D& grid,
     if (np == 0) return;
 
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < np; i++) {
+    for (int i = 0; i < static_cast<int>(np); i++) {
         if (!particles.alive[i]) continue;
 
         double px = particles.x[i];

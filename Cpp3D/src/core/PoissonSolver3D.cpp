@@ -58,7 +58,7 @@ void PoissonSolver3D::conjugateGradient(Grid3D& grid,
     applyLaplacian(grid, solution, Ap_);
 
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < N; i++) {
+    for (int i = 0; i < static_cast<int>(N); i++) {
         r_[i] = rhs[i] - Ap_[i];
     }
 
@@ -69,7 +69,7 @@ void PoissonSolver3D::conjugateGradient(Grid3D& grid,
     const double diagVal = -2.0 * (invDx2 + invDy2 + invDz2);
 
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < N; i++) {
+    for (int i = 0; i < static_cast<int>(N); i++) {
         if (grid.isInterior[i]) {
             z_[i] = r_[i] / diagVal;
         } else {
@@ -81,7 +81,7 @@ void PoissonSolver3D::conjugateGradient(Grid3D& grid,
 
     double rz_old = 0.0;
     #pragma omp parallel for reduction(+:rz_old)
-    for (size_t i = 0; i < N; i++) {
+    for (int i = 0; i < static_cast<int>(N); i++) {
         rz_old += r_[i] * z_[i];
     }
 
@@ -90,7 +90,7 @@ void PoissonSolver3D::conjugateGradient(Grid3D& grid,
 
         double pAp = 0.0;
         #pragma omp parallel for reduction(+:pAp)
-        for (size_t i = 0; i < N; i++) {
+        for (int i = 0; i < static_cast<int>(N); i++) {
             pAp += p_[i] * Ap_[i];
         }
 
@@ -99,7 +99,7 @@ void PoissonSolver3D::conjugateGradient(Grid3D& grid,
 
         double rz_new = 0.0;
         #pragma omp parallel for reduction(+:rz_new)
-        for (size_t i = 0; i < N; i++) {
+        for (int i = 0; i < static_cast<int>(N); i++) {
             solution[i] += alpha * p_[i];
             r_[i] -= alpha * Ap_[i];
 
@@ -115,14 +115,14 @@ void PoissonSolver3D::conjugateGradient(Grid3D& grid,
         // Check convergence
         double rnorm = 0.0;
         #pragma omp parallel for reduction(+:rnorm)
-        for (size_t i = 0; i < N; i++) {
+        for (int i = 0; i < static_cast<int>(N); i++) {
             rnorm += r_[i] * r_[i];
         }
         if (std::sqrt(rnorm) < tol) break;
 
         double beta = rz_new / rz_old;
         #pragma omp parallel for schedule(static)
-        for (size_t i = 0; i < N; i++) {
+        for (int i = 0; i < static_cast<int>(N); i++) {
             p_[i] = z_[i] + beta * p_[i];
         }
         rz_old = rz_new;
@@ -137,7 +137,7 @@ void PoissonSolver3D::solve(Grid3D& grid, const SimParams& params,
     const double coeff = -1.0 / EPS_0;
 
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < N; i++) {
+    for (int i = 0; i < static_cast<int>(N); i++) {
         if (grid.isBound[i]) {
             rhs[i] = grid.V_fixed[i];
         } else if (grid.isInterior[i]) {
@@ -169,7 +169,7 @@ void PoissonSolver3D::solveWithBoltzmann(Grid3D& grid, const SimParams& params,
     for (int outer = 0; outer < outerIter; outer++) {
         // Compute Boltzmann electron density
         #pragma omp parallel for schedule(static)
-        for (size_t i = 0; i < N; i++) {
+        for (int i = 0; i < static_cast<int>(N); i++) {
             if (grid.isBound[i]) {
                 rhs[i] = grid.V_fixed[i];
             } else if (grid.isInterior[i]) {
@@ -187,7 +187,7 @@ void PoissonSolver3D::solveWithBoltzmann(Grid3D& grid, const SimParams& params,
 
         // Under-relax
         #pragma omp parallel for schedule(static)
-        for (size_t i = 0; i < N; i++) {
+        for (int i = 0; i < static_cast<int>(N); i++) {
             grid.V[i] = (1.0 - omega) * grid.V[i] + omega * V_new[i];
         }
     }

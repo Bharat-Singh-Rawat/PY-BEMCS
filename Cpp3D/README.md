@@ -44,13 +44,32 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 |---------|---------|---------|----------|
 | **CMake** | >= 3.20 | Build system | Yes |
 | **C++17 Compiler** | MSVC 2019+ / GCC 9+ / Clang 10+ | Compilation | Yes |
-| **Eigen3** | >= 3.3 | Linear algebra (header-only) | Yes |
+| **Eigen3** | >= 3.3 (or 5.x) | Linear algebra (header-only) | Yes |
 | **Qt6** | >= 6.2 | GUI framework | Yes |
 | **VTK** | >= 9.0 | 3D visualization | Optional (fallback OpenGL) |
-| **OpenCASCADE** | >= 7.6 | STEP file import | Optional |
+| **OpenCASCADE** | >= 7.6 (7.9+ recommended) | STEP file import | Optional |
 | **OpenMP** | Any | Parallel acceleration | Optional |
 
-### Installing Dependencies on Windows (vcpkg)
+### Installing Dependencies on Windows (Conda — Recommended)
+
+Using Miniforge/Conda is the fastest way to get all pre-built dependencies on Windows:
+
+```powershell
+# Install Miniforge (if not already installed)
+winget install CondaForge.Miniforge3
+
+# Create environment with all dependencies
+conda create -n pybemcs3d python=3.11
+conda activate pybemcs3d
+conda install -c conda-forge eigen qt6-main vtk occt cmake ninja
+```
+
+You also need the MSVC compiler (Visual Studio Build Tools):
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --quiet --wait"
+```
+
+### Installing Dependencies on Windows (vcpkg — Alternative)
 
 ```powershell
 # Install vcpkg if you haven't already
@@ -58,9 +77,9 @@ git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg
 .\bootstrap-vcpkg.bat
 
-# Install dependencies
+# Install dependencies (compiles from source — can take 30+ minutes)
 .\vcpkg install eigen3:x64-windows
-.\vcpkg install qt6:x64-windows
+.\vcpkg install "qtbase[widgets,opengl]:x64-windows"
 .\vcpkg install vtk:x64-windows
 .\vcpkg install opencascade:x64-windows
 ```
@@ -93,6 +112,18 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DUSE_VTK=ON \
          -DUSE_OCCT=ON \
          -DUSE_OPENMP=ON
+cmake --build . --config Release
+```
+
+### With Conda (Windows — Recommended)
+
+```powershell
+conda activate pybemcs3d
+cd Cpp3D
+mkdir build; cd build
+cmake .. -G "Visual Studio 17 2022" -A x64 `
+         -DCMAKE_PREFIX_PATH="$env:CONDA_PREFIX\Library" `
+         -DUSE_VTK=ON -DUSE_OCCT=ON -DUSE_OPENMP=ON
 cmake --build . --config Release
 ```
 
@@ -186,6 +217,18 @@ Cpp3D/
         ├── MeshingDialog.h/cpp # Mesh settings dialog
         └── GeometryImportDialog.h/cpp # STEP import dialog
 ```
+
+---
+
+## MSVC Compatibility Notes
+
+The codebase includes fixes for building with MSVC (Visual Studio 2022):
+
+- **OpenMP 2.0**: MSVC only supports OpenMP 2.0, which requires signed integer loop variables. All `#pragma omp parallel for` loops use `int` instead of `size_t`.
+- **`M_E` macro conflict**: The electron mass constant is named `M_ELECTRON` to avoid collision with the `M_E` (Euler's number) macro from `<cmath>`.
+- **OpenCASCADE 7.9+**: Uses the new `TKDESTEP`/`TKDE` libraries instead of the legacy `TKSTEP`/`TKSTEPBase`/`TKSTEPAttr`/`TKXDESTEP`.
+- **Eigen 5.x**: Compatible with both Eigen 3.x and the new Eigen 5.x release.
+- **OpenMP `collapse`**: The `collapse` clause on nested loops is ignored by MSVC but does not cause errors.
 
 ---
 

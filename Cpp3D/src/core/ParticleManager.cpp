@@ -57,7 +57,7 @@ void ParticleManager::injectSourceElectrons(ParticleArray& electrons,
     if (!params.rfEnable || params.grids.empty()) return;
 
     double Te = params.electronTemp_eV;
-    double v_e_th = std::sqrt(2.0 * Q_E * Te / M_E);
+    double v_e_th = std::sqrt(2.0 * Q_E * Te / M_ELECTRON);
     double rMax = params.grids[0].hole_radius_mm - 0.05;
     double rMax_m = rMax * 1e-3;
     double injArea = PI * rMax_m * rMax_m;
@@ -98,7 +98,7 @@ void ParticleManager::injectNeutralizerElectrons(ParticleArray& electrons,
     if (numInject <= 0) return;
 
     double Te = params.neutElectronTemp;
-    double v_e_th = std::sqrt(2.0 * Q_E * Te / M_E);
+    double v_e_th = std::sqrt(2.0 * Q_E * Te / M_ELECTRON);
     double cy = grid.Ly / 2.0;
     double cz = grid.Lz / 2.0;
     double neutR = params.neutR_mm;
@@ -126,7 +126,7 @@ void ParticleManager::accumulateCharge(ParticleArray& particles, Grid3D& grid,
     double chargeDensity = chargeSign * Q_E * macroWeight / cellVol;
 
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < particles.count; i++) {
+    for (int i = 0; i < static_cast<int>(particles.count); i++) {
         if (!particles.alive[i]) continue;
         grid.accumulateCharge(particles.x[i], particles.y[i], particles.z[i],
                               chargeDensity);

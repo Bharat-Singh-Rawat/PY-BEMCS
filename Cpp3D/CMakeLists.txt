@@ -18,7 +18,7 @@ if(USE_OPENMP)
 endif()
 
 # ── Eigen (header-only) ─────────────────────────────────────────────────────
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Eigen3 REQUIRED NO_MODULE)
 
 # ── Qt6 ─────────────────────────────────────────────────────────────────────
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
@@ -99,8 +99,8 @@ if(USE_OCCT)
     target_include_directories(${PROJECT_NAME} PRIVATE ${OpenCASCADE_INCLUDE_DIR})
     target_link_libraries(${PROJECT_NAME} PRIVATE
         TKernel TKMath TKBRep TKTopAlgo TKGeomBase
-        TKSTEP TKSTEPBase TKSTEPAttr TKXDESTEP
-        TKXSBase TKG3d TKG2d TKShHealing
+        TKDESTEP TKDE TKXSBase
+        TKG3d TKG2d TKShHealing
         TKMesh TKGeomAlgo
     )
 endif()

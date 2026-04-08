@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <fstream>
 #include <cmath>
+#include "core/Constants.h"
 
 namespace BEMCS {
 

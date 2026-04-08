@@ -25,6 +25,10 @@ This repository currently includes:
   - **GUI layer:** `Python/gui_window.py`
   - **Physics backend:** `Python/physics_engine.py`
 - **Legacy Python single-file app:** `Python/TrainsientDigitalTwin.py`
+- **C++ 3D PIC Framework (`Cpp3D/`)**
+  - Full 3D C++ Particle-In-Cell simulation with Qt6 GUI, VTK visualization, and OpenCASCADE STEP import.
+  - Boris pusher, CG Poisson solver, CEX collisions, sputtering/erosion, thermal model, and SEE.
+  - See [`Cpp3D/README.md`](Cpp3D/README.md) for build instructions and details.
 
 ---
 

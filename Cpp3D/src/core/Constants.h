@@ -11,7 +11,7 @@ constexpr double EPS_0    = 8.8541878128e-12;   // Vacuum permittivity [F/m]
 constexpr double K_B      = 1.380649e-23;       // Boltzmann constant [J/K]
 constexpr double AMU      = 1.66053906660e-27;  // Atomic mass unit [kg]
 constexpr double M_XE     = 131.293 * AMU;      // Xenon ion mass [kg]
-constexpr double M_E      = 9.1093837015e-31;   // Electron mass [kg]
+constexpr double M_ELECTRON = 9.1093837015e-31;  // Electron mass [kg]
 constexpr double PI       = 3.14159265358979323846;
 
 // Material: Molybdenum (default grid material)

@@ -39,7 +39,7 @@ void ThermalSolver3D::applyRadiativeCooling(Grid3D& grid,
                      params.accelFactor) / C_cell;
 
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < grid.totalCells; i++) {
+    for (int i = 0; i < static_cast<int>(grid.totalCells); i++) {
         if (grid.isBound[i]) {
             double T = grid.T_map[i];
             double dT = factor * (T * T * T * T - 300.0 * 300.0 * 300.0 * 300.0);
