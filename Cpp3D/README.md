@@ -1,9 +1,10 @@
-# BEMCS-3D
+# BEMCS-3D (Under development)
 
 <img width="1280" height="720" alt="3D" src="https://github.com/user-attachments/assets/3768c522-2b8a-4171-b665-2929015710a0" />
 
 **3D Particle-In-Cell Beam Extraction & Monte Carlo Simulation**
 
+There may be many issues related to 3D code that need to be fixed; this section is under an experimental phase.
 A full 3D C++ extension of the PYBEMCS code for studying beam extraction and sputtering/erosion physics in ion thruster grids. Developed by Dr. Bharat Singh Rawat.
 
 ---
