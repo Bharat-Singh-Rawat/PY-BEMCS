@@ -748,25 +748,81 @@ class DigitalTwinSimulator:
                 self.e_vz[:n_alive_e] = e_vz[alive_e]
                 self.num_e = n_alive_e
 
-        # --- E. CEX COLLISIONS ---
+        # --- E. CEX COLLISIONS (MCC Method — Birdsall / Roy plume model) ---
+        # Ref: Birdsall, "Plasma Physics via Computer Simulation"
+        #      Roy, analytical neutral plume density profile
+        #
+        # Neutral density profile (Roy's dissertation, Eq. 3.17):
+        #   n_n(r,z) = n_n0 * a * [1 - {1 + (r_T/R)^2}^{-1/2}] * cos(theta)
+        #   where a = [1 - 1/sqrt(2)]^{-1},  R = sqrt(r^2 + (z + r_T)^2),
+        #   theta = arctan(r / (z + r_T)),  r_T = max transverse domain size
+        #
+        # Velocity replacement uses Birdsall Maxwellian sampling (M=3):
+        #   f_M = 2*(R1 + R2 + R3 - 1.5)  where R_i ~ U(0,1)
+        #   v_new = v_th,n * f_M
         if self.num_p > 0:
-            # Scaled upper bound dynamically using self.Lx instead of hardcoded 20.0
             primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= self.Lx)
             if np.any(primary_mask):
+                n_primary = np.sum(primary_mask)
+                px_m = p_x[primary_mask]  # positions in mm
+                py_m = p_y[primary_mask]
+
+                # r_T: maximum transverse dimension of the domain [m]
+                r_T = self.Ly * 1e-3
+
+                # Convert particle positions to metres for density calc
+                # x = beam axis (axial distance from thruster exit ≈ grid region start)
+                z_m = (px_m - 1.0) * 1e-3   # axial distance from first grid [m]
+                z_m = np.maximum(z_m, 0.0)
+                r_m = py_m * 1e-3            # radial distance from axis [m]
+
+                # Roy's analytical neutral density profile
+                a_corr = 1.0 / (1.0 - 1.0 / np.sqrt(2.0))  # correction factor
+                R_dist = np.sqrt(r_m**2 + (z_m + r_T)**2)
+                theta = np.arctan2(r_m, z_m + r_T)
+                n_local = params.get('n0', 1e20) * a_corr * (
+                    1.0 - 1.0 / np.sqrt(1.0 + (r_T / np.maximum(R_dist, 1e-12))**2)
+                ) * np.cos(theta)
+                n_local = np.maximum(n_local, 0.0)
+
+                # Collision probability (Birdsall): P = 1 - exp(-n_n * sigma * g * dt)
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2 + p_vz[primary_mask]**2)
-                g = np.maximum(v_mag, 1)
-                                   
+                g = np.maximum(v_mag, 1.0)
                 sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
-                prob = 1 - np.exp(-params.get('n0', 1e20) * sigma * g * self.dt)
-                collided = np.random.rand(np.sum(primary_mask)) < prob
-                
+                prob = 1.0 - np.exp(-n_local * sigma * g * self.dt)
+                collided = np.random.rand(n_primary) < prob
+
                 if np.any(collided):
                     c_idx = np.where(primary_mask)[0][collided]
+                    n_coll = len(c_idx)
+
+                    # Birdsall Maxwellian sampling (M=3):
+                    # f_M = 2*(R1 + R2 + R3 - 1.5)
                     neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_XE)
-                    p_vx[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
-                    p_vy[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
-                    p_vz[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
+                    fM_x = 2.0 * (np.random.rand(n_coll) + np.random.rand(n_coll) + np.random.rand(n_coll) - 1.5)
+                    fM_y = 2.0 * (np.random.rand(n_coll) + np.random.rand(n_coll) + np.random.rand(n_coll) - 1.5)
+                    fM_z = 2.0 * (np.random.rand(n_coll) + np.random.rand(n_coll) + np.random.rand(n_coll) - 1.5)
+                    p_vx[c_idx] = (neut_vth * fM_x).astype(np.float32)
+                    p_vy[c_idx] = (neut_vth * fM_y).astype(np.float32)
+                    p_vz[c_idx] = (neut_vth * fM_z).astype(np.float32)
                     p_cex[c_idx] = True
+
+        # --- OLD CEX MODEL (uniform density, Gaussian velocity replacement) ---
+        # if self.num_p > 0:
+        #     primary_mask = (~p_cex) & (p_x >= 1) & (p_x <= self.Lx)
+        #     if np.any(primary_mask):
+        #         v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2 + p_vz[primary_mask]**2)
+        #         g = np.maximum(v_mag, 1)
+        #         sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
+        #         prob = 1 - np.exp(-params.get('n0', 1e20) * sigma * g * self.dt)
+        #         collided = np.random.rand(np.sum(primary_mask)) < prob
+        #         if np.any(collided):
+        #             c_idx = np.where(primary_mask)[0][collided]
+        #             neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_XE)
+        #             p_vx[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
+        #             p_vy[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
+        #             p_vz[c_idx] = (np.random.randn(len(c_idx)) * neut_vth).astype(np.float32)
+        #             p_cex[c_idx] = True
 
         return remeshed, min_pot, current_div, self.T_grids
 
