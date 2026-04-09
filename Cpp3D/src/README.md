@@ -1,6 +1,6 @@
 # PYBEMCS-3D (C++ Source)
 
-A 3D Particle-In-Cell (PIC) simulation framework for beam extraction, sputtering/erosion, and electrostatic plasma dynamics in multi-aperture ion thruster grids. Developed at the University of Liverpool.
+A 3D Particle-In-Cell (PIC) simulation framework for beam extraction, sputtering/erosion, and electrostatic plasma dynamics in multi-aperture ion thruster grids.
 
 ## Features
 
