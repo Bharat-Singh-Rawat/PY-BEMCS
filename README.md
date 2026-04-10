@@ -66,8 +66,6 @@ This repository currently includes:
 </p>
 
 ---
-### Key Features
-
 ### Core Physics
 
 - **Vectorized particle updates** for high-throughput runtime performance.
