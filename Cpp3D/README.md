@@ -44,7 +44,7 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 ### Performance
 - **OpenMP Parallelism** — All compute-heavy loops (field solve, particle push, thermal conduction)
 - **Structure-of-Arrays** — Cache-friendly particle storage for optimal memory access
-- **Batched Rendering** — 10 physics steps per render frame for reduced GUI lag
+- **Configurable Batched Rendering** — Steps/Frame spinbox (1–500, default 10) controls physics steps per render frame; increase to advance the beam faster visually
 - **Adaptive Rendering** — Particle sub-sampling for smooth visualization at high particle counts
 
 ---
@@ -174,9 +174,20 @@ cmake --build . --config Release
 1. **Launch** the application
 2. **Configure grid optics** in the left panel (voltages, aperture sizes, etc.)
 3. **Set plasma parameters** (density, temperature, neutral density)
-4. Click **BUILD DOMAIN** to generate the 3D mesh and initial field solve
+4. Click **BUILD DOMAIN** to generate the 3D mesh and initial field solve — this also computes the correct macro-particle weight for injection
 5. Click **START SIMULATION** to begin the PIC loop
 6. Use **View Controls** to rotate, slice, and toggle field/particle display
+
+### Tuning Beam Visibility
+
+Two controls under **4. 3D DOMAIN** let you trade physical accuracy for faster visual feedback:
+
+| Control | Default | Effect |
+|---|---|---|
+| **Timestep dt (ns)** | 1 ns | Physical time per step. Raise to 5–10 ns to see ions traverse the grid stack in fewer iterations. The ion CFL limit at 1650 V / 0.05 mm cells is ~1 ns; values above this reduce accuracy. |
+| **Steps/Frame** | 10 | Physics steps computed per render frame. Raise to 50–100 to advance the beam faster on screen without changing per-step accuracy. |
+
+> **Important:** always click **BUILD DOMAIN** before starting the simulation. The macro-particle weight is computed from plasma density, electron temperature, aperture area, and `dt` at build time. Skipping this step results in near-zero ion injection.
 
 ### Importing CAD Geometry
 

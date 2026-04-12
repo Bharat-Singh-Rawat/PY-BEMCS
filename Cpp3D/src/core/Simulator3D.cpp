@@ -20,11 +20,12 @@ void Simulator3D::buildDomain(const SimParams& params) {
     double apertureArea = PI * (rAperture * 1e-3) * (rAperture * 1e-3);
     double v_bohm = std::sqrt(Q_E * params.electronTemp_eV / M_XE);
     double I_ion = Q_E * 0.61 * params.plasmaDensity * v_bohm * apertureArea;
-    double targetIonsPerStep = 50.0;
+    double targetIonsPerStep = 500.0;
     double autoWeight = (I_ion * params.dt) / (Q_E * targetIonsPerStep);
 
     SimParams p = params;
     p.macroWeight = std::max(autoWeight, 1.0);
+    macroWeight_ = p.macroWeight;  // persist so every step uses the right weight
 
     grid_.buildDomain(p);
     ions_.clear();
@@ -38,35 +39,40 @@ bool Simulator3D::step(const SimParams& params) {
     iteration_++;
     bool remeshed = false;
 
+    // Use the macroWeight computed at buildDomain time.
+    // getParams() returns the struct default (3e5) which gives ~0 injections/step.
+    SimParams p = params;
+    p.macroWeight = macroWeight_;
+
     // ── RF co-extraction: modulate grid voltage ────────────────────────
-    if (params.rfEnable && !params.grids.empty()) {
-        int rfIdx = params.rfGridIndex;
+    if (p.rfEnable && !p.grids.empty()) {
+        int rfIdx = p.rfGridIndex;
         if (rfIdx < static_cast<int>(grid_.gridMasks.size())) {
             double t = iteration_ * dt_;
-            double f_hz = params.rfFreqMHz * 1e6;
-            double v_rf = params.rfAmplitudeV * std::sin(2.0 * PI * f_hz * t);
+            double f_hz = p.rfFreqMHz * 1e6;
+            double v_rf = p.rfAmplitudeV * std::sin(2.0 * PI * f_hz * t);
 
             for (size_t i = 0; i < grid_.totalCells; i++) {
                 if (grid_.gridMasks[rfIdx][i]) {
-                    grid_.V_fixed[i] = params.grids[rfIdx].voltage_V + v_rf;
+                    grid_.V_fixed[i] = p.grids[rfIdx].voltage_V + v_rf;
                 }
             }
-            poisson_.solveWithBoltzmann(grid_, params, 2, 100);
+            poisson_.solveWithBoltzmann(grid_, p, 2, 100);
         }
     }
 
     // ── A. Inject particles ────────────────────────────────────────────
-    particleMgr_.injectIons(ions_, grid_, params);
-    particleMgr_.injectSourceElectrons(electrons_, grid_, params);
-    particleMgr_.injectNeutralizerElectrons(electrons_, grid_, params);
+    particleMgr_.injectIons(ions_, grid_, p);
+    particleMgr_.injectSourceElectrons(electrons_, grid_, p);
+    particleMgr_.injectNeutralizerElectrons(electrons_, grid_, p);
 
     // ── B. Accumulate charge density ───────────────────────────────────
     grid_.clearRho();
-    particleMgr_.accumulateCharge(ions_, grid_, +1.0, params.macroWeight);
-    particleMgr_.accumulateCharge(electrons_, grid_, -1.0, params.macroWeight);
+    particleMgr_.accumulateCharge(ions_, grid_, +1.0, p.macroWeight);
+    particleMgr_.accumulateCharge(electrons_, grid_, -1.0, p.macroWeight);
 
     // ── C. Poisson solve ────────────────────────────────────────────────
-    poisson_.solveWithBoltzmann(grid_, params, 5, 200);
+    poisson_.solveWithBoltzmann(grid_, p, 5, 200);
 
     // ── D. Boris push ──────────────────────────────────────────────────
     if (ions_.count > 0) {
@@ -81,28 +87,28 @@ bool Simulator3D::step(const SimParams& params) {
     particleMgr_.removeDeadParticles(electrons_, grid_, M_ELECTRON, false);
 
     // ── F. Thermal effects ─────────────────────────────────────────────
-    if (params.simMode == SimParams::Both || params.simMode == SimParams::Thermal) {
-        thermal_.applyImpactHeating(grid_, ionHits, M_XE, params.macroWeight);
-        thermal_.applyRadiativeCooling(grid_, params);
-        thermal_.conductionStep(grid_, params);
+    if (p.simMode == SimParams::Both || p.simMode == SimParams::Thermal) {
+        thermal_.applyImpactHeating(grid_, ionHits, M_XE, p.macroWeight);
+        thermal_.applyRadiativeCooling(grid_, p);
+        thermal_.conductionStep(grid_, p);
         thermal_.updateGridTemps(grid_);
     }
 
     // ── G. Secondary electron emission ─────────────────────────────────
-    collisions_.processSecondaryEmission(electrons_, ionHits, grid_, params);
+    collisions_.processSecondaryEmission(electrons_, ionHits, grid_, p);
 
     // ── H. Sputtering / erosion ────────────────────────────────────────
-    if (params.simMode == SimParams::Both || params.simMode == SimParams::Erosion) {
-        if (sputtering_.accumulateDamage(grid_, ionHits, params)) {
+    if (p.simMode == SimParams::Both || p.simMode == SimParams::Erosion) {
+        if (sputtering_.accumulateDamage(grid_, ionHits, p)) {
             // Cells removed — need to rebuild interior mask and re-solve
-            grid_.buildDomain(params);
-            poisson_.solveWithBoltzmann(grid_, params, 10, 300);
+            grid_.buildDomain(p);
+            poisson_.solveWithBoltzmann(grid_, p, 10, 300);
             remeshed = true;
         }
     }
 
     // ── I. CEX collisions ──────────────────────────────────────────────
-    collisions_.processCEX(ions_, grid_, params);
+    collisions_.processCEX(ions_, grid_, p);
 
     return remeshed;
 }

@@ -148,6 +148,23 @@ void ControlPanel::setupUI() {
     row = createSpinRow("Cell Size (mm):", spinDx_, 0.001, 1.0, 0.05, 0.001, 4);
     mainLay->addLayout(row);
 
+    // dt and batch controls
+    row = createSpinRow("Timestep dt (ns):", spinDt_, 0.1, 100.0, 1.0, 0.5, 1);
+    spinDt_->setToolTip("Simulation timestep. Keep below ~1 ns for stability at 1650 V / 0.05 mm cells.\n"
+                        "Increase to see extraction in fewer steps (may reduce accuracy).");
+    mainLay->addLayout(row);
+
+    auto batchRow = new QHBoxLayout();
+    auto lblBatch = new QLabel("Steps/Frame:"); lblBatch->setFixedWidth(140);
+    spinBatchSteps_ = new QSpinBox();
+    spinBatchSteps_->setRange(1, 500);
+    spinBatchSteps_->setValue(10);
+    spinBatchSteps_->setToolTip("Physics steps computed per render frame.\n"
+                                "Increase to advance simulation faster visually.");
+    batchRow->addWidget(lblBatch);
+    batchRow->addWidget(spinBatchSteps_);
+    mainLay->addLayout(batchRow);
+
     // Dimensional scaling for Debye length resolution
     auto scaleRow = new QHBoxLayout();
     auto lblScale = new QLabel("Dim. Scaling:"); lblScale->setFixedWidth(140);
@@ -368,7 +385,13 @@ SimParams ControlPanel::getParams() const {
               : (modeIdx == 1) ? SimParams::Thermal
               : SimParams::Erosion;
 
+    p.dt = spinDt_->value() * 1e-9; // convert ns → s
+
     return p;
+}
+
+int ControlPanel::stepsPerFrame() const {
+    return spinBatchSteps_->value();
 }
 
 void ControlPanel::updateDiagnostics(int iteration, int ionCount, int electronCount,
