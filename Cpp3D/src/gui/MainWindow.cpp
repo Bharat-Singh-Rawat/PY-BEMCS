@@ -286,7 +286,8 @@ void MainWindow::onSimStep() {
     currentParams_ = controlPanel_->getParams();
 
     // Batch multiple physics steps per render frame to reduce GUI lag
-    for (int batch = 0; batch < 10; batch++) {
+    int stepsPerFrame = controlPanel_->stepsPerFrame();
+    for (int batch = 0; batch < stepsPerFrame; batch++) {
         simulator_.step(currentParams_);
     }
 

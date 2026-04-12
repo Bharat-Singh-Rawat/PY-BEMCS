@@ -24,6 +24,7 @@ public:
 
     // Extract current parameters from UI
     SimParams getParams() const;
+    int stepsPerFrame() const;
 
     // Update diagnostics display
     void updateDiagnostics(int iteration, int ionCount, int electronCount,
@@ -95,6 +96,8 @@ private:
     // Domain
     QDoubleSpinBox* spinLx_, *spinLy_, *spinLz_;
     QDoubleSpinBox* spinDx_;
+    QDoubleSpinBox* spinDt_;
+    QSpinBox*       spinBatchSteps_;
 
     // Dimensional scaling
     QComboBox* comboDimScale_;

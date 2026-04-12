@@ -62,6 +62,7 @@ private:
 
     int iteration_ = 0;
     double dt_ = 1e-9;
+    double macroWeight_ = 1.0;  // computed at buildDomain, reused every step
 };
 
 } // namespace BEMCS
