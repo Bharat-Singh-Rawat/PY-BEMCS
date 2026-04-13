@@ -62,6 +62,7 @@ This repository currently includes:
   </video>
 </p>
 ---
+
 ### Core Physics
 
 - **Vectorized particle updates** for high-throughput runtime performance.
