@@ -9,6 +9,19 @@
 #include <QComboBox>
 #include <QTreeWidget>
 #include <QMap>
+#include <QSet>
+#include <QCheckBox>
+
+#ifdef USE_VTK
+#include <QVTKOpenGLNativeWidget.h>
+#include <vtkSmartPointer.h>
+#include <vtkRenderer.h>
+#include <vtkActor.h>
+#include <vtkPolyData.h>
+#include <vtkCellPicker.h>
+#include <vtkIntArray.h>
+#include <vtkPlane.h>
+#endif
 
 namespace BEMCS {
 
@@ -19,7 +32,8 @@ namespace BEMCS {
 // - Browse and select STEP files
 // - Set tessellation quality
 // - Set voltage for the imported geometry
-// - Preview mesh statistics before applying
+// - Preview mesh in 3D and click faces/bodies to select them
+// - Cut view along XZ/XY/YZ to see inner faces
 // ============================================================================
 class GeometryImportDialog : public QDialog {
     Q_OBJECT
@@ -27,17 +41,11 @@ class GeometryImportDialog : public QDialog {
 public:
     explicit GeometryImportDialog(QWidget* parent = nullptr);
 
-    // Get imported surface mesh (valid after successful import)
     const SurfaceMesh& getMesh() const { return importedMesh_; }
     bool hasValidMesh() const { return !importedMesh_.empty(); }
 
-    // Get user-specified voltage for the geometry
     double getVoltage() const;
-
-    // Get tessellation deflection parameter
     double getDeflection() const;
-
-    // Get scale factor (e.g., if STEP is in meters, convert to mm)
     double getScaleFactor() const;
 
     // Face/body assignments
@@ -49,9 +57,20 @@ private slots:
     void doImport();
     void onAssignVoltage();
     void onSetSource();
+    void onTreeSelectionChanged();
+    void onSelectionModeChanged();
+    void onCutPlaneToggled(bool enabled);
+    void onCutPlaneAxisChanged(int index);
 
 private:
     void populateFaceTree();
+    void populateBodyTree();
+    void rebuildTree();
+    void buildPreviewMesh();
+    void highlightInPreview(const QSet<int>& faceIds);
+    void updateClipPlane();
+    QSet<int> getSelectedFaceIds() const;
+
     QLineEdit*       editFilePath_;
     QDoubleSpinBox*  spinDeflection_;
     QDoubleSpinBox*  spinVoltage_;
@@ -64,12 +83,41 @@ private:
     SurfaceMesh importedMesh_;
     STEPImporter importer_;
 
+    // Selection mode
+    QComboBox*   comboSelectionMode_; // Face / Body
+    bool isBodyMode() const;
+
     // Face/body selection
     QTreeWidget* faceTree_;
     QPushButton* btnAssignVoltage_;
     QPushButton* btnSetSource_;
     QMap<int, double> faceVoltages_;
     int sourceFaceId_ = -1;
+
+    // Mapping: bodyId -> set of faceIds
+    QMap<int, QSet<int>> bodyToFaces_;
+
+    // Cut plane controls
+    QCheckBox*   chkCutPlane_;
+    QComboBox*   comboCutAxis_;
+
+    // 3D preview with picking
+#ifdef USE_VTK
+    QVTKOpenGLNativeWidget* previewWidget_;
+    vtkSmartPointer<vtkRenderer> previewRenderer_;
+    vtkSmartPointer<vtkActor> meshActor_;
+    vtkSmartPointer<vtkPolyData> previewPolyData_;
+    vtkSmartPointer<vtkIntArray> cellFaceIds_;   // VTK cell -> CAD faceId
+    vtkSmartPointer<vtkIntArray> cellBodyIds_;   // VTK cell -> CAD bodyId
+    vtkSmartPointer<vtkCellPicker> cellPicker_;
+    vtkSmartPointer<vtkPlane> clipPlane_;
+
+    void setupPickerCallback();
+    void onCellPicked(vtkIdType cellId);
+    void applyClipToMapper();
+#endif
+
+    bool ignoreTreeSelection_ = false;
 };
 
 } // namespace BEMCS

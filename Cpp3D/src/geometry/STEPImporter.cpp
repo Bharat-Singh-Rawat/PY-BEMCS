@@ -9,6 +9,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Solid.hxx>
 #include <TopoDS_Shape.hxx>
 #include <Poly_Triangulation.hxx>
 #include <TopLoc_Location.hxx>
@@ -58,41 +59,36 @@ bool STEPImporter::import(const std::string& filePath, SurfaceMesh& outMesh,
     }
 
     // ── Extract triangulated faces ─────────────────────────────────────
+    // Iterate by solid first to track body IDs, then faces within each solid.
+    // If the shape has no solids (e.g. a shell), fall back to flat face iteration.
     int globalVertexOffset = 0;
+    int cadFaceIndex = 0;
 
-    for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More();
-         explorer.Next()) {
-        TopoDS_Face face = TopoDS::Face(explorer.Current());
+    auto extractFace = [&](const TopoDS_Face& face, int bodyIdx) {
         TopLoc_Location location;
-
         Handle(Poly_Triangulation) triangulation =
             BRep_Tool::Triangulation(face, location);
 
-        if (triangulation.IsNull()) continue;
+        if (triangulation.IsNull()) return;
 
         int nbNodes = triangulation->NbNodes();
         int nbTris = triangulation->NbTriangles();
 
-        // Extract vertices
         for (int i = 1; i <= nbNodes; i++) {
             gp_Pnt pt = triangulation->Node(i);
             pt.Transform(location.Transformation());
-            // STEP files typically use mm, keep as-is
             outMesh.vertices.push_back(Vec3(pt.X(), pt.Y(), pt.Z()));
         }
 
-        // Extract triangles
         for (int i = 1; i <= nbTris; i++) {
             int n1, n2, n3;
             triangulation->Triangle(i).Get(n1, n2, n3);
 
-            // Convert from 1-based OCCT indexing to 0-based
             Triangle tri;
             tri.vertices[0] = globalVertexOffset + n1 - 1;
             tri.vertices[1] = globalVertexOffset + n2 - 1;
             tri.vertices[2] = globalVertexOffset + n3 - 1;
 
-            // Compute normal
             const Vec3& v0 = outMesh.vertices[tri.vertices[0]];
             const Vec3& v1 = outMesh.vertices[tri.vertices[1]];
             const Vec3& v2 = outMesh.vertices[tri.vertices[2]];
@@ -100,16 +96,44 @@ bool STEPImporter::import(const std::string& filePath, SurfaceMesh& outMesh,
             Vec3 e2 = v2 - v0;
             tri.normal = e1.cross(e2).normalized();
 
-            // Handle face orientation
             if (face.Orientation() == TopAbs_REVERSED) {
                 std::swap(tri.vertices[1], tri.vertices[2]);
                 tri.normal = tri.normal * -1.0;
             }
 
+            tri.faceId = cadFaceIndex;
+            tri.bodyId = bodyIdx;
             outMesh.triangles.push_back(tri);
         }
 
         globalVertexOffset += nbNodes;
+        cadFaceIndex++;
+    };
+
+    // Check if there are solids in the shape
+    bool hasSolids = false;
+    for (TopExp_Explorer solidExp(shape, TopAbs_SOLID); solidExp.More();
+         solidExp.Next()) {
+        hasSolids = true;
+        break;
+    }
+
+    if (hasSolids) {
+        int bodyIndex = 0;
+        for (TopExp_Explorer solidExp(shape, TopAbs_SOLID); solidExp.More();
+             solidExp.Next(), bodyIndex++) {
+            TopoDS_Shape solid = solidExp.Current();
+            for (TopExp_Explorer faceExp(solid, TopAbs_FACE); faceExp.More();
+                 faceExp.Next()) {
+                extractFace(TopoDS::Face(faceExp.Current()), bodyIndex);
+            }
+        }
+    } else {
+        // No solids — iterate faces directly, all body 0
+        for (TopExp_Explorer faceExp(shape, TopAbs_FACE); faceExp.More();
+             faceExp.Next()) {
+            extractFace(TopoDS::Face(faceExp.Current()), 0);
+        }
     }
 
     if (outMesh.triangles.empty()) {

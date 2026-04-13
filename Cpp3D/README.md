@@ -25,7 +25,10 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 
 ### Geometry & Meshing
 - **STEP File Import** — Load CAD geometry via OpenCASCADE with configurable tessellation quality
-- **Face/Body Selection** — Select individual faces or bodies in STEP imports for voltage and source assignment
+- **Interactive 3D Face/Body Picking** — Embedded VTK preview in the import dialog lets you click directly on faces or bodies in the 3D view to select them, with bidirectional sync to the assignment tree
+- **Face / Body Selection Mode** — Toggle between Face mode (individual CAD surfaces) and Body mode (entire solids) for faster bulk assignment of voltages or particle sources
+- **Cut Plane Preview** — Clip the 3D preview along XZ, XY, or YZ planes to reveal and select internal/hidden faces
+- **Per-Face Color Coding** — Each CAD face is rendered with a distinct color; selected faces highlight in yellow while others dim for clear visual feedback
 - **Automatic Voxelization** — Converts imported surface meshes to structured PIC grids
 - **Built-in Multi-Aperture Grids** — Parametric grid optics with voltage, thickness, gap, radius, and chamfer
 - **Meshing Controls** — Adjustable cell size, auto-sizing, refinement, and domain padding
@@ -197,9 +200,12 @@ Two controls under **4. 3D DOMAIN** let you trade physical accuracy for faster v
 1. Click **Import STEP Geometry...** or go to File > Import STEP
 2. Browse to your `.step` or `.stp` file
 3. Set the input units and tessellation quality
-4. Assign a boundary voltage to the imported geometry
-5. Click **Import & Preview** to check the mesh
-6. Click **Apply to Simulation**, then **BUILD DOMAIN**
+4. Click **Import & Preview** — the 3D preview shows all CAD faces in distinct colors
+5. **Select faces visually**: Click on any face in the 3D preview to select it. The clicked face highlights in yellow and the corresponding tree row is selected automatically
+6. **Use Body mode** (dropdown above the tree) to select entire solids at once — clicking any face on a body selects all its faces
+7. **Enable Cut Plane** (checkbox above the 3D view) to clip the model and reveal internal faces. Choose the cut axis (XZ, XY, or YZ) to expose hidden geometry
+8. Assign boundary voltages or particle source definitions to selected faces/bodies using the **Set Voltage** and **Set as Particle Source** buttons
+9. Click **Apply to Simulation**, then **BUILD DOMAIN**
 
 ### Meshing Options
 

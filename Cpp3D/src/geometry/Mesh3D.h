@@ -14,6 +14,8 @@ namespace BEMCS {
 struct Triangle {
     std::array<int, 3> vertices; // Indices into vertex array
     Vec3 normal;
+    int faceId = -1; // CAD face index from STEP topology
+    int bodyId = -1; // CAD solid/body index from STEP topology
 };
 
 // Tetrahedron for volume mesh
