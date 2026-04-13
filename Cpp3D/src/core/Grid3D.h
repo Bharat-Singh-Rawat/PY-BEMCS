@@ -45,6 +45,7 @@ public:
 
     void initialize(const SimParams& params);
     void buildDomain(const SimParams& params);
+    void rebuildInteriorMask();   // lightweight: only recomputes isInterior after erosion
     void computeEField();
     void clearRho() { std::fill(rho.begin(), rho.end(), 0.0); }
 

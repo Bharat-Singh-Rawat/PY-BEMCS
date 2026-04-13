@@ -100,8 +100,9 @@ bool Simulator3D::step(const SimParams& params) {
     // ── H. Sputtering / erosion ────────────────────────────────────────
     if (p.simMode == SimParams::Both || p.simMode == SimParams::Erosion) {
         if (sputtering_.accumulateDamage(grid_, ionHits, p)) {
-            // Cells removed — need to rebuild interior mask and re-solve
-            grid_.buildDomain(p);
+            // Cells eroded — rebuild interior mask and re-solve potential
+            // (sputtering already cleared isBound/gridMasks for removed cells)
+            grid_.rebuildInteriorMask();
             poisson_.solveWithBoltzmann(grid_, p, 10, 300);
             remeshed = true;
         }

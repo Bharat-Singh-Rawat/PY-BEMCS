@@ -121,6 +121,21 @@ void Grid3D::buildDomain(const SimParams& params) {
     }
 }
 
+void Grid3D::rebuildInteriorMask() {
+    #pragma omp parallel for collapse(3)
+    for (int iz = 0; iz < nz; iz++) {
+        for (int iy = 0; iy < ny; iy++) {
+            for (int ix = 0; ix < nx; ix++) {
+                size_t id = idx(ix, iy, iz);
+                isInterior[id] = (!isBound[id] &&
+                                  ix > 0 && ix < nx - 1 &&
+                                  iy > 0 && iy < ny - 1 &&
+                                  iz > 0 && iz < nz - 1) ? 1 : 0;
+            }
+        }
+    }
+}
+
 void Grid3D::computeEField() {
     double dx_m = dx * 1e-3;
     double dy_m = dy * 1e-3;
