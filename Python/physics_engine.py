@@ -178,10 +178,16 @@ class DigitalTwinSimulator:
         self.dt = 1e-9
         self.q = 1.602e-19
         self.m_XE = 131.293 * 1.6605e-27
+        self.m_ion = self.m_XE          # configurable ion mass (set by GUI)
+        self.Z_ion = 1                   # charge state (set by GUI)
+        self.q_ion = self.q              # ion charge = Z * e
         self.kB = 1.380649e-23
         self.eps0 = 8.854e-12
-        
-        self.m_e = self.m_XE / 1000.0 
+
+        self.m_e = self.m_XE / 1000.0
+
+        # User-imported cross-section splines: {label: {energy, cs, spline, type}}
+        self.user_cs = {}
         
         #Material properties for Molybdenum
         self.macro_weight = 3e5  
@@ -253,6 +259,24 @@ class DigitalTwinSimulator:
         self.Bx = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.By = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.Bz = np.zeros((self.ny, self.nx), dtype=np.float32)
+
+    def lookup_user_cs(self, cs_type_prefix, energy_eV):
+        """
+        Look up cross-section from user-imported spline data.
+        cs_type_prefix: 'CX' or 'SEE' or 'Custom' — matches first dataset whose label starts with this.
+        energy_eV: array of energies in eV
+        Returns sigma array in m², or None if no matching user data.
+        """
+        for label, ds in self.user_cs.items():
+            if label.startswith(cs_type_prefix) and ds.get('spline') is not None:
+                log_e = np.log10(np.maximum(energy_eV, 1e-30))
+                # Clamp to data range
+                e_min = np.log10(max(ds['energy'][0], 1e-30))
+                e_max = np.log10(ds['energy'][-1])
+                log_e = np.clip(log_e, e_min, e_max)
+                log_cs = ds['spline'](log_e)
+                return 10.0 ** log_cs
+        return None
 
     def _add_ions(self, x, y, vx, vy, vz, is_cex):
         n_new = len(x)
@@ -349,7 +373,7 @@ class DigitalTwinSimulator:
         self.nx = int(self.Lx / self.dx) + 1
         self.ny = int(self.Ly / self.dy) + 1
         
-        self.m_e = self.m_XE / params.get('m_e_ratio', 1000.0)
+        self.m_e = self.m_ion / params.get('m_e_ratio', 1000.0)
         v_offset = params.get('V_plasma_offset', 20.0)
 
         # Re-initialize coordinates and thermal arrays with potentially new shape
@@ -460,14 +484,14 @@ class DigitalTwinSimulator:
                 self.recalc_poisson(iterations=2, params=params)
 
         # --- A. INJECT PARTICLES ---
-        n0 = params.get('n0_plasma', 1e17) 
+        n0 = params.get('n0_plasma', 1e17)
         Te_up = params.get('Te_up', 3.0)
-        v_bohm = np.sqrt(self.q * Te_up / self.m_XE)
-        
+        v_bohm = np.sqrt(self.q_ion * Te_up / self.m_ion)
+
         injection_area = (grids[0]['r'] - 0.05) * 1e-3 * 1.0 if grids else 1e-3
-        I_ion = self.q * 0.61 * n0 * v_bohm * injection_area 
-        
-        charge_per_macro = self.q * self.macro_weight
+        I_ion = self.q_ion * 0.61 * n0 * v_bohm * injection_area
+
+        charge_per_macro = self.q_ion * self.macro_weight
         num_inject_float = (I_ion * self.dt) / charge_per_macro
         num_inject = int(num_inject_float) + (1 if np.random.rand() < (num_inject_float % 1) else 0)
 
@@ -476,7 +500,7 @@ class DigitalTwinSimulator:
         if num_inject > 0:
             new_y = np.random.uniform(0.02, r_max, num_inject).astype(np.float32)
             new_x = np.full(num_inject, 0.1, dtype=np.float32)
-            v_spread = np.sqrt(self.q * params.get('Ti', 0.1) / self.m_XE)
+            v_spread = np.sqrt(self.q_ion * params.get('Ti', 0.1) / self.m_ion)
             new_vx = np.full(num_inject, v_bohm, dtype=np.float32) + np.random.randn(num_inject).astype(np.float32) * v_spread
             new_vy = (np.random.randn(num_inject) * v_spread).astype(np.float32)
             new_vz = (np.random.randn(num_inject) * v_spread).astype(np.float32)
@@ -558,10 +582,10 @@ class DigitalTwinSimulator:
         # C. PARTICLE PUSH ALGORITHM (TAICHI BORIS PUSHER)
         if self.num_p > 0:
             push_particles_boris_taichi(
-                p_x, p_y, p_vx, p_vy, p_vz, 
+                p_x, p_y, p_vx, p_vy, p_vz,
                 self.Ex, self.Ey, self.Bx, self.By, self.Bz,
-                self.num_p, self.dx, self.dy, self.nx, self.ny, 
-                self.dt, self.q / self.m_XE
+                self.num_p, self.dx, self.dy, self.nx, self.ny,
+                self.dt, self.q_ion / self.m_ion
             )
 
         if self.num_e > 0:
@@ -602,7 +626,7 @@ class DigitalTwinSimulator:
         
         if sim_mode in ['Thermal', 'Both'] and np.any(valid_thermal_hit):
             v_mag_sq = p_vx[valid_thermal_hit]**2 + p_vy[valid_thermal_hit]**2 + p_vz[valid_thermal_hit]**2
-            E_joules = 0.5 * self.m_XE * v_mag_sq * self.macro_weight
+            E_joules = 0.5 * self.m_ion * v_mag_sq * self.macro_weight
             dT_heat = (E_joules / self.C_cell) * self.thermal_accel
             
             # Use Numpy's add.at for this small subset
@@ -671,9 +695,14 @@ class DigitalTwinSimulator:
         
         if np.any(valid_see_hit):
             v_mag_sq = p_vx[valid_see_hit]**2 + p_vy[valid_see_hit]**2 + p_vz[valid_see_hit]**2
-            E_eV = (0.5 * self.m_XE * v_mag_sq) / self.q
-            
-            gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
+            E_eV = (0.5 * self.m_ion * v_mag_sq) / self.q
+
+            # Use user-imported SEE yield spline if available
+            see_user = self.lookup_user_cs('SEE', E_eV)
+            if see_user is not None:
+                gamma = np.clip(see_user, 0.0, 1.0)
+            else:
+                gamma = np.clip(0.05 + 1e-4 * E_eV, 0.0, 1.0)
             spawn_mask = np.random.rand(len(gamma)) < gamma
             
             if np.any(spawn_mask):
@@ -698,7 +727,7 @@ class DigitalTwinSimulator:
         # --- EROSION LOGIC (Sputtering)
         is_erosion_hit = hit_grid & (p_x > 0.5)
         if sim_mode in ['Erosion', 'Both'] and np.any(is_erosion_hit):
-            E_eV = (0.5 * self.m_XE * (p_vx[is_erosion_hit]**2 + p_vy[is_erosion_hit]**2 + p_vz[is_erosion_hit]**2)) / self.q
+            E_eV = (0.5 * self.m_ion * (p_vx[is_erosion_hit]**2 + p_vy[is_erosion_hit]**2 + p_vz[is_erosion_hit]**2)) / self.q
             Y_yield = np.minimum(1.05e-4 * (np.maximum(E_eV - 30, 0))**1.5, 1.0)
             np.add.at(self.damage_map, (iy[is_erosion_hit], ix[is_erosion_hit]), Y_yield * params.get('Accel', 1))
 
@@ -788,7 +817,16 @@ class DigitalTwinSimulator:
                 # Collision probability (Birdsall): P = 1 - exp(-n_n * sigma * g * dt)
                 v_mag = np.sqrt(p_vx[primary_mask]**2 + p_vy[primary_mask]**2 + p_vz[primary_mask]**2)
                 g = np.maximum(v_mag, 1.0)
-                sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
+
+                # Use user-imported CX cross-section spline if available
+                E_eV_cex = (0.5 * self.m_ion * g**2) / self.q
+                sigma_user = self.lookup_user_cs('CX', E_eV_cex)
+                if sigma_user is not None:
+                    sigma = sigma_user
+                else:
+                    # Fallback: Birdsall analytical formula (Xe+ default)
+                    sigma = ((-0.8821 * np.log(g) + 15.1262)**2) * 1e-20
+
                 prob = 1.0 - np.exp(-n_local * sigma * g * self.dt)
                 collided = np.random.rand(n_primary) < prob
 
@@ -798,7 +836,7 @@ class DigitalTwinSimulator:
 
                     # Birdsall Maxwellian sampling (M=3):
                     # f_M = 2*(R1 + R2 + R3 - 1.5)
-                    neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_XE)
+                    neut_vth = np.sqrt(2 * self.kB * params.get('Tn', 300) / self.m_ion)
                     fM_x = 2.0 * (np.random.rand(n_coll) + np.random.rand(n_coll) + np.random.rand(n_coll) - 1.5)
                     fM_y = 2.0 * (np.random.rand(n_coll) + np.random.rand(n_coll) + np.random.rand(n_coll) - 1.5)
                     fM_z = 2.0 * (np.random.rand(n_coll) + np.random.rand(n_coll) + np.random.rand(n_coll) - 1.5)
@@ -836,7 +874,7 @@ class DigitalTwinSimulator:
             p_vx, p_vy, p_vz = self.p_vx[:self.num_p], self.p_vy[:self.num_p], self.p_vz[:self.num_p]
             p_cex = self.p_isCEX[:self.num_p]
             v_sq_i = p_vx**2 + p_vy**2 + p_vz**2
-            energy_eV_i = (0.5 * self.m_XE * v_sq_i) / self.q
+            energy_eV_i = (0.5 * self.m_ion * v_sq_i) / self.q
             type_i = p_cex.astype(int) 
             ions = np.column_stack((np.full(self.num_p, t_current), p_x, p_y, p_vx, p_vy, p_vz, energy_eV_i, type_i))
         else:

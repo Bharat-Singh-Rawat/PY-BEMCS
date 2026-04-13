@@ -2,18 +2,333 @@
 This code handles the primary for the GUI/UI design. One can use this
 section to add or modify any new features to the screen.
 """
-import sys 
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QDoubleSpinBox, QPushButton, QCheckBox, 
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QDoubleSpinBox, QPushButton, QCheckBox,
                              QFrame, QMessageBox, QFileDialog, QApplication, QComboBox,
-                             QScrollArea, QGroupBox, QAction, QDialog, QFormLayout)
+                             QScrollArea, QGroupBox, QAction, QDialog, QFormLayout,
+                             QSpinBox, QMenu, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QSplitter, QSizePolicy)
 from PyQt5.QtCore import QTimer, Qt
+from scipy.interpolate import UnivariateSpline
 import csv
 from physics_engine import DigitalTwinSimulator
+
+# --- BEAM SPECIES DIALOG ---
+class BeamSpeciesDialog(QDialog):
+    # Common ion species presets: (name, mass_amu, default_charge)
+    PRESETS = [
+        ('Custom', 0, 1),
+        ('Xenon (Xe)', 131.293, 1),
+        ('Krypton (Kr)', 83.798, 1),
+        ('Argon (Ar)', 39.948, 1),
+        ('Nitrogen (N₂)', 28.014, 1),
+        ('Oxygen (O₂)', 31.998, 1),
+        ('Hydrogen (H₂)', 2.016, 1),
+        ('Helium (He)', 4.0026, 1),
+        ('Mercury (Hg)', 200.59, 1),
+        ('Cesium (Cs)', 132.905, 1),
+    ]
+
+    def __init__(self, current_mass_amu, current_charge, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Ion Beam Species")
+        self.setMinimumWidth(350)
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("<b>Select a preset or enter custom values:</b>"))
+
+        self.combo_preset = QComboBox()
+        for name, _, _ in self.PRESETS:
+            self.combo_preset.addItem(name)
+        self.combo_preset.currentIndexChanged.connect(self._on_preset)
+        layout.addWidget(self.combo_preset)
+
+        form = QFormLayout()
+
+        self.spin_mass = QDoubleSpinBox()
+        self.spin_mass.setRange(0.5, 500.0)
+        self.spin_mass.setDecimals(3)
+        self.spin_mass.setSingleStep(0.1)
+        self.spin_mass.setValue(current_mass_amu)
+        self.spin_mass.setSuffix(' amu')
+        form.addRow('Atomic / Molecular Mass:', self.spin_mass)
+
+        self.spin_charge = QSpinBox()
+        self.spin_charge.setRange(1, 10)
+        self.spin_charge.setValue(current_charge)
+        self.spin_charge.setPrefix('+')
+        form.addRow('Charge State:', self.spin_charge)
+
+        layout.addLayout(form)
+
+        btn_box = QHBoxLayout()
+        save_btn = QPushButton("Apply")
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_box.addWidget(save_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+
+        # Try to auto-select the matching preset
+        self._sync_preset_from_values(current_mass_amu)
+
+    def _sync_preset_from_values(self, mass_amu):
+        for i, (_, m, _) in enumerate(self.PRESETS):
+            if abs(m - mass_amu) < 0.01:
+                self.combo_preset.blockSignals(True)
+                self.combo_preset.setCurrentIndex(i)
+                self.combo_preset.blockSignals(False)
+                return
+        self.combo_preset.blockSignals(True)
+        self.combo_preset.setCurrentIndex(0)  # Custom
+        self.combo_preset.blockSignals(False)
+
+    def _on_preset(self, idx):
+        if idx > 0:
+            _, mass, charge = self.PRESETS[idx]
+            self.spin_mass.setValue(mass)
+            self.spin_charge.setValue(charge)
+
+    def get_values(self):
+        return self.spin_mass.value(), self.spin_charge.value()
+
+
+# --- CROSS-SECTION VIEWER / MANAGER WINDOW ---
+class CrossSectionViewerWindow(QWidget):
+    """
+    Allows the user to import CSV cross-section tables (Energy [eV] vs σ [m²]),
+    visualize them, and fit a cubic spline for runtime interpolation.
+    Supports multiple reaction channels: CX, SEE yield, and custom.
+    """
+    REACTION_TYPES = ['Charge Exchange (CX)', 'Secondary Electron Yield (SEE)', 'Custom Reaction']
+
+    def __init__(self, cs_store, parent=None):
+        super().__init__()  # No parent — opens as independent top-level window
+        self.cs_store = cs_store
+        self.setWindowTitle('Cross-Section Data Manager')
+        self.setMinimumSize(950, 600)
+        self.resize(950, 600)
+
+        # Use a QSplitter so user can resize the control panel vs plot
+        splitter = QSplitter(Qt.Horizontal, self)
+
+        # --- Left: controls panel ---
+        left_widget = QWidget()
+        left = QVBoxLayout(left_widget)
+        left.setContentsMargins(8, 8, 8, 8)
+
+        left.addWidget(QLabel('<b>Reaction Type:</b>'))
+        self.combo_type = QComboBox()
+        self.combo_type.addItems(self.REACTION_TYPES)
+        left.addWidget(self.combo_type)
+
+        self.btn_import = QPushButton('Import CSV...')
+        self.btn_import.setStyleSheet("background-color: #AED6F1; font-weight: bold;")
+        self.btn_import.clicked.connect(self._import_csv)
+        left.addWidget(self.btn_import)
+
+        left.addWidget(QLabel('<b>Loaded Datasets:</b>'))
+        self.combo_datasets = QComboBox()
+        self.combo_datasets.currentIndexChanged.connect(self._on_dataset_selected)
+        left.addWidget(self.combo_datasets)
+
+        self.btn_remove = QPushButton('Remove Selected')
+        self.btn_remove.clicked.connect(self._remove_dataset)
+        left.addWidget(self.btn_remove)
+
+        left.addWidget(QLabel('<b>Spline Smoothing:</b>'))
+        self.spin_smooth = QDoubleSpinBox()
+        self.spin_smooth.setRange(0.0, 1e6)
+        self.spin_smooth.setValue(0.0)
+        self.spin_smooth.setDecimals(2)
+        self.spin_smooth.setToolTip('0 = interpolating spline (passes through all points)')
+        left.addWidget(self.spin_smooth)
+
+        self.btn_fit = QPushButton('Fit Spline')
+        self.btn_fit.setStyleSheet("background-color: #ABEBC6; font-weight: bold;")
+        self.btn_fit.clicked.connect(self._fit_spline)
+        left.addWidget(self.btn_fit)
+
+        self.lbl_info = QLabel('No data loaded.')
+        self.lbl_info.setWordWrap(True)
+        left.addWidget(self.lbl_info)
+
+        # Data preview table
+        left.addWidget(QLabel('<b>Data Preview:</b>'))
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(['Energy (eV)', 'Cross-Section (m²)'])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        left.addWidget(self.table)
+
+        left_widget.setMinimumWidth(280)
+        left_widget.setMaximumWidth(350)
+
+        # --- Right: matplotlib plot ---
+        self.fig, self.ax = plt.subplots(figsize=(7, 5))
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setMinimumWidth(400)
+
+        splitter.addWidget(left_widget)
+        splitter.addWidget(self.canvas)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(splitter)
+
+        self._refresh_combo()
+
+    def _refresh_combo(self):
+        self.combo_datasets.blockSignals(True)
+        self.combo_datasets.clear()
+        for label in self.cs_store:
+            self.combo_datasets.addItem(label)
+        self.combo_datasets.blockSignals(False)
+        if self.combo_datasets.count() > 0:
+            self.combo_datasets.setCurrentIndex(self.combo_datasets.count() - 1)
+            self._on_dataset_selected(self.combo_datasets.currentIndex())
+
+    def _import_csv(self):
+        fname, _ = QFileDialog.getOpenFileName(
+            self, 'Import Cross-Section CSV', '',
+            'CSV Files (*.csv);;Text Files (*.txt *.dat);;All Files (*)')
+        if not fname:
+            return
+
+        try:
+            raw = np.loadtxt(fname, delimiter=None, comments='#', skiprows=0)
+            if raw.ndim == 1:
+                raise ValueError("File must have at least two columns.")
+            # Try comma-delimited if auto didn't work
+        except Exception:
+            try:
+                raw = np.loadtxt(fname, delimiter=',', comments='#', skiprows=1)
+            except Exception as e2:
+                QMessageBox.critical(self, 'Import Error', f'Could not parse CSV:\n{e2}')
+                return
+
+        if raw.ndim != 2 or raw.shape[1] < 2:
+            QMessageBox.critical(self, 'Import Error',
+                                 'File must have at least 2 columns (Energy, Cross-Section).')
+            return
+
+        energy = raw[:, 0]
+        cs = raw[:, 1]
+
+        # Sort by energy
+        order = np.argsort(energy)
+        energy = energy[order]
+        cs = cs[order]
+
+        rtype = self.combo_type.currentText()
+        # Build a unique label
+        base = rtype.split('(')[-1].replace(')', '').strip()
+        count = sum(1 for k in self.cs_store if k.startswith(base))
+        label = f"{base}_{count+1}" if count > 0 else base
+
+        self.cs_store[label] = {
+            'energy': energy,
+            'cs': cs,
+            'spline': None,
+            'type': rtype
+        }
+
+        self._refresh_combo()
+        self._plot_current()
+        self.lbl_info.setText(f'Loaded "{label}": {len(energy)} points, '
+                              f'E range [{energy[0]:.1f}, {energy[-1]:.1f}] eV')
+
+    def _remove_dataset(self):
+        label = self.combo_datasets.currentText()
+        if label and label in self.cs_store:
+            del self.cs_store[label]
+            self._refresh_combo()
+            self._plot_current()
+            self.lbl_info.setText(f'Removed "{label}".')
+
+    def _on_dataset_selected(self, idx):
+        self._plot_current()
+        self._update_table()
+
+    def _update_table(self):
+        label = self.combo_datasets.currentText()
+        if not label or label not in self.cs_store:
+            self.table.setRowCount(0)
+            return
+        ds = self.cs_store[label]
+        n = min(len(ds['energy']), 50)  # Show first 50 rows
+        self.table.setRowCount(n)
+        for i in range(n):
+            self.table.setItem(i, 0, QTableWidgetItem(f"{ds['energy'][i]:.4e}"))
+            self.table.setItem(i, 1, QTableWidgetItem(f"{ds['cs'][i]:.4e}"))
+
+    def _fit_spline(self):
+        label = self.combo_datasets.currentText()
+        if not label or label not in self.cs_store:
+            QMessageBox.warning(self, 'No Data', 'Select a dataset first.')
+            return
+
+        ds = self.cs_store[label]
+        energy = ds['energy']
+        cs = ds['cs']
+
+        if len(energy) < 4:
+            QMessageBox.warning(self, 'Too Few Points',
+                                'Need at least 4 data points for spline fitting.')
+            return
+
+        try:
+            s_val = self.spin_smooth.value()
+            # Fit in log-log space for better behavior across decades
+            log_e = np.log10(np.maximum(energy, 1e-30))
+            log_cs = np.log10(np.maximum(cs, 1e-50))
+            spline = UnivariateSpline(log_e, log_cs, s=s_val, k=3)
+            ds['spline'] = spline
+            self.lbl_info.setText(f'Spline fitted for "{label}" (smoothing={s_val}).\n'
+                                  f'This data will be used in the simulation.')
+            self._plot_current()
+        except Exception as e:
+            QMessageBox.critical(self, 'Spline Error', f'Failed to fit spline:\n{e}')
+
+    def _plot_current(self):
+        self.ax.clear()
+        label = self.combo_datasets.currentText()
+
+        if label and label in self.cs_store:
+            ds = self.cs_store[label]
+            energy = ds['energy']
+            cs = ds['cs']
+
+            self.ax.loglog(energy, cs, 'o', ms=4, label='Data', color='#2980B9')
+
+            if ds['spline'] is not None:
+                e_fine = np.logspace(np.log10(max(energy[0], 1e-30)),
+                                     np.log10(energy[-1]), 500)
+                log_cs_fine = ds['spline'](np.log10(e_fine))
+                cs_fine = 10.0 ** log_cs_fine
+                self.ax.loglog(e_fine, cs_fine, '-', lw=2, label='Spline Fit',
+                               color='#E74C3C')
+
+            self.ax.set_xlabel('Energy (eV)')
+            self.ax.set_ylabel('Cross-Section (m²)')
+            self.ax.set_title(f'{label} — {ds.get("type", "")}')
+            self.ax.legend()
+            self.ax.grid(True, which='both', alpha=0.3)
+        else:
+            self.ax.set_title('No data loaded')
+            self.ax.set_xlabel('Energy (eV)')
+            self.ax.set_ylabel('Cross-Section (m²)')
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+
 
 # --- ADVANCED SETTINGS DIALOG ---
 class AdvancedSettingsDialog(QDialog):
@@ -140,19 +455,27 @@ class DigitalTwinApp(QMainWindow):
 
         self.sim = DigitalTwinSimulator()
         self.sim_isRunning = False
-        
+
         self.iter_history = []
         self.ebs_history = []
         self.div_history = []
-        self.T_histories = {} 
+        self.T_histories = {}
         self.recorded_frames = []
-        self.tracking_buffer = [] 
-        self.iedf_window = None 
-        
+        self.tracking_buffer = []
+        self.iedf_window = None
+        self.cs_viewer_window = None
+
         self.cbar_temp = None
         self.cbar_energy = None
 
         self.grid_widgets = []
+
+        # Beam species configuration
+        self.beam_mass_amu = 131.293  # Xenon default
+        self.beam_charge_state = 1
+
+        # Cross-section data store: {label: {energy, cs, spline, type}}
+        self.cs_store = {}
         
         # Advanced settings defaults
         self.adv_params = {
@@ -172,17 +495,48 @@ class DigitalTwinApp(QMainWindow):
 
     def setup_menu_bar(self):
         menubar = self.menuBar()
+
+        # --- Settings Menu ---
         settings_menu = menubar.addMenu('Settings')
-        
         adv_action = QAction('Advanced Parameters...', self)
         adv_action.triggered.connect(self.open_advanced_settings)
         settings_menu.addAction(adv_action)
+
+        # --- Beam Menu ---
+        beam_menu = menubar.addMenu('Beam')
+
+        species_action = QAction('Ion Species...', self)
+        species_action.triggered.connect(self.open_beam_species)
+        beam_menu.addAction(species_action)
+
+        beam_menu.addSeparator()
+
+        cs_action = QAction('Cross-Section Manager...', self)
+        cs_action.triggered.connect(self.open_cs_viewer)
+        beam_menu.addAction(cs_action)
 
     def open_advanced_settings(self):
         dialog = AdvancedSettingsDialog(self.adv_params, self)
         if dialog.exec_() == QDialog.Accepted:
             self.adv_params.update(dialog.get_values())
-            QMessageBox.information(self, "Settings Updated", "Settings saved. Click '1. BUILD DOMAIN' to apply geometry or mass changes.")
+            QMessageBox.information(self, "Settings Updated",
+                                    "Settings saved. Click '1. BUILD DOMAIN' to apply geometry or mass changes.")
+
+    def open_beam_species(self):
+        dialog = BeamSpeciesDialog(self.beam_mass_amu, self.beam_charge_state, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.beam_mass_amu, self.beam_charge_state = dialog.get_values()
+            QMessageBox.information(
+                self, "Species Updated",
+                f"Beam ion: {self.beam_mass_amu:.3f} amu, charge +{self.beam_charge_state}.\n"
+                f"Click '1. BUILD DOMAIN' to apply.")
+
+    def open_cs_viewer(self):
+        if self.cs_viewer_window is None:
+            self.cs_viewer_window = CrossSectionViewerWindow(self.cs_store)
+        self.cs_viewer_window.show()
+        self.cs_viewer_window.raise_()
+        self.cs_viewer_window.activateWindow()
 
     def apply_advanced_settings_to_sim(self):
         """Injects advanced parameters into the sim engine before building"""
@@ -190,12 +544,25 @@ class DigitalTwinApp(QMainWindow):
         self.sim.Ly = self.adv_params['Ly']
         self.sim.nx = int(self.sim.Lx / self.sim.dx) + 1
         self.sim.ny = int(self.sim.Ly / self.sim.dy) + 1
-        self.sim.m_e = self.sim.m_XE / self.adv_params['m_e_ratio']
-        
+
+        # Apply beam species: mass and charge
+        self.sim.m_ion = self.beam_mass_amu * 1.6605e-27
+        self.sim.m_XE = self.sim.m_ion  # backward compat alias
+        self.sim.Z_ion = self.beam_charge_state
+        self.sim.q_ion = self.beam_charge_state * self.sim.q
+
+        self.sim.m_e = self.sim.m_ion / self.adv_params['m_e_ratio']
+
+        # Pass user cross-section splines to the engine
+        self.sim.user_cs = {}
+        for label, ds in self.cs_store.items():
+            if ds.get('spline') is not None:
+                self.sim.user_cs[label] = ds
+
         self.sim.x_pts = np.linspace(0, self.sim.Lx, self.sim.nx)
         self.sim.y_pts = np.linspace(0, self.sim.Ly, self.sim.ny)
         self.sim.X, self.sim.Y = np.meshgrid(self.sim.x_pts, self.sim.y_pts)
-        
+
         self.sim.T_map = np.full((self.sim.ny, self.sim.nx), 300.0, dtype=np.float32)
         self.sim.T_map_new = np.full((self.sim.ny, self.sim.nx), 300.0, dtype=np.float32)
         
@@ -441,7 +808,10 @@ class DigitalTwinApp(QMainWindow):
         self.sim.build_domain(self.get_params())
         self.draw_static_domain()
         
-        self.lbl_status.setText(f'Domain Ready. Wt: {self.sim.macro_weight:.1e}')
+        species_str = f'{self.beam_mass_amu:.1f} amu, +{self.beam_charge_state}'
+        cs_count = sum(1 for ds in self.cs_store.values() if ds.get('spline') is not None)
+        cs_str = f' | {cs_count} CS loaded' if cs_count > 0 else ''
+        self.lbl_status.setText(f'Domain Ready. Wt: {self.sim.macro_weight:.1e} | {species_str}{cs_str}')
         self.lbl_temp.setText('Grid Temps: ' + ' | '.join([f'G{i+1}: 26°C' for i in range(len(self.grid_widgets))]))
 
     def draw_static_domain(self):
@@ -490,18 +860,18 @@ class DigitalTwinApp(QMainWindow):
 
             if np.any(prim_mask):
                 v_sq_prim = self.sim.p_vx[prim_mask]**2 + self.sim.p_vy[prim_mask]**2
-                self.scat_prim.set_array((0.5 * self.sim.m_XE * v_sq_prim) / self.sim.q)
+                self.scat_prim.set_array((0.5 * self.sim.m_ion * v_sq_prim) / self.sim.q)
 
             if np.any(cex_mask):
                 v_sq_cex = self.sim.p_vx[cex_mask]**2 + self.sim.p_vy[cex_mask]**2
-                self.scat_cex.set_array((0.5 * self.sim.m_XE * v_sq_cex) / self.sim.q)
+                self.scat_cex.set_array((0.5 * self.sim.m_ion * v_sq_cex) / self.sim.q)
 
             if self.iedf_window and self.iedf_window.isVisible():
                 max_v = max([g['V'].value() for g in self.grid_widgets]) if self.grid_widgets else 1000
                 self.iedf_window.update_histogram(
-                    self.sim.p_vx, self.sim.p_vy, self.sim.p_isCEX, 
+                    self.sim.p_vx, self.sim.p_vy, self.sim.p_isCEX,
                     self.sim.e_x, self.sim.e_vx, self.sim.e_vy,
-                    self.sim.m_XE, self.sim.m_e, self.sim.q, max_v
+                    self.sim.m_ion, self.sim.m_e, self.sim.q, max_v
                 )
 
             if self.chk_track_ptcls.isChecked():
