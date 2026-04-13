@@ -23,7 +23,7 @@ GeometryImportDialog::GeometryImportDialog(QWidget* parent)
     auto fileGroup = new QGroupBox("STEP File");
     auto fileLay = new QHBoxLayout();
     editFilePath_ = new QLineEdit();
-    editFilePath_->setPlaceholderText("Select a .step or .stp file...");
+    editFilePath_->setPlaceholderText("Select a .step/.stp/.STEP/.STP file...");
     auto btnBrowse = new QPushButton("Browse...");
     connect(btnBrowse, &QPushButton::clicked, this, &GeometryImportDialog::browseFile);
     fileLay->addWidget(editFilePath_);
@@ -129,7 +129,7 @@ GeometryImportDialog::GeometryImportDialog(QWidget* parent)
 void GeometryImportDialog::browseFile() {
     QString path = QFileDialog::getOpenFileName(
         this, "Select STEP File", QString(),
-        "STEP Files (*.step *.stp);;All Files (*)");
+        "STEP Files (*.step *.stp *.STEP *.STP *.Step);;All Files (*)");
 
     if (!path.isEmpty()) {
         editFilePath_->setText(path);
