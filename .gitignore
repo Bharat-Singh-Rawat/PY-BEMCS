@@ -8,5 +8,8 @@ Python/.venv/
 # C++ build artifacts
 Cpp3D/build/
 
+# Release bundles
+release/
+
 # VSCode
 .vscode/

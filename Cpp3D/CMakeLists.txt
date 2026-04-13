@@ -99,7 +99,7 @@ if(USE_OCCT)
     target_include_directories(${PROJECT_NAME} PRIVATE ${OpenCASCADE_INCLUDE_DIR})
     target_link_libraries(${PROJECT_NAME} PRIVATE
         TKernel TKMath TKBRep TKTopAlgo TKGeomBase
-        TKDESTEP TKDE TKXSBase
+        TKXDESTEP TKSTEP TKSTEPBase TKSTEPAttr TKSTEP209 TKXSBase
         TKG3d TKG2d TKShHealing
         TKMesh TKGeomAlgo
     )
