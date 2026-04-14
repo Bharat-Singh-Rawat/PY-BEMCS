@@ -1,3 +1,4 @@
+
 # BEMCS-3D (Under development)
 
 <img width="1280" height="720" alt="3D" src="https://github.com/user-attachments/assets/3768c522-2b8a-4171-b665-2929015710a0" />
@@ -8,7 +9,8 @@ There may be many issues related to 3D code that need to be fixed; this section 
 A full 3D C++ extension of the PYBEMCS code for studying beam extraction and sputtering/erosion physics in ion thruster grids. Developed by Dr. Bharat Singh Rawat with Claude code.
 
 ---
-<img width="800" height="720" alt="3D" src="https://github.com/user-attachments/assets/33835dfb-ae74-4dfa-bffb-8627e4106b9c" />
+**An example showing the erosion of the ion optics (accelerated damage threshold)**
+<img width="800" height="720" alt="3D" src="https://github.com/user-attachments/assets/9db221b9-0526-48c4-b872-24163dbfb0f1)" />
 
 ## Features
 
