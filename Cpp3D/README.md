@@ -10,7 +10,8 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 
 ---
 **An example showing the erosion of the ion optics (accelerated damage threshold)**
-<img width="800" height="720" alt="3D" src="https://github.com/user-attachments/assets/9db221b9-0526-48c4-b872-24163dbfb0f1)" />
+
+<img width="800" height="720" alt="3D" src="https://github.com/user-attachments/assets/9db221b9-0526-48c4-b872-24163dbfb0f1" />
 
 ## Features
 
