@@ -4,7 +4,7 @@
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkPointData.h>
 #include <vtkCellData.h>
-#include <vtkFloatArray.h>
+#include <vtkDoubleArray.h>
 #include <vtkUnsignedCharArray.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
@@ -314,7 +314,7 @@ void SimulationView3D::updateFromSimulator(const Simulator3D& sim,
         const auto& field = *fieldPtr;
 
         auto points = vtkSmartPointer<vtkPoints>::New();
-        auto scalars = vtkSmartPointer<vtkFloatArray>::New();
+        auto scalars = vtkSmartPointer<vtkDoubleArray>::New();
         scalars->SetName(fieldName);
         auto cells = vtkSmartPointer<vtkCellArray>::New();
 
@@ -330,7 +330,7 @@ void SimulationView3D::updateFromSimulator(const Simulator3D& sim,
                     points->InsertNextPoint(ix * grid.dx, iy * grid.dy,
                                             sliceIdx * grid.dz);
                     scalars->InsertNextValue(
-                        static_cast<float>(field[grid.idx(ix, iy, sliceIdx)]));
+                        static_cast<double>(field[grid.idx(ix, iy, sliceIdx)]));
                 }
             }
         } else if (slicePlane_ == SlicePlane::XZ) {
@@ -341,7 +341,7 @@ void SimulationView3D::updateFromSimulator(const Simulator3D& sim,
                     points->InsertNextPoint(ix * grid.dx, sliceIdx * grid.dy,
                                             iz * grid.dz);
                     scalars->InsertNextValue(
-                        static_cast<float>(field[grid.idx(ix, sliceIdx, iz)]));
+                        static_cast<double>(field[grid.idx(ix, sliceIdx, iz)]));
                 }
             }
         } else { // YZ
@@ -352,7 +352,7 @@ void SimulationView3D::updateFromSimulator(const Simulator3D& sim,
                     points->InsertNextPoint(sliceIdx * grid.dx, iy * grid.dy,
                                             iz * grid.dz);
                     scalars->InsertNextValue(
-                        static_cast<float>(field[grid.idx(sliceIdx, iy, iz)]));
+                        static_cast<double>(field[grid.idx(sliceIdx, iy, iz)]));
                 }
             }
         }
