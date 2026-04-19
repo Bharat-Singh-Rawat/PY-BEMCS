@@ -198,6 +198,7 @@ particle) and \(\Delta z = \SI{1}{\milli\meter}\) is the assumed
 out-of-plane cell depth.
 
 \subsection{Macro-particle weight}
+\label{sec:injection-weight}
 
 For a target of \(N_{\mathrm{ppc}}\) particles per cell we set
 \begin{equation}
@@ -406,10 +407,13 @@ datasets can be loaded simultaneously and plotted.
 \section{Sputtering and Erosion}
 % =====================================================
 
+\subsection{Yield and damage accumulation}
+
 Each ion impact on a grid boundary contributes to an accumulated
 damage map
 \begin{equation}
     D_{i,j} \;+\!=\; Y(E)\,\kappa_{\mathrm{acc}},
+    \label{eq:damage-accum}
 \end{equation}
 with the energy-dependent yield (empirical Matsunami fit)
 \begin{equation}
@@ -418,12 +422,112 @@ with the energy-dependent yield (empirical Matsunami fit)
     Y_{0}\,\bigl(E_{\mathrm{eV}}-E_{\mathrm{th}}\bigr)^{1.5},\;1
     \right],
 \end{equation}
-where \(Y_{0}\) is the material-dependent yield coefficient,
-\(E_{\mathrm{th}}\) is the sputter threshold, and
-\(\kappa_{\mathrm{acc}}\) is the user acceleration factor.
-When a cell exceeds the user damage threshold
-\(D_{\mathrm{fail}}\), the cell is marked non-solid and the
-Poisson operator is refactorised.
+where \(Y_{0}\) is the material-dependent yield coefficient
+(atoms per incident ion per \si{\eV\tothe{1.5}}) and
+\(E_{\mathrm{th}}\) is the sputter threshold energy.
+\(Y(E)\) is the dimensionless number of target atoms
+ejected per incident ion.
+
+\subsection{Time-acceleration factor \texorpdfstring{$\kappa_{\mathrm{acc}}$}{kappa\_acc}}
+\label{sec:kappa-acc}
+
+Real grid erosion in an ion thruster occurs over
+\(10^{3}\)--\(10^{4}\,\si{\hour}\) of firing, whereas a PIC
+simulation can only afford \(\mathcal{O}(\si{\milli\second})\)
+of physical time. \(\kappa_{\mathrm{acc}}\) is a
+dimensionless time-compression factor that multiplies the
+per-hit damage in Eq.~\eqref{eq:damage-accum} so that a short
+simulation run reproduces the total eroded material of a long
+real-world firing.
+
+Formally, let \(T_{\mathrm{sim}}\) be the total physical
+time simulated and \(T_{\mathrm{real}}\) be the operating
+duration being emulated. Because the incident ion flux is
+stationary once the beam reaches steady state, the total
+number of impacts scales linearly with time, and so does
+the accumulated damage. The consistent choice is therefore
+\begin{equation}
+    \kappa_{\mathrm{acc}} \;=\; \frac{T_{\mathrm{real}}}{T_{\mathrm{sim}}},
+    \label{eq:kappa-acc}
+\end{equation}
+so that \(1\,\si{\milli\second}\) of simulated firing
+represents \(\kappa_{\mathrm{acc}}\,\si{\milli\second}\) of
+real thruster operation. For example, compressing
+\(T_{\mathrm{real}}=1000\,\si{\hour}\) of operation into
+\(T_{\mathrm{sim}}=10\,\si{\milli\second}\) of simulation
+requires \(\kappa_{\mathrm{acc}}=3.6\times10^{8}\).
+
+\paragraph{Calibration against measured erosion rate.}
+\(\kappa_{\mathrm{acc}}\) can also be obtained by matching
+the simulated beginning-of-life erosion rate against a
+published experimental value. If \(\dot m_{\mathrm{meas}}\)
+(\si{\kilo\gram\per\second}) is the measured mass-loss rate
+of a reference thruster and the simulation removes a mass
+\(m_{\mathrm{sim}}\) during \(T_{\mathrm{sim}}\) with
+\(\kappa_{\mathrm{acc}}=1\), then
+\begin{equation}
+    \kappa_{\mathrm{acc}} \;=\;
+    \frac{\dot m_{\mathrm{meas}}\,T_{\mathrm{sim}}}
+         {m_{\mathrm{sim}}},
+\end{equation}
+which forces the simulated erosion rate to match
+measurement at \(t=0\). The two definitions are equivalent
+when the yield model and ion flux are correctly calibrated.
+
+\subsection{Damage threshold \texorpdfstring{$D_{\mathrm{fail}}$}{D\_fail}}
+\label{sec:d-fail}
+
+When the accumulated damage in a cell exceeds
+\(D_{\mathrm{fail}}\), the cell is marked non-solid, the
+binary boundary mask \(\mathrm{isBound}\) is cleared, and
+the sparse Poisson operator is refactorised so that the
+following field solve sees the updated geometry. Physically
+this represents the moment at which enough material has
+been sputtered away from that cell that it no longer
+contributes to the electrostatic boundary.
+
+The dimensionless \(D_{\mathrm{fail}}\) can be mapped to a
+physical wall-volume threshold as follows. A single ion
+removes \(Y(E)\) atoms, each occupying an atomic volume
+\begin{equation}
+    V_{\mathrm{atom}} \;=\;
+    \frac{M_{\mathrm{target}}}{\rho_{\mathrm{target}}\,N_{A}},
+\end{equation}
+where \(M_{\mathrm{target}}\) is the molar mass and
+\(\rho_{\mathrm{target}}\) the density of the grid
+material (e.g.\ \(V_{\mathrm{atom}}\approx 1.55\times10^{-29}\,
+\si{\meter\cubed}\) for molybdenum). A macroparticle impact
+therefore sputters a real volume
+\begin{equation}
+    \Delta V_{\mathrm{hit}} \;=\;
+    Y(E)\,w\,V_{\mathrm{atom}}\,\kappa_{\mathrm{acc}},
+\end{equation}
+with \(w\) the macroparticle weight defined in
+Sec.~\ref{sec:injection-weight}. A cell fails when its
+accumulated \(\Delta V\) equals the physical material
+volume present at that face,
+\begin{equation}
+    V_{\mathrm{cell}} \;=\;
+    \Delta x\,\Delta y\,t_{\mathrm{wall}},
+\end{equation}
+where \(t_{\mathrm{wall}}\) is the local wall thickness
+(for the accelerator grid, typically \(t_{a}\) from the
+geometry inputs). The physically motivated threshold is
+therefore
+\begin{equation}
+    D_{\mathrm{fail}} \;=\;
+    \frac{V_{\mathrm{cell}}}{w\,V_{\mathrm{atom}}}
+    \;=\;
+    \frac{\Delta x\,\Delta y\,t_{\mathrm{wall}}}
+         {w\,V_{\mathrm{atom}}},
+    \label{eq:d-fail-physical}
+\end{equation}
+which is the number of sputter events (weighted by yield)
+required to hollow out one cell of grid material.
+Eq.~\eqref{eq:d-fail-physical} converts an otherwise
+arbitrary GUI knob into a quantity that depends only on
+mesh resolution, macroparticle weight, and target material
+properties.
 
 % =====================================================
 \section{Thermal Model}
