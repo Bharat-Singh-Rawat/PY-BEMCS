@@ -5,22 +5,7 @@ section to add or modify any new features to the screen.
 import os
 import sys
 
-# -----------------------------------------------------------------------------
-# Qt library-path self-heal
-# -----------------------------------------------------------------------------
-# When a user has an environment that pushes /usr/lib/x86_64-linux-gnu into
-# LD_LIBRARY_PATH (OpenFOAM's bashrc does this, as does ParaView and some HPC
-# module systems), the dynamic linker will pick up the system's libQt5*.so
-# instead of the PyQt5 wheel's bundled copies. The two are ABI-incompatible
-# and the xcb platform plugin then fails with
-#   undefined symbol: ... QPlatformVulkanInstance::presentAboutToBeQueued ...
-# leading to "Could not load the Qt platform plugin 'xcb'".
-#
-# The fix is to prepend the PyQt5 wheel's own Qt5/lib directory to
-# LD_LIBRARY_PATH so its matching libQt5XcbQpa.so.5 wins the search, then
-# re-exec ourselves so the new env is used from the start. We only re-exec
-# once; a sentinel variable prevents infinite recursion.
-# -----------------------------------------------------------------------------
+
 def _ensure_qt_lib_path():
     if os.environ.get("PYBEMCS_QT_PATCHED") == "1":
         return
@@ -41,7 +26,7 @@ def _ensure_qt_lib_path():
 
 _ensure_qt_lib_path()
 
-# Qt platform fall-back chain for Ubuntu 24.04+ / Wayland / headless CI.
+# Qt platform fall-back chain for Ubuntu 24.04+ / Wayland.
 if not os.environ.get("QT_QPA_PLATFORM"):
     os.environ["QT_QPA_PLATFORM"] = "xcb;wayland;wayland-egl"
 
