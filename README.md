@@ -153,6 +153,14 @@ pip install numpy scipy matplotlib PyQt5 Pillow taichi
 python Python/main.py
 ```
 
+> **Qt + OpenFOAM users:** If your shell sources OpenFOAM (or any toolchain
+> that injects `/usr/lib/x86_64-linux-gnu` into `LD_LIBRARY_PATH`), the system
+> Qt libraries can shadow PyQt5's bundled copies and cause
+> `Could not load the Qt platform plugin "xcb"`. `main.py` now self-heals by
+> prepending the PyQt5 wheel's own `Qt5/lib` directory to `LD_LIBRARY_PATH`
+> and re-exec-ing once; a shell-level equivalent is also provided as
+> `Python/run.sh`.
+
 4. Or run headless from a configuration file:
 
 ```bash

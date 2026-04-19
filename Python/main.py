@@ -2,8 +2,52 @@
 This code handles the primary for the GUI/UI design. One can use this
 section to add or modify any new features to the screen.
 """
+import os
 import sys
+
+# -----------------------------------------------------------------------------
+# Qt library-path self-heal
+# -----------------------------------------------------------------------------
+# When a user has an environment that pushes /usr/lib/x86_64-linux-gnu into
+# LD_LIBRARY_PATH (OpenFOAM's bashrc does this, as does ParaView and some HPC
+# module systems), the dynamic linker will pick up the system's libQt5*.so
+# instead of the PyQt5 wheel's bundled copies. The two are ABI-incompatible
+# and the xcb platform plugin then fails with
+#   undefined symbol: ... QPlatformVulkanInstance::presentAboutToBeQueued ...
+# leading to "Could not load the Qt platform plugin 'xcb'".
+#
+# The fix is to prepend the PyQt5 wheel's own Qt5/lib directory to
+# LD_LIBRARY_PATH so its matching libQt5XcbQpa.so.5 wins the search, then
+# re-exec ourselves so the new env is used from the start. We only re-exec
+# once; a sentinel variable prevents infinite recursion.
+# -----------------------------------------------------------------------------
+def _ensure_qt_lib_path():
+    if os.environ.get("PYBEMCS_QT_PATCHED") == "1":
+        return
+    try:
+        import PyQt5  # noqa: F401
+        qt_lib = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "lib")
+    except Exception:
+        return
+    if not os.path.isdir(qt_lib):
+        return
+    current = os.environ.get("LD_LIBRARY_PATH", "")
+    if current.split(":")[0] == qt_lib:
+        return  # already first in the search order
+    os.environ["LD_LIBRARY_PATH"] = qt_lib + (":" + current if current else "")
+    os.environ["PYBEMCS_QT_PATCHED"] = "1"
+    # Re-exec with the new environment so the linker sees the prepended path
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+_ensure_qt_lib_path()
+
+# Qt platform fall-back chain for Ubuntu 24.04+ / Wayland / headless CI.
+if not os.environ.get("QT_QPA_PLATFORM"):
+    os.environ["QT_QPA_PLATFORM"] = "xcb;wayland;wayland-egl"
+
 import numpy as np
+import matplotlib
+matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
