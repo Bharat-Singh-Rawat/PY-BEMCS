@@ -21,11 +21,12 @@ def _ensure_qt_lib_path():
         return  # already first in the search order
     os.environ["LD_LIBRARY_PATH"] = qt_lib + (":" + current if current else "")
     os.environ["PYBEMCS_QT_PATCHED"] = "1"
+    # Re-exec with the new environment so the linker sees the prepended path
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 _ensure_qt_lib_path()
 
-# Qt platform fall-back chain for Ubuntu 24.04+ / Wayland / headless CI.
+# Qt platform fall-back chain for Ubuntu 24.04+ / Wayland.
 if not os.environ.get("QT_QPA_PLATFORM"):
     os.environ["QT_QPA_PLATFORM"] = "xcb;wayland;wayland-egl"
 
