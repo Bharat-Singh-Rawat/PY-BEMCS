@@ -147,6 +147,11 @@ charge_exchange_code  % Plume/CEX study
 pip install numpy scipy matplotlib PyQt5 Pillow taichi
 ```
 
+For windows set the environtment to use QT windows by typing
+```bash
+$env:QT_QPA_PLATFORM="windows"
+```
+
 3. Launch the GUI app:
 
 ```bash
