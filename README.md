@@ -123,6 +123,24 @@ This repository currently includes:
 - CSV export (iteration, electron backstreaming potential, divergence, grid temperatures).
 - Particle kinematics export (time, position, velocity, energy, particle type).
 - GIF recording/export via Pillow.
+
+### Hardware Acceleration
+
+- **Taichi backend (GPU-ready)**: particle push (Boris), charge-density
+  deposition, and 2D thermal conduction compile through Taichi. On
+  machines with a CUDA/Metal/Vulkan GPU the kernels run on the GPU in
+  32-bit precision; on CPU-only machines they run in 64-bit. Toggle the
+  three commented lines at the top of `Python/physics_engine.py` to
+  switch between `ti.gpu` (f32) and `ti.cpu` (f64).
+- **Poisson solver**: runs on the CPU by default (SciPy SuperLU). An
+  optional CuPy GPU path exists but is disabled by default — CuPy's
+  sparse LU has too much kernel-launch overhead for small grids (~30k
+  unknowns) and SciPy wins. Flip `_USE_GPU_POISSON = True` in
+  `Python/physics_engine.py` to experiment on larger grids.
+- **Smooth GUI under long runs**: matplotlib plots refresh every 20
+  physics steps using reusable `pcolormesh` artists, `canvas.draw_idle()`
+  for coalesced repaints, and `QApplication.processEvents()` between
+  physics steps so the Qt event loop never starves during heavy runs.
 ---
 
 ## Installation and Usage
@@ -140,14 +158,54 @@ charge_exchange_code  % Plume/CEX study
 
 ### Python Workflow (Recommended, Modular)
 
-1. Use Python 3.10+.
-2. Install dependencies:
+#### 1. Create and activate a virtual environment
+
+Python 3.10+ is required (3.12 recommended). From the repository root:
+
+```bash
+# Linux / macOS
+python3 -m venv Python/.venv
+source Python/.venv/bin/activate
+
+# Windows (PowerShell)
+py -3 -m venv Python\.venv
+Python\.venv\Scripts\Activate.ps1
+```
+
+Upgrade `pip` inside the venv before installing:
+
+```bash
+pip install --upgrade pip
+```
+
+#### 2. Install core dependencies
 
 ```bash
 pip install numpy scipy matplotlib PyQt5 Pillow taichi
 ```
 
-3. Launch the GUI app:
+Taichi auto-selects a GPU backend (CUDA / Metal / Vulkan) at startup if
+one is available. Nothing else to configure.
+
+#### 3. (Optional) Install CuPy for GPU Poisson
+
+Only needed if you plan to experiment with the CuPy-based Poisson
+solver on **very large grids**. The code runs fine without it. On
+Linux with an NVIDIA GPU and a recent driver:
+
+```bash
+pip install 'cupy-cuda12x<14' \
+  nvidia-cublas-cu12 nvidia-cusparse-cu12 nvidia-cusolver-cu12 \
+  nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12 \
+  nvidia-nvjitlink-cu12 nvidia-curand-cu12 nvidia-cufft-cu12
+```
+
+`main.py` self-heals `LD_LIBRARY_PATH` so the bundled NVIDIA wheels are
+discovered automatically — no need to set it manually. To actually turn
+on the GPU Poisson solver, edit `Python/physics_engine.py` and set
+`_USE_GPU_POISSON = True` (it is `False` by default).
+
+#### 4. Launch the GUI app
 
 ```bash
 python Python/main.py
@@ -157,11 +215,11 @@ python Python/main.py
 > that injects `/usr/lib/x86_64-linux-gnu` into `LD_LIBRARY_PATH`), the system
 > Qt libraries can shadow PyQt5's bundled copies and cause
 > `Could not load the Qt platform plugin "xcb"`. `main.py` now self-heals by
-> prepending the PyQt5 wheel's own `Qt5/lib` directory to `LD_LIBRARY_PATH`
-> and re-exec-ing once; a shell-level equivalent is also provided as
-> `Python/run.sh`.
+> prepending the PyQt5 wheel's own `Qt5/lib` directory (and any bundled
+> NVIDIA CUDA wheel `lib/` folders) to `LD_LIBRARY_PATH` and re-exec-ing
+> once; a shell-level equivalent is also provided as `Python/run.sh`.
 
-4. Or run headless from a configuration file:
+#### 5. Or run headless from a configuration file
 
 ```bash
 python Python/run_simulation_from_config.py
