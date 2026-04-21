@@ -13,27 +13,33 @@ import taichi as ti
 # -> IMPORTANT: If using this, all kernel type hints must be `ti.f32`
 #
 # OPTION 2: High Precision / CPU Fallback (Use if f64 is strictly required)
-# ti.init(arch=ti.cpu, default_fp=ti.f64)
-# -> IMPORTANT: If using this, all kernel type hints must be changed to `ti.f64`
+# ti.init(arch=ti.cpu, default_fp=_TI_FP)
+# -> IMPORTANT: If using this, all kernel type hints must be changed to `_TI_FP`
 # =============================================================================
 
-ti.init(arch=ti.cpu, default_fp=ti.f64)
+# --- Precision switch: flip these 3 lines to go back to CPU + f64 ---
+# ti.init(arch=ti.cpu, default_fp=_TI_FP)
+# _TI_FP = _TI_FP
+# _NP_FP = np.float64
+ti.init(arch=ti.gpu, default_fp=ti.f32)
+_TI_FP = ti.f32
+_NP_FP = np.float32
 
 # =============================================================================
-# TAICHI KERNELS (Compiled for CPU using 64-bit floats)
+# TAICHI KERNELS (Compiled for GPU using 32-bit floats)
 # =============================================================================
 
 @ti.kernel
 def accumulate_rho_taichi(
-    x: ti.types.ndarray(dtype=ti.f64),
-    y: ti.types.ndarray(dtype=ti.f64),
-    rho: ti.types.ndarray(dtype=ti.f64),
+    x: ti.types.ndarray(dtype=_TI_FP),
+    y: ti.types.ndarray(dtype=_TI_FP),
+    rho: ti.types.ndarray(dtype=_TI_FP),
     num_p: ti.i32,
-    dx: ti.f64,
-    dy: ti.f64,
+    dx: _TI_FP,
+    dy: _TI_FP,
     nx: ti.i32,
     ny: ti.i32,
-    charge_density: ti.f64
+    charge_density: _TI_FP
 ):
     """Parallel density accumulation replacing np.add.at"""
     for i in range(num_p):
@@ -49,23 +55,23 @@ def accumulate_rho_taichi(
 
 @ti.kernel
 def push_particles_boris_taichi(
-    x: ti.types.ndarray(dtype=ti.f64),
-    y: ti.types.ndarray(dtype=ti.f64),
-    vx: ti.types.ndarray(dtype=ti.f64),
-    vy: ti.types.ndarray(dtype=ti.f64),
-    vz: ti.types.ndarray(dtype=ti.f64), # NEW: 3rd Velocity Component
-    Ex: ti.types.ndarray(dtype=ti.f64),
-    Ey: ti.types.ndarray(dtype=ti.f64),
-    Bx: ti.types.ndarray(dtype=ti.f64), # NEW: Magnetic Field grids
-    By: ti.types.ndarray(dtype=ti.f64),
-    Bz: ti.types.ndarray(dtype=ti.f64),
+    x: ti.types.ndarray(dtype=_TI_FP),
+    y: ti.types.ndarray(dtype=_TI_FP),
+    vx: ti.types.ndarray(dtype=_TI_FP),
+    vy: ti.types.ndarray(dtype=_TI_FP),
+    vz: ti.types.ndarray(dtype=_TI_FP), # NEW: 3rd Velocity Component
+    Ex: ti.types.ndarray(dtype=_TI_FP),
+    Ey: ti.types.ndarray(dtype=_TI_FP),
+    Bx: ti.types.ndarray(dtype=_TI_FP), # NEW: Magnetic Field grids
+    By: ti.types.ndarray(dtype=_TI_FP),
+    Bz: ti.types.ndarray(dtype=_TI_FP),
     num_p: ti.i32,
-    dx: ti.f64,
-    dy: ti.f64,
+    dx: _TI_FP,
+    dy: _TI_FP,
     nx: ti.i32,
     ny: ti.i32,
-    dt: ti.f64,
-    q_m: ti.f64
+    dt: _TI_FP,
+    q_m: _TI_FP
 ):
     """Parallel bilinear interpolation with 2D3V Boris Algorithm"""
     for i in range(num_p):
@@ -81,8 +87,8 @@ def push_particles_boris_taichi(
         ix0 = ti.max(0, ti.min(ix0, nx - 2))
         iy0 = ti.max(0, ti.min(iy0, ny - 2))
 
-        fx = idx_x - ti.cast(ix0, ti.f64)
-        fy = idx_y - ti.cast(iy0, ti.f64)
+        fx = idx_x - ti.cast(ix0, _TI_FP)
+        fy = idx_y - ti.cast(iy0, _TI_FP)
 
         # Interpolate Electric Field (Assuming Ez = 0 for 2D electrostatics)
         Ex_p = Ex[iy0, ix0] * (1.0 - fx) * (1.0 - fy) + Ex[iy0, ix0 + 1] * fx * (1.0 - fy) + \
@@ -140,13 +146,13 @@ def push_particles_boris_taichi(
 
 @ti.kernel
 def thermal_conduction_taichi(
-    T: ti.types.ndarray(dtype=ti.f64),
-    T_new: ti.types.ndarray(dtype=ti.f64),
+    T: ti.types.ndarray(dtype=_TI_FP),
+    T_new: ti.types.ndarray(dtype=_TI_FP),
     mask: ti.types.ndarray(dtype=ti.i32),
     nx: ti.i32,
     ny: ti.i32,
-    Fo_x: ti.f64,
-    Fo_y: ti.f64
+    Fo_x: _TI_FP,
+    Fo_y: _TI_FP
 ):
     """Parallel 2D Finite Difference Thermal Conduction"""
     for iy, ix in ti.ndrange(ny, nx):
@@ -246,10 +252,10 @@ class DigitalTwinSimulator:
         self.X, self.Y = np.meshgrid(self.x_pts, self.y_pts)
         
         self.iteration = 0
-        self.T_map = np.full((self.ny, self.nx), 300.0, dtype=np.float64)
-        self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=np.float64) 
-        
-        # Sparse Matrix 
+        self.T_map = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
+        self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
+
+        # Sparse Matrix
         self.laplacian_lu = None
         self.is_interior_mask = None
         self.is_bound_mask = None
@@ -258,36 +264,37 @@ class DigitalTwinSimulator:
 
     def reset_arrays(self):
         # PRE-ALLOCATED PARTICLE BUFFERS
-        self.max_p = 50000  
-        self.max_e = 50000  
+        self.max_p = 50000
+        self.max_e = 50000
 
-        self.p_x = np.zeros(self.max_p, dtype=np.float64)
-        self.p_y = np.zeros(self.max_p, dtype=np.float64)
-        self.p_vx = np.zeros(self.max_p, dtype=np.float64)
-        self.p_vy = np.zeros(self.max_p, dtype=np.float64)
-        self.p_vz = np.zeros(self.max_p, dtype=np.float64) # Added vz
+        self.p_x = np.zeros(self.max_p, dtype=_NP_FP)
+        self.p_y = np.zeros(self.max_p, dtype=_NP_FP)
+        self.p_vx = np.zeros(self.max_p, dtype=_NP_FP)
+        self.p_vy = np.zeros(self.max_p, dtype=_NP_FP)
+        self.p_vz = np.zeros(self.max_p, dtype=_NP_FP) # Added vz
         self.p_isCEX = np.zeros(self.max_p, dtype=bool)
         self.num_p = 0
 
-        self.e_x = np.zeros(self.max_e, dtype=np.float64)
-        self.e_y = np.zeros(self.max_e, dtype=np.float64)
-        self.e_vx = np.zeros(self.max_e, dtype=np.float64)
-        self.e_vy = np.zeros(self.max_e, dtype=np.float64)
-        self.e_vz = np.zeros(self.max_e, dtype=np.float64) # Added vz
+        self.e_x = np.zeros(self.max_e, dtype=_NP_FP)
+        self.e_y = np.zeros(self.max_e, dtype=_NP_FP)
+        self.e_vx = np.zeros(self.max_e, dtype=_NP_FP)
+        self.e_vy = np.zeros(self.max_e, dtype=_NP_FP)
+        self.e_vz = np.zeros(self.max_e, dtype=_NP_FP) # Added vz
         self.num_e = 0
-        
+
+        # V stays f64 — Poisson LU solve is on CPU/SciPy, benefits from f64.
         self.V = np.zeros((self.ny, self.nx), dtype=np.float64)
-        self.rho = np.zeros((self.ny, self.nx), dtype=np.float64) 
+        self.rho = np.zeros((self.ny, self.nx), dtype=_NP_FP)
         self.isBound = np.zeros((self.ny, self.nx), dtype=bool)
         self.V_fixed = np.zeros((self.ny, self.nx), dtype=np.float64)
         self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float64)
-        self.Ex = np.zeros((self.ny, self.nx), dtype=np.float64)
-        self.Ey = np.zeros((self.ny, self.nx), dtype=np.float64)
-        
+        self.Ex = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+        self.Ey = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+
         # Static Magnetic Field Grids (Initialize to Zero)
-        self.Bx = np.zeros((self.ny, self.nx), dtype=np.float64)
-        self.By = np.zeros((self.ny, self.nx), dtype=np.float64)
-        self.Bz = np.zeros((self.ny, self.nx), dtype=np.float64)
+        self.Bx = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+        self.By = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+        self.Bz = np.zeros((self.ny, self.nx), dtype=_NP_FP)
 
     def _recompute_cell_constants(self):
         """Recompute cell thermal mass and area from current material + mesh."""
@@ -436,8 +443,8 @@ class DigitalTwinSimulator:
         self.y_pts = np.linspace(0, self.Ly, self.ny)
         self.X, self.Y = np.meshgrid(self.x_pts, self.y_pts)
         
-        self.T_map = np.full((self.ny, self.nx), 300.0, dtype=np.float64)
-        self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=np.float64)
+        self.T_map = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
+        self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
 
         # Reset particle and field arrays to matching shape
         self.reset_arrays()
@@ -532,8 +539,8 @@ class DigitalTwinSimulator:
             self.V = ((1 - omega) * self.V + omega * V_new).astype(np.float64)
 
         self.Ey, self.Ex = np.gradient(-self.V, self.dy * 1e-3, self.dx * 1e-3)
-        self.Ey = self.Ey.astype(np.float64)
-        self.Ex = self.Ex.astype(np.float64)
+        self.Ey = self.Ey.astype(_NP_FP)
+        self.Ex = self.Ex.astype(_NP_FP)
 
     def step(self, params):
         if not np.any(self.Ex): return False, np.nan, np.nan, self.T_grids
@@ -708,8 +715,8 @@ class DigitalTwinSimulator:
             
             self.T_map[self.isBound] -= dT_cool
 
-            # Force cast back to 32-bit before sending to Taichi
-            self.T_map = self.T_map.astype(np.float64)
+            # Force cast back to kernel float type before sending to Taichi
+            self.T_map = self.T_map.astype(_NP_FP)
             
             # --- THERMAL CONDUCTION (TAICHI) ---
             alpha_diff = self.mat_k / (self.mat_rho * self.mat_cp)
