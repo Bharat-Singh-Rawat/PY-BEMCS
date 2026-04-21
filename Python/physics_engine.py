@@ -306,6 +306,9 @@ class DigitalTwinSimulator:
         self.isBound = np.zeros((self.ny, self.nx), dtype=bool)
         self.V_fixed = np.zeros((self.ny, self.nx), dtype=np.float64)
         self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float64)
+        # Cumulative erosion depth (mm) — each broken cell adds dy; survives remesh
+        # except on full domain rebuild. Used for the groove-profile diagnostic.
+        self.eroded_depth = np.zeros((self.ny, self.nx), dtype=np.float64)
         self.Ex = np.zeros((self.ny, self.nx), dtype=_NP_FP)
         self.Ey = np.zeros((self.ny, self.nx), dtype=_NP_FP)
 
@@ -881,9 +884,10 @@ class DigitalTwinSimulator:
 
             broken_cells = (self.damage_map > params.get('Thresh', 1e5)) & self.isBound
             if np.any(broken_cells):
+                self.eroded_depth[broken_cells] += self.dy
                 self.isBound[broken_cells] = False
                 self.damage_map[broken_cells] = 0
-                self.build_sparse_matrix() 
+                self.build_sparse_matrix()
                 remeshed = True
 
         # --- PURGING DEAD PARTICLES---
@@ -1011,6 +1015,55 @@ class DigitalTwinSimulator:
         #             p_cex[c_idx] = True
 
         return remeshed, min_pot, current_div, self.T_grids
+
+    def get_groove_profile(self, grid_idx, thresh=None, accumulate_subcell=True, face='upstream'):
+        """Radial erosion-depth profile for the chosen grid.
+
+        `face` selects which surface of the grid is sampled at each y:
+            'upstream'   — first (leftmost) grid cell at that radius (plasma-facing)
+            'downstream' — last  (rightmost) grid cell at that radius (exit-facing,
+                           where CEX backstreaming carves the classic pits-and-grooves)
+            'any'        — deepest cell anywhere in the grid's axial footprint
+                           (envelope of upstream + barrel + downstream)
+
+        Depth combines (a) full-cell loss recorded in eroded_depth and
+        (b) sub-cell partial damage (damage_map / thresh), so the profile
+        grows smoothly instead of stepping only on cell breaks.
+
+        Returns (y_mm, depth_um). Empty arrays if the grid is not built yet.
+        """
+        if grid_idx < 0 or grid_idx >= len(self.mask_grids):
+            return np.array([]), np.array([])
+
+        mask = self.mask_grids[grid_idx]
+        if not np.any(mask):
+            return np.array([]), np.array([])
+
+        depth = self.eroded_depth
+        if accumulate_subcell and thresh and thresh > 0:
+            depth = depth + (self.damage_map / thresh) * self.dy
+
+        y_mm = np.arange(self.ny) * self.dy
+        per_y = np.zeros(self.ny, dtype=np.float64)
+        has_any = mask.any(axis=1)
+
+        if face == 'any':
+            cols = np.any(mask, axis=0)
+            if not np.any(cols):
+                return np.array([]), np.array([])
+            per_y[has_any] = depth[has_any][:, cols].max(axis=1)
+        elif face == 'upstream':
+            # np.argmax returns first True index along x for each y
+            first_idx = np.argmax(mask, axis=1)
+            per_y[has_any] = depth[np.where(has_any)[0], first_idx[has_any]]
+        elif face == 'downstream':
+            # Flip along x, argmax on flipped, then un-flip the index
+            last_idx = self.nx - 1 - np.argmax(mask[:, ::-1], axis=1)
+            per_y[has_any] = depth[np.where(has_any)[0], last_idx[has_any]]
+        else:
+            raise ValueError(f"face must be 'upstream', 'downstream', or 'any' (got {face!r})")
+
+        return y_mm, per_y * 1000.0
 
     def get_particle_kinematics(self):
         t_current = self.iteration * self.dt
