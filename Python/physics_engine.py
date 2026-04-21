@@ -3,6 +3,24 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import factorized
 import taichi as ti
 
+# --- Optional GPU Poisson via CuPy (falls back silently if unavailable) ---
+try:
+    import cupy as cp
+    import cupyx.scipy.sparse as cp_sp
+    from cupyx.scipy.sparse.linalg import splu as cp_splu
+    _GPU_POISSON_AVAILABLE = True
+except ImportError:
+    cp = None
+    cp_sp = None
+    cp_splu = None
+    _GPU_POISSON_AVAILABLE = False
+
+# Disabled by default: CuPy's sparse LU + per-iteration kernel launches are
+# slower than SciPy's SuperLU for grids this small (~30k unknowns). Flip to
+# True to experiment on larger grids where the GPU solver may actually win.
+_USE_GPU_POISSON = False
+_GPU_POISSON = _GPU_POISSON_AVAILABLE and _USE_GPU_POISSON
+
 # =============================================================================
 # ARCHITECTURE & PRECISION SWITCHING GUIDE
 # =============================================================================
@@ -428,6 +446,26 @@ class DigitalTwinSimulator:
         A = sp.coo_matrix((data, (row, col)), shape=(N, N)).tocsc()
         self.laplacian_lu = factorized(A)
 
+        # --- GPU LU factorization (mirrors the CPU one for fast re-solves) ---
+        self.laplacian_lu_gpu = None
+        self.is_bound_mask_gpu = None
+        self.is_interior_mask_gpu = None
+        if _GPU_POISSON:
+            try:
+                A_csc = A.astype(np.float64)
+                A_gpu = cp_sp.csc_matrix(
+                    (cp.asarray(A_csc.data),
+                     cp.asarray(A_csc.indices),
+                     cp.asarray(A_csc.indptr)),
+                    shape=A_csc.shape,
+                )
+                self.laplacian_lu_gpu = cp_splu(A_gpu)
+                self.is_bound_mask_gpu = cp.asarray(self.is_bound_mask)
+                self.is_interior_mask_gpu = cp.asarray(self.is_interior_mask)
+            except Exception as exc:
+                print(f"[Poisson] GPU factorization failed, using CPU path: {exc}")
+                self.laplacian_lu_gpu = None
+
     def build_domain(self, params):
         # Apply GUI Advanced Parameters
         self.Lx = params.get('Lx', self.Lx)
@@ -505,25 +543,31 @@ class DigitalTwinSimulator:
 
     def recalc_poisson(self, iterations=5, params=None):
         if self.laplacian_lu is None: return
-        
-        dx_m2 = (self.dx * 1e-3)**2 
-        coeff = dx_m2 / self.eps0
-        
-        grids = params.get('grids', [{'V': 1000}]) if params else [{'V': 1000}]
-        
-        # Pull plasma offset from advanced parameters (default to 20 if missing)
-        v_offset = params.get('V_plasma_offset', 20.0) if params else 20.0
-        V_plasma = grids[0]['V'] + v_offset 
-        
-        Te_up = params.get('Te_up', 3.0) 
-        n0 = params.get('n0_plasma', 1e17) 
-        
-        omega = 0.2 
 
+        dx_m2 = (self.dx * 1e-3)**2
+        coeff = dx_m2 / self.eps0
+
+        grids = params.get('grids', [{'V': 1000}]) if params else [{'V': 1000}]
+        v_offset = params.get('V_plasma_offset', 20.0) if params else 20.0
+        V_plasma = grids[0]['V'] + v_offset
+        Te_up = params.get('Te_up', 3.0)
+        n0 = params.get('n0_plasma', 1e17)
+        omega = 0.2
+
+        if _GPU_POISSON and self.laplacian_lu_gpu is not None:
+            self._recalc_poisson_gpu(iterations, coeff, V_plasma, Te_up, n0, omega)
+        else:
+            self._recalc_poisson_cpu(iterations, coeff, V_plasma, Te_up, n0, omega)
+
+        self.Ey, self.Ex = np.gradient(-self.V, self.dy * 1e-3, self.dx * 1e-3)
+        self.Ey = self.Ey.astype(_NP_FP)
+        self.Ex = self.Ex.astype(_NP_FP)
+
+    def _recalc_poisson_cpu(self, iterations, coeff, V_plasma, Te_up, n0, omega):
         b = np.zeros(self.nx * self.ny, dtype=np.float64)
         V_fixed_flat = self.V_fixed.flatten()
 
-        #Fluid model for plasma sheath with boltzman electorn distribution
+        # Fluid model for plasma sheath with Boltzmann electron distribution
         for _ in range(iterations):
             rho_e = -self.q * n0 * np.exp((np.minimum(self.V, V_plasma) - V_plasma) / Te_up)
             rho_total = self.rho + rho_e
@@ -535,12 +579,30 @@ class DigitalTwinSimulator:
 
             V_new_flat = self.laplacian_lu(b)
             V_new = V_new_flat.reshape((self.ny, self.nx))
-            
+
             self.V = ((1 - omega) * self.V + omega * V_new).astype(np.float64)
 
-        self.Ey, self.Ex = np.gradient(-self.V, self.dy * 1e-3, self.dx * 1e-3)
-        self.Ey = self.Ey.astype(_NP_FP)
-        self.Ex = self.Ex.astype(_NP_FP)
+    def _recalc_poisson_gpu(self, iterations, coeff, V_plasma, Te_up, n0, omega):
+        V_gpu = cp.asarray(self.V, dtype=cp.float64)
+        rho_gpu = cp.asarray(self.rho).astype(cp.float64)
+        V_fixed_flat_gpu = cp.asarray(self.V_fixed.ravel(), dtype=cp.float64)
+        b_gpu = cp.zeros(self.nx * self.ny, dtype=cp.float64)
+        q = self.q
+
+        for _ in range(iterations):
+            rho_e_gpu = -q * n0 * cp.exp((cp.minimum(V_gpu, V_plasma) - V_plasma) / Te_up)
+            rho_flat_gpu = (rho_gpu + rho_e_gpu).ravel()
+
+            b_gpu[:] = 0.0
+            b_gpu[self.is_bound_mask_gpu] = V_fixed_flat_gpu[self.is_bound_mask_gpu]
+            b_gpu[self.is_interior_mask_gpu] = -coeff * rho_flat_gpu[self.is_interior_mask_gpu]
+
+            V_new_flat = self.laplacian_lu_gpu.solve(b_gpu)
+            V_new_gpu = V_new_flat.reshape((self.ny, self.nx))
+
+            V_gpu = (1.0 - omega) * V_gpu + omega * V_new_gpu
+
+        self.V = cp.asnumpy(V_gpu)
 
     def step(self, params):
         if not np.any(self.Ex): return False, np.nan, np.nan, self.T_grids
