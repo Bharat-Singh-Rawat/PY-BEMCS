@@ -74,7 +74,18 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt5.QtCore import QTimer, Qt
 from scipy.interpolate import UnivariateSpline
 import csv
+import time
 from physics_engine import DigitalTwinSimulator
+
+
+def _safe_start_dir():
+    """Preferred starting directory for file dialogs. The user's home can
+    contain slow FUSE/snap mounts that freeze Qt's non-native file dialog
+    during stat/readdir; cwd (the project folder) is much faster."""
+    try:
+        return os.getcwd()
+    except Exception:
+        return os.path.expanduser("~")
 
 # --- BEAM SPECIES DIALOG ---
 class BeamSpeciesDialog(QDialog):
@@ -747,10 +758,10 @@ class DigitalTwinApp(QMainWindow):
         lay = QVBoxLayout()
         
         row1, spin_v = self.create_input('DC Voltage (V):', v_def, -5000, 15000, 100, 0)
-        row2, spin_t = self.create_input('Thickness (mm):', t_def, 0.1, 10.0, 0.1)
-        row3, spin_gap = self.create_input('Gap to Next (mm):', gap_def, 0.1, 10.0, 0.1)
+        row2, spin_t = self.create_input('Thickness (mm):', t_def, 0.1, 10.0, 0.01)
+        row3, spin_gap = self.create_input('Gap to Next (mm):', gap_def, 0.1, 10.0, 0.01)
         row4, spin_r = self.create_input('Hole Radius (mm):', r_def, 0.1, 10.0, 0.1)
-        row5, spin_cham = self.create_input('Chamfer (°):', cham_def, 0, 45, 1)
+        row5, spin_cham = self.create_input('Chamfer (°):', cham_def, 0, 45, 0.1)
         
         lay.addLayout(row1); lay.addLayout(row2); lay.addLayout(row3)
         lay.addLayout(row4); lay.addLayout(row5)
@@ -805,10 +816,11 @@ class DigitalTwinApp(QMainWindow):
         
         self.grids_layout.addLayout(btn_layout)
         control_layout.addLayout(self.grids_layout)
-        
-        # Initialize default 2 grids
-        self.add_grid_ui(1650, 1.0, 1.0, 1.0, 0)
-        self.add_grid_ui(-350, 1.0, 1.0, 0.6, 0)
+
+        #(self, v_def, t_def, gap_def, r_def, cham_def):
+        # Initialize default 2 grids ,Values from NSTAR paper https://electricrocket.org/IEPC/85_2.pdf
+        self.add_grid_ui(1074, 0.38, 0.58, 0.955, 0)
+        self.add_grid_ui(-180, 0.51, 0.0, 0.57, 0)
 
         control_layout.addSpacing(15)
         
@@ -844,7 +856,7 @@ class DigitalTwinApp(QMainWindow):
         control_layout.addLayout(_)
         _, self.inputs['n0'] = self.create_input('Neutral Dens (m-3):', 1e20, 1e18, 1e22, 1e19, 0)
         control_layout.addLayout(_)
-        _, self.inputs['Accel'] = self.create_input('Accel. Factor (X):', 1, 10, 1e16, 1e12, 0)
+        _, self.inputs['Accel'] = self.create_input('Accel. Factor (X):', 0.1, 0.1, 1e16, 1e12, 2)
         control_layout.addLayout(_)
         _, self.inputs['Thresh'] = self.create_input('Cell Fail Thresh:', 10000.0, 0.1, 100000.0, 0.1)
         control_layout.addLayout(_)
@@ -904,19 +916,26 @@ class DigitalTwinApp(QMainWindow):
         self.canvas = FigureCanvas(self.fig)
         main_layout.addWidget(self.canvas)
 
-        grid = plt.GridSpec(2, 3, height_ratios=[1.2, 1])
+        grid = plt.GridSpec(3, 3, height_ratios=[1.2, 1, 0.9])
         self.ax_live = self.fig.add_subplot(grid[0, 0:2]); self.ax_live.set_title('Beam trajectory')
         self.ax_temp = self.fig.add_subplot(grid[0, 2]); self.ax_temp.set_title('Grid Temp Map (°C)')
         self.ax_dmg = self.fig.add_subplot(grid[1, 0]); self.ax_dmg.set_title('Damage Map')
         self.ax_ebs = self.fig.add_subplot(grid[1, 1]); self.ax_ebs.set_title('Centerline Min Potential (V)')
         self.ax_div = self.fig.add_subplot(grid[1, 2]); self.ax_div.set_title('Beam Divergence')
-        
+        self.ax_groove = self.fig.add_subplot(grid[2, :])
+        self.ax_groove.set_title('Accel Grid Erosion Profile')
+        self.ax_groove.set_xlabel('Radial Position (mm)')
+        self.ax_groove.set_ylabel('Erosion Depth (µm)')
+        self.ax_groove.grid(True, alpha=0.3)
+        self.ax_groove.invert_yaxis()  # depth grows downward, like profilometry plots
+
         self.line_ebs, = self.ax_ebs.plot([], [], 'm-', lw=2)
         self.line_div, = self.ax_div.plot([], [], 'b-', lw=2)
-        
+        self.line_groove, = self.ax_groove.plot([], [], 'r-', lw=1.5)
+
         self.scat_prim = None
         self.scat_cex = None
-        self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5) 
+        self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.5)
         self.fig.tight_layout()
 
     def get_params(self):
@@ -1018,7 +1037,7 @@ class DigitalTwinApp(QMainWindow):
             self.lbl_status.setText('Domain Remeshed (Thermal or Erosion)!')
             self.draw_static_domain()
 
-        if self.sim.iteration % 20 == 0:
+        if self.sim.iteration % 5 == 0:
             prim_mask = ~self.sim.p_isCEX
             cex_mask = self.sim.p_isCEX
             
@@ -1059,6 +1078,27 @@ class DigitalTwinApp(QMainWindow):
             self.ax_ebs.set_ylim(min(-30, min(self.ebs_history)), max(10, max(self.ebs_history)))
             self.ax_div.set_xlim(max(0, self.sim.iteration - 400), max(100, self.sim.iteration))
             self.ax_div.set_ylim(0, 45)
+
+            # --- Accel Grid Erosion Profile ---
+            # Default: second grid (index 1) = accelerator. Falls back to the
+            # first grid if only one exists. Combines full-cell breakage depth
+            # with the sub-cell fractional damage for smooth updates.
+            groove_idx = 1 if len(self.sim.mask_grids) > 1 else 0
+            thresh_val = self.inputs['Thresh'].value() if 'Thresh' in self.inputs else None
+            # Face to sample: 'upstream' (plasma-facing / front), 'downstream'
+            # (exit face, where CEX backstreaming carves pits-and-grooves), or
+            # 'any' (envelope across the full axial extent).
+            groove_face = 'downstream'
+            y_mm, depth_um = self.sim.get_groove_profile(
+                groove_idx, thresh=thresh_val, face=groove_face)
+            if y_mm.size > 0:
+                self.line_groove.set_data(y_mm, depth_um)
+                self.ax_groove.set_xlim(0, float(y_mm.max()))
+                dmax = float(depth_um.max())
+                # invert_yaxis is on, so ylim is (bottom=deeper, top=surface)
+                self.ax_groove.set_ylim(max(dmax * 1.1, 1.0), 0.0)
+                self.ax_groove.set_title(
+                    f'Accel Grid Erosion Profile — {groove_face} face (Grid {groove_idx + 1})')
 
             if np.any(self.sim.isBound):
                 T_display_C = np.where(self.sim.isBound, self.sim.T_map - 273.15, np.nan)
@@ -1119,7 +1159,19 @@ class DigitalTwinApp(QMainWindow):
             QMessageBox.warning(self, "Error", "No telemetry data to export! Run the simulation first.")
             return
         
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save Telemetry", "", "CSV Files (*.csv)")
+        was_running = self.sim_isRunning
+        self.sim_isRunning = False
+        try:
+            suggested = os.path.join(
+                _safe_start_dir(),
+                time.strftime("pybemcs_telemetry_%Y%m%d_%H%M%S.csv"),
+            )
+            file_name, _ = QFileDialog.getSaveFileName(
+                self, "Save Telemetry", suggested, "CSV Files (*.csv)",
+                options=QFileDialog.DontUseNativeDialog | QFileDialog.DontResolveSymlinks,
+            )
+        finally:
+            self.sim_isRunning = was_running
         if file_name:
             try:
                 with open(file_name, mode='w', newline='') as file:
@@ -1148,7 +1200,19 @@ class DigitalTwinApp(QMainWindow):
             QMessageBox.warning(self, "Error", "No tracking data recorded! Check 'Record Kinematics' and run beam.")
             return
             
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save Particle Kinematics", "", "CSV Files (*.csv)")
+        was_running = self.sim_isRunning
+        self.sim_isRunning = False
+        try:
+            suggested = os.path.join(
+                _safe_start_dir(),
+                time.strftime("pybemcs_particles_%Y%m%d_%H%M%S.csv"),
+            )
+            file_name, _ = QFileDialog.getSaveFileName(
+                self, "Save Particle Kinematics", suggested, "CSV Files (*.csv)",
+                options=QFileDialog.DontUseNativeDialog | QFileDialog.DontResolveSymlinks,
+            )
+        finally:
+            self.sim_isRunning = was_running
         if file_name:
             try:
                 self.lbl_status.setText('Exporting huge data file. Please wait...')
@@ -1163,27 +1227,104 @@ class DigitalTwinApp(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", f"Failed to write file:\n{str(e)}")
 
+    def _qimage_to_pil(self, qimg):
+        """QImage -> PIL RGB Image. Tries a fast raw-bits path first, then
+        falls back to an in-memory PNG round-trip if PyQt5's sip.voidptr
+        reports an unknown size (known quirk on some 5.15+ builds)."""
+        from PyQt5.QtGui import QImage
+        from PIL import Image
+
+        qimg = qimg.convertToFormat(QImage.Format_RGBA8888)
+        w, h = qimg.width(), qimg.height()
+        size = qimg.sizeInBytes() if hasattr(qimg, 'sizeInBytes') else qimg.byteCount()
+
+        # Fast path: direct bits() with setsize + asstring.
+        try:
+            ptr = qimg.constBits()
+            ptr.setsize(size)
+            data = ptr.asstring(size)
+            arr = np.frombuffer(data, dtype=np.uint8)
+            if arr.size >= h * w * 4:
+                return Image.fromarray(
+                    arr[: h * w * 4].reshape(h, w, 4)[..., :3].copy(), 'RGB'
+                )
+        except Exception:
+            pass
+
+        # Bulletproof fallback: round-trip through an in-memory PNG.
+        # ~5-20× slower per frame but works on every PyQt5 build.
+        from PyQt5.QtCore import QBuffer, QIODevice
+        import io
+        buf = QBuffer()
+        buf.open(QIODevice.ReadWrite)
+        qimg.save(buf, 'PNG')
+        return Image.open(io.BytesIO(bytes(buf.data()))).convert('RGB')
+
     def save_gif(self):
         if not self.recorded_frames:
             QMessageBox.warning(self, "Error", "No frames recorded!")
             return
-        
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save Animation", "", "GIF Files (*.gif)")
-        if file_name:
+
+        # Pause the sim BEFORE opening any modal dialog, otherwise the sim
+        # timer keeps firing sim.step() during the dialog's modal loop and
+        # starves it of events — the dialog then appears to hang when the
+        # user navigates directories.
+        was_running = self.sim_isRunning
+        self.sim_isRunning = False
+
+        try:
+            # DontUseNativeDialog avoids GTK/KDE's native picker (which can
+            # hang on Wayland/XCB); DontResolveSymlinks avoids slow FUSE/snap
+            # stat() calls when the user browses ~; the default filename +
+            # starting directory mean you rarely need to navigate at all.
+            suggested = os.path.join(
+                _safe_start_dir(),
+                time.strftime("pybemcs_%Y%m%d_%H%M%S.gif"),
+            )
+            file_name, _ = QFileDialog.getSaveFileName(
+                self, "Save Animation", suggested, "GIF Files (*.gif)",
+                options=QFileDialog.DontUseNativeDialog | QFileDialog.DontResolveSymlinks,
+            )
+            if not file_name:
+                return
+
             try:
-                from PIL import Image
-                pil_images = []
-                for qimg in self.recorded_frames:
-                    qimg = qimg.convertToFormat(4) 
-                    ptr = qimg.bits(); ptr.setsize(qimg.byteCount())
-                    arr = np.array(ptr).reshape(qimg.height(), qimg.width(), 4)
-                    pil_images.append(Image.fromarray(arr[..., [2, 1, 0]], 'RGB'))
-                
-                pil_images[0].save(file_name, save_all=True, append_images=pil_images[1:], duration=50, loop=0)
-                self.recorded_frames.clear(); self.chk_record.setChecked(False)
-                QMessageBox.information(self, "Success", "GIF Saved Successfully!")
+                from PIL import Image  # noqa: F401
             except ImportError:
-                QMessageBox.warning(self, "Error", "Install Pillow (`pip install Pillow`)")
+                QMessageBox.warning(self, "Error", "Install Pillow: pip install Pillow")
+                return
+
+            total = len(self.recorded_frames)
+
+            try:
+                pil_images = []
+                for i, qimg in enumerate(self.recorded_frames):
+                    pil_images.append(self._qimage_to_pil(qimg))
+                    if i % 10 == 0 or i == total - 1:
+                        self.lbl_status.setText(f"Converting frame {i + 1}/{total}...")
+                        QApplication.processEvents()
+
+                self.lbl_status.setText(f"Writing {total}-frame GIF...")
+                QApplication.processEvents()
+                pil_images[0].save(
+                    file_name,
+                    save_all=True,
+                    append_images=pil_images[1:],
+                    duration=50,
+                    loop=0,
+                    optimize=False,
+                )
+
+                self.recorded_frames.clear()
+                self.chk_record.setChecked(False)
+                self.chk_record.setText('Record Frames (0)')
+                self.lbl_status.setText(f"GIF saved: {file_name}")
+                QMessageBox.information(self, "Success", f"GIF saved to:\n{file_name}")
+            except Exception as exc:
+                self.lbl_status.setText("GIF save failed.")
+                QMessageBox.critical(self, "Error", f"GIF save failed:\n{exc}")
+        finally:
+            self.sim_isRunning = was_running
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
