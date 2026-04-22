@@ -16,7 +16,8 @@ void ParticleManager::injectIons(ParticleArray& ions, const Grid3D& grid,
 
     double Te = params.electronTemp_eV;
     double v_bohm = std::sqrt(Q_E * Te / M_XE);
-    double rMax = params.grids[0].hole_radius_mm - 0.05;
+    // Stay one cell inside the aperture edge — scales with the grid.
+    double rMax = std::max(params.grids[0].hole_radius_mm - grid.dx, 0.0);
 
     // Injection area: circular aperture (3D)
     double rMax_m = rMax * 1e-3;
@@ -41,7 +42,9 @@ void ParticleManager::injectIons(ParticleArray& ions, const Grid3D& grid,
         double theta = 2.0 * PI * uniform_(rng_);
         double px = cx + r * std::cos(theta);
         double py = cy + r * std::sin(theta);
-        double pz = 0.1; // Near upstream boundary (Z=0)
+        // Place 2 cells in from z=0 so the particle is clearly inside the
+        // domain and upstream of the first grid regardless of scaling.
+        double pz = 2.0 * grid.dz;
 
         double pvx = normal_(rng_) * v_spread;
         double pvy = normal_(rng_) * v_spread;
@@ -58,7 +61,7 @@ void ParticleManager::injectSourceElectrons(ParticleArray& electrons,
 
     double Te = params.electronTemp_eV;
     double v_e_th = std::sqrt(2.0 * Q_E * Te / M_ELECTRON);
-    double rMax = params.grids[0].hole_radius_mm - 0.05;
+    double rMax = std::max(params.grids[0].hole_radius_mm - grid.dx, 0.0);
     double rMax_m = rMax * 1e-3;
     double injArea = PI * rMax_m * rMax_m;
 
@@ -80,7 +83,7 @@ void ParticleManager::injectSourceElectrons(ParticleArray& electrons,
         double theta = 2.0 * PI * uniform_(rng_);
         double px = cx + r * std::cos(theta);
         double py = cy + r * std::sin(theta);
-        double pz = 0.1; // Near upstream Z=0
+        double pz = 2.0 * grid.dz; // Near upstream Z=0, scales with cell size
 
         double pvx = normal_(rng_) * v_e_th;
         double pvy = normal_(rng_) * v_e_th;
