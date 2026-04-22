@@ -43,6 +43,7 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 - **Real-Time Diagnostics** — Beam divergence, saddle point potential, mean energy, grid temperatures
 - **Process Log Window** — Docked bottom panel with timestamped simulation messages
 - **Sputtering & Thermal Maps** — Dedicated dock windows for sputtering damage and thermal contour visualization
+- **Erosion Profile (Accel Grid, Downstream)** — Live 1D plot of cumulative groove depth along X and Y through the accel grid's downstream face; updates every render frame as sputtering progresses
 - **Animated GIF Export** — Record simulation frames and export as animated GIF (File > Record GIF / Save GIF)
 - **Dimensional Scaling** — 1x/10x/100x scaling for Debye length resolution
 - **Dark Theme UI** — Modern Qt6 interface with scrollable control panel
@@ -102,14 +103,45 @@ cd vcpkg
 .\vcpkg install opencascade:x64-windows
 ```
 
-### Installing Dependencies on Ubuntu/Debian
+### Installing Dependencies on Ubuntu 24.04 (Tested)
+
+> **Important — VTK on Ubuntu 24.04 is NOT usable with this project.**
+> The archive ships `libvtk9-dev` compiled against **Qt5**, but this project requires **Qt6**. Trying to configure with system VTK fails with `INTERFACE_QT_MAJOR_VERSION of Qt5::Core does not agree with ... QT_MAJOR_VERSION ... determined for PYBEMCS3D`. You must supply a Qt6-compiled VTK. Two options below.
+
+**Step 1 — Install everything except VTK via apt:**
 
 ```bash
-sudo apt install cmake g++ libeigen3-dev \
+sudo apt install -y cmake g++ libeigen3-dev \
     qt6-base-dev libqt6opengl6-dev \
-    libvtk9-dev libvtk9-qt-dev \
     libocct-modeling-algorithms-dev libocct-data-exchange-dev
 ```
+
+**Step 2 — Get a Qt6-compiled VTK. Pick one:**
+
+**Option A — Conda (recommended, fastest):**
+```bash
+# Install Miniforge if you don't have conda
+wget -q "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+bash Miniforge3-Linux-x86_64.sh -b -p $HOME/miniforge3
+$HOME/miniforge3/bin/conda init bash    # open a new shell afterwards
+
+# Env with Qt6-based VTK
+conda create -n pybemcs3d -c conda-forge -y vtk qt6-main
+```
+Every session: `conda activate pybemcs3d` before building or running.
+
+**Option B — Build VTK from source against Qt6** (no conda needed; ~30-60 min compile):
+```bash
+cd ~ && git clone --branch v9.3.1 --depth 1 https://gitlab.kitware.com/vtk/vtk.git
+cmake -S vtk -B vtk-build -DCMAKE_INSTALL_PREFIX=$HOME/vtk-install \
+      -DVTK_GROUP_ENABLE_Qt=YES -DVTK_QT_VERSION=6 \
+      -DCMAKE_BUILD_TYPE=Release
+cmake --build vtk-build -j$(nproc)
+cmake --install vtk-build
+```
+The install lands in `$HOME/vtk-install`.
+
+> **Gotcha: `paraview` conflicts with `libvtk9-dev`.** If you ever install the Ubuntu `libvtk9-dev` anyway, apt will refuse because `python3-paraview` pins a different `python3-vtk9`. Solutions: `sudo apt install --no-install-recommends libvtk9-dev libvtk9-qt-dev`, or temporarily `sudo apt remove python3-paraview paraview` and reinstall after. **But note:** `libvtk9-dev` is Qt5 on Ubuntu 24.04 and still won't build this project — it's not a shortcut.
 
 ### Installing Dependencies on macOS (Homebrew)
 
@@ -121,7 +153,30 @@ brew install cmake eigen qt@6 vtk opencascade
 
 ## Building
 
-### Full Build (all features)
+> **Common pitfall.** `cmake ..` (configure) and `cmake --build .` (build) are **two separate commands** — do not combine them with `--build` in the configure line. `cmake` will reject `-j$(nproc)` there with `Unknown argument -j12`.
+
+### Full Build on Ubuntu (Tested)
+
+**With conda (Option A from above):**
+```bash
+conda activate pybemcs3d
+cd Cpp3D && mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release \
+         -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+         -DUSE_VTK=ON -DUSE_OCCT=ON -DUSE_OPENMP=ON
+cmake --build . -j$(nproc)
+```
+
+**With VTK built from source in `$HOME/vtk-install` (Option B from above):**
+```bash
+cd Cpp3D && mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release \
+         -DVTK_DIR=$HOME/vtk-install/lib/cmake/vtk-9.3 \
+         -DUSE_VTK=ON -DUSE_OCCT=ON -DUSE_OPENMP=ON
+cmake --build . -j$(nproc)
+```
+
+### Full Build (generic, assuming VTK is discoverable)
 
 ```bash
 cd Cpp3D
@@ -168,9 +223,46 @@ cmake --build . --config Release
 ## Running
 
 ```bash
-./PYBEMCS3D          # Linux/macOS
+./PYBEMCS3D          # Linux/macOS (if VTK/Qt in default library path)
 .\Release\PYBEMCS3D  # Windows
 ```
+
+### Ubuntu: if VTK isn't installed system-wide
+
+If you built VTK into `$HOME/vtk-install` (Option B above), point the loader at its libs:
+
+```bash
+LD_LIBRARY_PATH=$HOME/vtk-install/lib ./PYBEMCS3D
+```
+
+To make this permanent, add to `~/.bashrc`:
+```bash
+export LD_LIBRARY_PATH="$HOME/vtk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+If you built with conda (Option A), activating the env is enough:
+```bash
+conda activate pybemcs3d && ./PYBEMCS3D
+```
+
+### Ubuntu: VS Code snap terminal issue
+
+If you launched the terminal from a **snap-packaged VS Code**, running the binary fails with:
+```
+symbol lookup error: /snap/core20/current/lib/x86_64-linux-gnu/libpthread.so.0:
+undefined symbol: __libc_pthread_init, version GLIBC_PRIVATE
+```
+The snap injects Ubuntu 20.04's glibc into the shell, which is binary-incompatible with a binary compiled against the system glibc. Fixes:
+
+- **Preferred:** launch the binary from a native terminal (GNOME Terminal via `Ctrl+Alt+T`, or any `.deb`-installed terminal).
+- **Workaround in the snap shell** — strip the snap env:
+  ```bash
+  env -i HOME=$HOME DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY \
+      PATH=/usr/local/bin:/usr/bin:/bin \
+      LD_LIBRARY_PATH=$HOME/vtk-install/lib \
+      ./PYBEMCS3D
+  ```
+- **Permanent fix:** replace snap VS Code with the `.deb` from [code.visualstudio.com](https://code.visualstudio.com/download).
 
 ---
 

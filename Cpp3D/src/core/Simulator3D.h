@@ -45,6 +45,22 @@ public:
     int getIonCount() const { return static_cast<int>(ions_.count); }
     int getElectronCount() const { return static_cast<int>(electrons_.count); }
 
+    // Erosion profile diagnostics: 1D line plot of cumulative groove depth
+    // at the downstream face of the acceleration grid.
+    struct ErosionProfile {
+        std::vector<double> coord_mm;  // transverse coordinate (x or y), mm
+        std::vector<double> depth_um;  // erosion depth at that coordinate, microns
+    };
+    enum class ProfileAxis { X, Y };
+
+    // Returns the index of the grid with the most negative voltage
+    // (conventionally the accel grid). Returns -1 if no grids are defined.
+    int getAccelGridIndex(const SimParams& params) const;
+
+    // Computes the groove-depth profile along the requested axis,
+    // sliced at the opposite axis centre (X -> y=Ly/2 slice, Y -> x=Lx/2 slice).
+    ErosionProfile getErosionProfile(const SimParams& params, ProfileAxis axis) const;
+
     // Thread-safe running flag
     std::atomic<bool> isRunning{false};
 
