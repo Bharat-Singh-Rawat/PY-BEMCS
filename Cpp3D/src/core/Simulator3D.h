@@ -45,21 +45,25 @@ public:
     int getIonCount() const { return static_cast<int>(ions_.count); }
     int getElectronCount() const { return static_cast<int>(electrons_.count); }
 
-    // Erosion profile diagnostics: 1D line plot of cumulative groove depth
-    // at the downstream face of the acceleration grid.
-    struct ErosionProfile {
-        std::vector<double> coord_mm;  // transverse coordinate (x or y), mm
-        std::vector<double> depth_um;  // erosion depth at that coordinate, microns
+    // Erosion map diagnostics: 2D heat-map of cumulative groove depth at the
+    // downstream face of the acceleration grid. depth_um is indexed as
+    // iy*nx + ix (so sized ny*nx). inAccel marks which columns intersected
+    // the original accel-grid mask at all, so the renderer can distinguish
+    // "accel region with zero erosion" from "outside accel region".
+    struct ErosionMap {
+        int nx = 0, ny = 0;
+        double Lx_mm = 0.0, Ly_mm = 0.0;
+        std::vector<double>  depth_um;
+        std::vector<uint8_t> inAccel;
+        double maxDepth_um = 0.0;
     };
-    enum class ProfileAxis { X, Y };
 
     // Returns the index of the grid with the most negative voltage
     // (conventionally the accel grid). Returns -1 if no grids are defined.
     int getAccelGridIndex(const SimParams& params) const;
 
-    // Computes the groove-depth profile along the requested axis,
-    // sliced at the opposite axis centre (X -> y=Ly/2 slice, Y -> x=Lx/2 slice).
-    ErosionProfile getErosionProfile(const SimParams& params, ProfileAxis axis) const;
+    // Build the 2D erosion-depth map over the full (nx × ny) transverse plane.
+    ErosionMap getErosionMap(const SimParams& params) const;
 
     // Thread-safe running flag
     std::atomic<bool> isRunning{false};

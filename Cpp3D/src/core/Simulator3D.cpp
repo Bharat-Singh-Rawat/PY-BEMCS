@@ -191,52 +191,58 @@ int Simulator3D::getAccelGridIndex(const SimParams& params) const {
     return best;
 }
 
-Simulator3D::ErosionProfile
-Simulator3D::getErosionProfile(const SimParams& params, ProfileAxis axis) const {
-    ErosionProfile prof;
+Simulator3D::ErosionMap
+Simulator3D::getErosionMap(const SimParams& params) const {
+    ErosionMap m;
 
     int gi = getAccelGridIndex(params);
-    if (gi < 0 || gi >= static_cast<int>(grid_.originalGridMasks.size())) return prof;
+    if (gi < 0 || gi >= static_cast<int>(grid_.originalGridMasks.size())) return m;
     const auto& origMask = grid_.originalGridMasks[gi];
-    if (origMask.empty()) return prof;
+    if (origMask.empty()) return m;
 
-    const int nx = grid_.nx, ny = grid_.ny, nz = grid_.nz;
-    const double dx = grid_.dx, dy = grid_.dy, dz = grid_.dz;
+    m.nx = grid_.nx;
+    m.ny = grid_.ny;
+    m.Lx_mm = grid_.Lx;
+    m.Ly_mm = grid_.Ly;
+    m.depth_um.assign(static_cast<size_t>(m.nx) * m.ny, 0.0);
+    m.inAccel.assign(static_cast<size_t>(m.nx) * m.ny, 0);
 
-    // Slice at the transverse centre of the other axis.
-    const int ix_c = nx / 2;
-    const int iy_c = ny / 2;
+    const int nz = grid_.nz;
+    const double dz = grid_.dz;
 
-    const int n_out = (axis == ProfileAxis::X) ? nx : ny;
-    prof.coord_mm.resize(n_out);
-    prof.depth_um.resize(n_out, 0.0);
+    // For every transverse column, walk down from the top of the domain
+    // until we find the downstream-most original accel-grid voxel, then
+    // keep walking inward while cells are eroded. The consecutive eroded-
+    // cell count × dz is the groove depth at that (x, y).
+    #pragma omp parallel for collapse(2)
+    for (int iy = 0; iy < m.ny; iy++) {
+        for (int ix = 0; ix < m.nx; ix++) {
+            int iz_down = -1;
+            for (int iz = nz - 1; iz >= 0; iz--) {
+                if (origMask[grid_.idx(ix, iy, iz)]) { iz_down = iz; break; }
+            }
+            if (iz_down < 0) continue;  // no accel material in this column
 
-    for (int i = 0; i < n_out; i++) {
-        int ix = (axis == ProfileAxis::X) ? i : ix_c;
-        int iy = (axis == ProfileAxis::X) ? iy_c : i;
+            size_t flat = static_cast<size_t>(iy) * m.nx + ix;
+            m.inAccel[flat] = 1;
 
-        prof.coord_mm[i] = (axis == ProfileAxis::X) ? ix * dx : iy * dy;
-
-        // Find the downstream-most original accel-grid voxel at this column.
-        int iz_down = -1;
-        for (int iz = nz - 1; iz >= 0; iz--) {
-            if (origMask[grid_.idx(ix, iy, iz)]) { iz_down = iz; break; }
+            int eroded = 0;
+            for (int iz = iz_down; iz >= 0; iz--) {
+                size_t id = grid_.idx(ix, iy, iz);
+                if (!origMask[id]) break;        // exited accel material
+                if (grid_.isBound[id]) break;    // hit surviving material
+                eroded++;
+            }
+            m.depth_um[flat] = eroded * dz * 1000.0;  // mm → μm
         }
-        if (iz_down < 0) continue;  // no accel-grid material here
-
-        // Walk inward from the downstream face, counting eroded voxels
-        // until we exit the grid region or hit surviving material.
-        int eroded_cells = 0;
-        for (int iz = iz_down; iz >= 0; iz--) {
-            size_t id = grid_.idx(ix, iy, iz);
-            if (!origMask[id]) break;          // outside original grid material
-            if (grid_.isBound[id]) break;      // intact material — stop here
-            eroded_cells++;
-        }
-        prof.depth_um[i] = eroded_cells * dz * 1000.0;  // mm → μm
     }
 
-    return prof;
+    // maxDepth (serial reduce is fine — map size is ny*nx, no hot path).
+    for (double v : m.depth_um) {
+        if (v > m.maxDepth_um) m.maxDepth_um = v;
+    }
+
+    return m;
 }
 
 } // namespace BEMCS

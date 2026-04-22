@@ -66,7 +66,7 @@ set(GUI_SOURCES
     src/gui/ControlPanel.cpp
     src/gui/MeshingDialog.cpp
     src/gui/GeometryImportDialog.cpp
-    src/gui/ErosionProfileWidget.cpp
+    src/gui/ErosionMapWidget.cpp
 )
 
 add_executable(${PROJECT_NAME}

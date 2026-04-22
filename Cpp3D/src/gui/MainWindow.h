@@ -4,7 +4,7 @@
 #include "geometry/Mesh3D.h"
 #include "gui/SimulationView3D.h"
 #include "gui/ControlPanel.h"
-#include "gui/ErosionProfileWidget.h"
+#include "gui/ErosionMapWidget.h"
 
 #include "gui/GifWriter.h"
 
@@ -77,8 +77,8 @@ private:
     QDockWidget* sputterDock_;
     QDockWidget* thermalDock_;
 
-    // Erosion profile dock (1D groove depth along X and Y)
-    ErosionProfileWidget* erosionProfile_;
+    // Erosion map dock (2D groove-depth heat-map)
+    ErosionMapWidget* erosionMap_;
     QDockWidget* erosionDock_;
 };
 

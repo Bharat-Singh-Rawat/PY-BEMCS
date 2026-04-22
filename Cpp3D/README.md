@@ -43,7 +43,7 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 - **Real-Time Diagnostics** — Beam divergence, saddle point potential, mean energy, grid temperatures
 - **Process Log Window** — Docked bottom panel with timestamped simulation messages
 - **Sputtering & Thermal Maps** — Dedicated dock windows for sputtering damage and thermal contour visualization
-- **Erosion Profile (Accel Grid, Downstream)** — Live 1D plot of cumulative groove depth along X and Y through the accel grid's downstream face; updates every render frame as sputtering progresses
+- **Erosion Map (Accel Grid, Downstream)** — Live 2D heat-map of cumulative groove depth across the full (x, y) downstream face of the accel grid with a colorbar in μm; every column contributes, so the display is statistically much smoother than a 1D slice and doesn't need ions to land on a centre-line
 - **Animated GIF Export** — Record simulation frames and export as animated GIF (File > Record GIF / Save GIF)
 - **Dimensional Scaling** — 1x/10x/100x self-similar PIC scaling: divides domain, cell size, grid optics, neutralizer positions, voltages and timestep by the factor; multiplies plasma and neutral densities by the factor squared. E-field on particles is preserved and the Debye length shrinks with the geometry.
 - **Dark Theme UI** — Modern Qt6 interface with scrollable control panel

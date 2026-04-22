@@ -148,7 +148,7 @@ void MainWindow::setupMenuBar() {
     viewMenu->addAction("Show Log Window", [this]() { logDock_->show(); });
     viewMenu->addAction("Show Sputtering Map", [this]() { sputterDock_->show(); });
     viewMenu->addAction("Show Thermal Map", [this]() { thermalDock_->show(); });
-    viewMenu->addAction("Show Erosion Profile", [this]() { erosionDock_->show(); });
+    viewMenu->addAction("Show Erosion Map", [this]() { erosionDock_->show(); });
 
     auto helpMenu = menubar->addMenu("&Help");
     helpMenu->addAction("About PYBEMCS-3D", [this]() {
@@ -215,12 +215,12 @@ void MainWindow::setupContourDocks() {
     addDockWidget(Qt::RightDockWidgetArea, thermalDock_);
     thermalDock_->setMinimumWidth(350);
 
-    // Erosion profile dock — 1D line plot of groove depth on the accel grid
-    erosionDock_ = new QDockWidget("Erosion Profile (Accel, Downstream)", this);
-    erosionProfile_ = new ErosionProfileWidget();
-    erosionDock_->setWidget(erosionProfile_);
+    // Erosion map dock — 2D heat-map of groove depth on the accel grid
+    erosionDock_ = new QDockWidget("Erosion Map (Accel, Downstream)", this);
+    erosionMap_ = new ErosionMapWidget();
+    erosionDock_->setWidget(erosionMap_);
     addDockWidget(Qt::RightDockWidgetArea, erosionDock_);
-    erosionDock_->setMinimumWidth(350);
+    erosionDock_->setMinimumWidth(360);
 
     // Stack all three contour docks
     tabifyDockWidget(sputterDock_, thermalDock_);
@@ -268,8 +268,8 @@ void MainWindow::onBuildDomain() {
     thermalView_->updateFromSimulator(simulator_, currentParams_);
     thermalView_->resetCamera();
 
-    // Reset erosion profile (no erosion has occurred yet after a fresh build)
-    erosionProfile_->clear();
+    // Reset erosion map (no erosion has occurred yet after a fresh build)
+    erosionMap_->clear();
 
     auto stats = meshGen_.getStats(simulator_.getGrid());
     QString msg = QString("Domain built: %1x%2x%3 cells (%4 total, %5 boundary)")
@@ -328,13 +328,12 @@ void MainWindow::onSimStep() {
         sputterView_->updateFromSimulator(simulator_, currentParams_);
         thermalView_->updateFromSimulator(simulator_, currentParams_);
 
-        // Refresh 1D erosion profile
-        auto profX = simulator_.getErosionProfile(currentParams_,
-                                                  Simulator3D::ProfileAxis::X);
-        auto profY = simulator_.getErosionProfile(currentParams_,
-                                                  Simulator3D::ProfileAxis::Y);
-        erosionProfile_->setData(profX.coord_mm, profX.depth_um,
-                                 profY.coord_mm, profY.depth_um);
+        // Refresh 2D erosion depth map
+        auto eMap = simulator_.getErosionMap(currentParams_);
+        erosionMap_->setData(eMap.depth_um, eMap.inAccel,
+                             eMap.nx, eMap.ny,
+                             eMap.Lx_mm, eMap.Ly_mm,
+                             eMap.maxDepth_um);
 
         // Capture GIF frame every render
         if (gifRecording_) {
