@@ -61,8 +61,12 @@ void CollisionHandler::processSecondaryEmission(
     for (size_t h = 0; h < ionHits.hitIndices.size(); h++) {
         double E_eV = ionHits.hitEnergies_eV[h];
 
-        // SEE yield model: gamma = 0.05 + 1e-4 * E_eV, capped at 1.0
-        double gamma = std::clamp(0.05 + 1e-4 * E_eV, 0.0, 1.0);
+        // Evaluate the SEE yield at the physical ion energy (each macro-ion
+        // represents a physical ion with s× higher KE under Dim. Scaling).
+        // For this linear model scaling E is identical to scaling the
+        // coefficient; we use the former to match the sputter convention.
+        double E_phys = E_eV * params.dimScaleFactor;
+        double gamma = std::clamp(0.05 + 1.0e-4 * E_phys, 0.0, 1.0);
 
         if (uniform_(rng_) < gamma) {
             // Spawn secondary electron near the impact site

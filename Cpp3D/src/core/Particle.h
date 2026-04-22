@@ -116,6 +116,13 @@ struct SimParams {
     // Z position [mm] of the first grid's upstream face (plasma-source gap)
     double firstGridZ_mm = 1.0;
 
+    // Dimensional-scaling factor (1, 10, 100 from the UI combo). Set by
+    // ControlPanel alongside the other scaled quantities. Physics models
+    // (sputtering threshold, SEE yield, CEX cross-section) use this to
+    // evaluate material parameters at the *physical* energy/velocity —
+    // otherwise the scaled-down voltages never clear real thresholds.
+    double dimScaleFactor = 1.0;
+
     // Acceleration / erosion
     double accelFactor      = 1.0;
     double cellFailThreshold = 10000.0;

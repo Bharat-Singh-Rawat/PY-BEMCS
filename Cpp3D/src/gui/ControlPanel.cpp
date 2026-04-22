@@ -396,6 +396,8 @@ SimParams ControlPanel::getParams() const {
     if (comboDimScale_->currentIndex() == 1) s = 10.0;
     else if (comboDimScale_->currentIndex() == 2) s = 100.0;
 
+    p.dimScaleFactor = s;
+
     if (s != 1.0) {
         const double invS = 1.0 / s;
         const double s2   = s * s;

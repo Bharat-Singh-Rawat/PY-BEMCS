@@ -18,7 +18,9 @@ public:
                           const ParticleManager::HitInfo& hits,
                           const SimParams& params);
 
-    // Compute sputter yield Y(E) for Xe+ on Mo (empirical fit)
+    // Compute sputter yield Y(E) for Xe+ on Mo (empirical fit).
+    // Energy must be supplied in *physical* eV — scaled simulations should
+    // multiply the scaled ion energy by dimScaleFactor before calling this.
     static double sputterYield(double energy_eV);
 
     // Get current max damage value (for visualization)

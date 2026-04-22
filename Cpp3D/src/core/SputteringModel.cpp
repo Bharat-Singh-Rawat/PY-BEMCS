@@ -7,7 +7,7 @@ namespace BEMCS {
 
 double SputteringModel::sputterYield(double energy_eV) {
     // Empirical Xe+ on Mo yield: Y = 1.05e-4 * max(E - 30, 0)^1.5
-    // Capped at 1.0
+    // Capped at 1.0. E must be the physical ion energy.
     double above_threshold = std::max(energy_eV - 30.0, 0.0);
     return std::min(1.05e-4 * std::pow(above_threshold, 1.5), 1.0);
 }
@@ -19,7 +19,11 @@ bool SputteringModel::accumulateDamage(Grid3D& grid,
 
     for (size_t h = 0; h < hits.hitIndices.size(); h++) {
         double E_eV = hits.hitEnergies_eV[h];
-        double Y = sputterYield(E_eV);
+        // Evaluate the yield at the physical ion energy. Under Dim. Scaling
+        // the simulated voltages (and thus E_eV) are divided by s, so each
+        // macro-ion represents a physical ion with s× higher kinetic energy.
+        // Using E_eV * s preserves the real per-hit yield curve.
+        double Y = sputterYield(E_eV * params.dimScaleFactor);
 
         int ix = hits.hitIx[h];
         int iy = hits.hitIy[h];
