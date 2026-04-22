@@ -45,7 +45,7 @@ A full 3D C++ extension of the PYBEMCS code for studying beam extraction and spu
 - **Sputtering & Thermal Maps** — Dedicated dock windows for sputtering damage and thermal contour visualization
 - **Erosion Profile (Accel Grid, Downstream)** — Live 1D plot of cumulative groove depth along X and Y through the accel grid's downstream face; updates every render frame as sputtering progresses
 - **Animated GIF Export** — Record simulation frames and export as animated GIF (File > Record GIF / Save GIF)
-- **Dimensional Scaling** — 1x/10x/100x scaling for Debye length resolution
+- **Dimensional Scaling** — 1x/10x/100x self-similar PIC scaling: divides domain, cell size, grid optics, neutralizer positions, voltages and timestep by the factor; multiplies plasma and neutral densities by the factor squared. E-field on particles is preserved and the Debye length shrinks with the geometry.
 - **Dark Theme UI** — Modern Qt6 interface with scrollable control panel
 - **Data Export** — CSV export of all particle positions, velocities, and energies
 

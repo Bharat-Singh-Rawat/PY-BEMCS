@@ -170,9 +170,13 @@ void ControlPanel::setupUI() {
     auto lblScale = new QLabel("Dim. Scaling:"); lblScale->setFixedWidth(140);
     comboDimScale_ = new QComboBox();
     comboDimScale_->addItems({"1x (Physical)", "10x (Resolve Debye)", "100x (Fine Debye)"});
-    comboDimScale_->setToolTip("Scale geometry dimensions to resolve electron Debye length.\n"
-                                "10x: multiply domain & cell size by 10 for sheath resolution.\n"
-                                "100x: for fine electron-scale physics.");
+    comboDimScale_->setToolTip(
+        "Self-similar PIC scaling to make the Debye length resolvable.\n"
+        "10x:  divide all lengths and voltages by 10; plasma density * 100;\n"
+        "      timestep / 10. Preserves E-field on particles.\n"
+        "100x: same with factor 100.\n"
+        "Affects domain, cells, grid optics, neutralizer, voltages, dt,\n"
+        "and plasma/neutral densities (temperatures stay physical).");
     scaleRow->addWidget(lblScale);
     scaleRow->addWidget(comboDimScale_);
     mainLay->addLayout(scaleRow);
@@ -367,17 +371,13 @@ SimParams ControlPanel::getParams() const {
     p.neutRate         = spinNeutRate_->value();
     p.neutElectronTemp = spinNeutTemp_->value();
 
-    // Domain with dimensional scaling
-    double dimScale = 1.0;
-    if (comboDimScale_->currentIndex() == 1) dimScale = 10.0;
-    else if (comboDimScale_->currentIndex() == 2) dimScale = 100.0;
-
-    p.Lx = spinLx_->value() * dimScale;
-    p.Ly = spinLy_->value() * dimScale;
-    p.Lz = spinLz_->value() * dimScale;
-    p.dx = spinDx_->value() * dimScale;
-    p.dy = spinDx_->value() * dimScale;
-    p.dz = spinDx_->value() * dimScale;
+    // Domain (physical values — scaling applied below)
+    p.Lx = spinLx_->value();
+    p.Ly = spinLy_->value();
+    p.Lz = spinLz_->value();
+    p.dx = spinDx_->value();
+    p.dy = spinDx_->value();
+    p.dz = spinDx_->value();
 
     // Sim mode
     int modeIdx = comboSimMode_->currentIndex();
@@ -386,6 +386,48 @@ SimParams ControlPanel::getParams() const {
               : SimParams::Erosion;
 
     p.dt = spinDt_->value() * 1e-9; // convert ns → s
+
+    // ── Dimensional scaling for Debye-length resolution ─────────────────
+    // Self-similar PIC scaling: divide all lengths by s, divide all potentials
+    // by s to preserve E = -∇V on particles, divide dt by s for CFL, and
+    // multiply plasma/neutral densities by s² so λ_D ∝ 1/sqrt(n) also shrinks
+    // with the geometry. Temperatures stay at their physical values.
+    double s = 1.0;
+    if (comboDimScale_->currentIndex() == 1) s = 10.0;
+    else if (comboDimScale_->currentIndex() == 2) s = 100.0;
+
+    if (s != 1.0) {
+        const double invS = 1.0 / s;
+        const double s2   = s * s;
+
+        // Domain & cells
+        p.Lx *= invS; p.Ly *= invS; p.Lz *= invS;
+        p.dx *= invS; p.dy *= invS; p.dz *= invS;
+
+        // Grid optics (lengths + voltages)
+        for (auto& g : p.grids) {
+            g.thickness_mm   *= invS;
+            g.gap_mm         *= invS;
+            g.hole_radius_mm *= invS;
+            g.voltage_V      *= invS;
+            // chamfer_deg is an angle — unchanged
+        }
+
+        // Other potentials
+        p.plasmaOffset_V *= invS;
+        p.rfAmplitudeV   *= invS;
+
+        // Neutralizer position and radius
+        p.neutX_mm *= invS;
+        p.neutR_mm *= invS;
+
+        // Densities: λ_D ∝ 1/sqrt(n), so n × s² scales λ_D by 1/s
+        p.plasmaDensity  *= s2;
+        p.neutralDensity *= s2;
+
+        // CFL: smaller cells need proportionally smaller dt
+        p.dt *= invS;
+    }
 
     return p;
 }
