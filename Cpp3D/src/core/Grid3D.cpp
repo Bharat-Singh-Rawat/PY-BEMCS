@@ -37,6 +37,7 @@ void Grid3D::initialize(const SimParams& params) {
     isInterior.assign(totalCells, 0);
 
     gridMasks.clear();
+    originalGridMasks.clear();
     gridTemps.clear();
 }
 
@@ -92,6 +93,8 @@ void Grid3D::buildDomain(const SimParams& params) {
         gridTemps.push_back(300.0);
         currentZ = gEnd + g.gap_mm;
     }
+
+    originalGridMasks = gridMasks;
 
     // Z=0 boundary (plasma source, upstream)
     double vPlasmaBound = params.grids.empty() ? 1000.0 + params.plasmaOffset_V

@@ -41,6 +41,9 @@ public:
 
     // Grid mask per optic (for thermal tracking)
     std::vector<std::vector<uint8_t>> gridMasks;
+    // Immutable snapshot of gridMasks taken at buildDomain; used for erosion diagnostics
+    // so we can tell which voxels were original grid material even after cells are removed.
+    std::vector<std::vector<uint8_t>> originalGridMasks;
     std::vector<double> gridTemps;
 
     void initialize(const SimParams& params);

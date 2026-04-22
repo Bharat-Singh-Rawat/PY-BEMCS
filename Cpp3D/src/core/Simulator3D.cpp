@@ -178,4 +178,65 @@ double Simulator3D::getMeanIonEnergy() const {
     return count > 0 ? sumE / count : 0.0;
 }
 
+int Simulator3D::getAccelGridIndex(const SimParams& params) const {
+    if (params.grids.empty()) return -1;
+    int best = 0;
+    double vBest = params.grids[0].voltage_V;
+    for (size_t gi = 1; gi < params.grids.size(); gi++) {
+        if (params.grids[gi].voltage_V < vBest) {
+            vBest = params.grids[gi].voltage_V;
+            best = static_cast<int>(gi);
+        }
+    }
+    return best;
+}
+
+Simulator3D::ErosionProfile
+Simulator3D::getErosionProfile(const SimParams& params, ProfileAxis axis) const {
+    ErosionProfile prof;
+
+    int gi = getAccelGridIndex(params);
+    if (gi < 0 || gi >= static_cast<int>(grid_.originalGridMasks.size())) return prof;
+    const auto& origMask = grid_.originalGridMasks[gi];
+    if (origMask.empty()) return prof;
+
+    const int nx = grid_.nx, ny = grid_.ny, nz = grid_.nz;
+    const double dx = grid_.dx, dy = grid_.dy, dz = grid_.dz;
+
+    // Slice at the transverse centre of the other axis.
+    const int ix_c = nx / 2;
+    const int iy_c = ny / 2;
+
+    const int n_out = (axis == ProfileAxis::X) ? nx : ny;
+    prof.coord_mm.resize(n_out);
+    prof.depth_um.resize(n_out, 0.0);
+
+    for (int i = 0; i < n_out; i++) {
+        int ix = (axis == ProfileAxis::X) ? i : ix_c;
+        int iy = (axis == ProfileAxis::X) ? iy_c : i;
+
+        prof.coord_mm[i] = (axis == ProfileAxis::X) ? ix * dx : iy * dy;
+
+        // Find the downstream-most original accel-grid voxel at this column.
+        int iz_down = -1;
+        for (int iz = nz - 1; iz >= 0; iz--) {
+            if (origMask[grid_.idx(ix, iy, iz)]) { iz_down = iz; break; }
+        }
+        if (iz_down < 0) continue;  // no accel-grid material here
+
+        // Walk inward from the downstream face, counting eroded voxels
+        // until we exit the grid region or hit surviving material.
+        int eroded_cells = 0;
+        for (int iz = iz_down; iz >= 0; iz--) {
+            size_t id = grid_.idx(ix, iy, iz);
+            if (!origMask[id]) break;          // outside original grid material
+            if (grid_.isBound[id]) break;      // intact material — stop here
+            eroded_cells++;
+        }
+        prof.depth_um[i] = eroded_cells * dz * 1000.0;  // mm → μm
+    }
+
+    return prof;
+}
+
 } // namespace BEMCS
