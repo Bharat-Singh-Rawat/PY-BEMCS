@@ -113,6 +113,8 @@ struct SimParams {
     // Domain (mm)
     double Lx = 3.0, Ly = 3.0, Lz = 10.0;
     double dx = 0.05, dy = 0.05, dz = 0.05;
+    // Z position [mm] of the first grid's upstream face (plasma-source gap)
+    double firstGridZ_mm = 1.0;
 
     // Acceleration / erosion
     double accelFactor      = 1.0;

@@ -125,7 +125,7 @@ double Simulator3D::getBeamDivergence(const SimParams& params) const {
     if (ions_.count < 5) return std::nan("");
 
     // Post-grid region (beam along Z)
-    double maxGridZ = 1.0;
+    double maxGridZ = params.firstGridZ_mm;
     for (const auto& g : params.grids) {
         maxGridZ += g.thickness_mm + g.gap_mm;
     }
@@ -152,7 +152,7 @@ double Simulator3D::getBeamDivergence(const SimParams& params) const {
 double Simulator3D::getSaddlePointPotential(const SimParams& params) const {
     if (params.grids.size() < 2) return 0.0;
 
-    double g2Start = 1.0 + params.grids[0].thickness_mm + params.grids[0].gap_mm;
+    double g2Start = params.firstGridZ_mm + params.grids[0].thickness_mm + params.grids[0].gap_mm;
     double g2Center = g2Start + params.grids[1].thickness_mm / 2.0;
 
     int ix = grid_.nx / 2;

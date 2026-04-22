@@ -47,7 +47,7 @@ void Grid3D::buildDomain(const SimParams& params) {
     // Build multi-grid optics geometry in 3D
     // The beam axis is along Z. Grids are planar structures with circular apertures.
     // In 3D: hole is a cylinder along Z through each grid slab.
-    double currentZ = 1.0; // Starting position [mm] along Z (beam axis)
+    double currentZ = params.firstGridZ_mm; // Upstream face of the first grid [mm]
 
     for (size_t gi = 0; gi < params.grids.size(); gi++) {
         const auto& g = params.grids[gi];
