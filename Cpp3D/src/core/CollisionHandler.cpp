@@ -23,7 +23,7 @@ void CollisionHandler::processCEX(ParticleArray& ions, const Grid3D& grid,
 
         double pz = ions.z[i];
         // Only collide within grid region (beam along Z)
-        if (pz < 1.0 || pz > grid.Lz) continue;
+        if (pz < params.firstGridZ_mm || pz > grid.Lz) continue;
 
         double vMag = std::sqrt(ions.vx[i] * ions.vx[i] +
                                 ions.vy[i] * ions.vy[i] +

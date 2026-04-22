@@ -156,7 +156,8 @@ ParticleManager::removeDeadParticles(ParticleArray& particles,
         if (outOfBounds || hitBound) {
             particles.alive[i] = false;
 
-            if (trackHits && hitBound && pz > 0.5) {
+            // Skip impacts on the z=0 plasma-source boundary (not a grid)
+            if (trackHits && hitBound && pz > grid.dz) {
                 double v2 = particles.vx[i] * particles.vx[i] +
                             particles.vy[i] * particles.vy[i] +
                             particles.vz[i] * particles.vz[i];
