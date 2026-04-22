@@ -46,6 +46,7 @@ private:
     void setupLogWindow();
     void setupContourDocks();
     void captureGifFrame();
+    void captureErosionGifFrame();
     void logMessage(const QString& msg);
 
     // Core simulation
@@ -63,7 +64,8 @@ private:
     QTimer* simTimer_;
 
     // GIF recording
-    GifWriter gifWriter_;
+    GifWriter gifWriter_;          // main 3D view
+    GifWriter erosionGifWriter_;   // erosion-map widget, saved alongside
     bool gifRecording_ = false;
     QAction* gifRecordAction_ = nullptr;
 

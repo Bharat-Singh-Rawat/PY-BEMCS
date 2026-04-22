@@ -335,9 +335,10 @@ void MainWindow::onSimStep() {
                              eMap.Lx_mm, eMap.Ly_mm,
                              eMap.maxDepth_um);
 
-        // Capture GIF frame every render
+        // Capture GIF frame every render — sim view + erosion map evolve together
         if (gifRecording_) {
             captureGifFrame();
+            captureErosionGifFrame();
         }
 
         // Log diagnostics every 100 iterations
@@ -435,14 +436,13 @@ void MainWindow::onToggleGifRecording() {
     gifRecording_ = !gifRecording_;
 
     if (gifRecording_) {
-        // Start recording: initialize the GIF writer with the view size
-        int w = view3D_->width();
-        int h = view3D_->height();
-        // Use 10 centiseconds (100ms) delay between frames
-        gifWriter_.init(w, h, 10);
+        // Start recording: initialize both GIF writers (main 3D view + erosion
+        // map widget). 10 centiseconds = 100 ms between frames.
+        gifWriter_.init(view3D_->width(), view3D_->height(), 10);
+        erosionGifWriter_.init(erosionMap_->width(), erosionMap_->height(), 10);
         gifRecordAction_->setText("Stop Recording GIF");
-        statusBar()->showMessage("GIF recording started...");
-        logMessage("GIF recording started.");
+        statusBar()->showMessage("GIF recording started (sim view + erosion map)...");
+        logMessage("GIF recording started (sim view + erosion map).");
     } else {
         gifRecordAction_->setText("Record GIF");
         statusBar()->showMessage(
@@ -473,13 +473,31 @@ void MainWindow::onSaveGif() {
 
     int numFrames = gifWriter_.frameCount();
     statusBar()->showMessage("Saving GIF...");
-    logMessage(QString("Saving GIF with %1 frames...").arg(numFrames));
+    logMessage(QString("Saving GIFs with %1 frames...").arg(numFrames));
     QApplication::processEvents();
 
     bool ok = gifWriter_.finish(path.toStdString());
 
+    // Derive a companion filename for the erosion-map GIF: foo.gif -> foo_erosion.gif
+    bool erosionOk = false;
+    QString erosionPath;
+    int erosionFrames = erosionGifWriter_.frameCount();
+    if (erosionFrames > 0) {
+        int dot = path.lastIndexOf('.');
+        if (dot < 0) {
+            erosionPath = path + "_erosion.gif";
+        } else {
+            erosionPath = path.left(dot) + "_erosion" + path.mid(dot);
+        }
+        erosionOk = erosionGifWriter_.finish(erosionPath.toStdString());
+    }
+
     if (ok) {
-        QString msg = QString("GIF saved to %1 (%2 frames)").arg(path).arg(numFrames);
+        QString msg = QString("GIF saved: %1 (%2 frames)").arg(path).arg(numFrames);
+        if (erosionOk) {
+            msg += QString("; erosion map: %1 (%2 frames)")
+                     .arg(erosionPath).arg(erosionFrames);
+        }
         statusBar()->showMessage(msg);
         logMessage(msg);
     } else {
@@ -540,6 +558,24 @@ void MainWindow::captureGifFrame() {
 
     gifWriter_.addFrame(img.constBits());
 #endif
+}
+
+void MainWindow::captureErosionGifFrame() {
+    if (!erosionMap_) return;
+
+    // The erosion widget is a plain QWidget, not VTK — grab it as a pixmap
+    // and convert to the RGBA buffer GifWriter expects.
+    QPixmap pixmap = erosionMap_->grab();
+    if (pixmap.isNull()) return;
+    QImage img = pixmap.toImage().convertToFormat(QImage::Format_RGBA8888);
+
+    // (Re)init on first frame — the widget may have been resized since
+    // onToggleGifRecording, same DPI-mismatch guard as the main view.
+    if (erosionGifWriter_.frameCount() == 0) {
+        erosionGifWriter_.init(img.width(), img.height(), 10);
+    }
+
+    erosionGifWriter_.addFrame(img.constBits());
 }
 
 } // namespace BEMCS
