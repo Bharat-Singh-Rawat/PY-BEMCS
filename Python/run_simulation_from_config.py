@@ -18,6 +18,7 @@ Instructions:
     python run_simulation_from_config.py
 """
 import configparser
+import re
 import time
 import os
 import numpy as np
@@ -155,7 +156,7 @@ def parse_config(config_path='config.ini'):
 
     # --- Grids ---
     params['grids'] = []
-    grid_sections = sorted([s for s in config.sections() if s.startswith('grid_')])
+    grid_sections = sorted([s for s in config.sections() if re.fullmatch(r'grid_\d+', s)])
     for section_name in grid_sections:
         grid_section = config[section_name]
         grid = {
