@@ -1,0 +1,93 @@
+{
+  "beam_species": {
+    "mass_amu": 131.293,
+    "charge_state": 1
+  },
+
+  "grid_material": {
+    "preset": "Titanium"
+  },
+
+  "advanced_settings": {
+    "neut_x": 10.0,
+    "neut_r": 1.5,
+    "V_plasma_offset": 26.0,
+    "m_e_ratio": 1000.0,
+    "Lx": 20.0,
+    "Ly": 3.0
+  },
+
+  "simulation": {
+    "n0_plasma": 7e17,
+    "Te_up": 4.3,
+    "Ti": 0.75,
+    "Tn": 534.0,
+    "n0": 1e18,
+    "Accel": 0.5,
+    "Thresh": 10000.0,
+    "sim_mode": "Thermal",
+    "geometry": "half_hole"
+  },
+
+  "rf_co_extraction": {
+    "rf_enable": false,
+    "rf_grid_idx": 0,
+    "rf_freq": 13.56,
+    "rf_amp": 500.0
+  },
+
+  "neutralizer": {
+    "neut_rate": 0,
+    "Te": 5.0
+  },
+
+  "grids": [
+    {
+      "V": 1100.0,
+      "t": 0.38,
+      "gap": 0.58,
+      "r": 0.95,
+      "cham": 0
+    },
+    {
+      "V": -180.0,
+      "t": 0.51,
+      "gap": 3,
+      "r": 0.57,
+      "cham": 0.0
+    }
+  ],
+
+  "cross_sections": {
+    "cx_file": "",
+    "see_file": "",
+    "custom_file": "",
+    "spline_smoothing": 0.0
+  },
+
+  "terminal_output": {
+    "grid_temperatures": true,
+    "beam_divergence": true,
+    "saddle_point_potential": true,
+    "mean_particle_energy": true,
+    "iteration_time": true
+  },
+  "discharge_chamber": {
+  "radius_m": 0.15,
+  "length_m": 0.23,
+  "n_cusp": 4,
+  "pitch_mm": 3.75
+  },
+
+  "grid_transparency": {
+  "beta_i": 0.7,
+  "beta_g": 0.5
+  },
+
+  "power_and_flow": {
+  "B": 0.05,
+  "massflow_in": 2.28e-6,
+  "Pw": 2290.0,
+  "Te_0": 3
+  }
+}
