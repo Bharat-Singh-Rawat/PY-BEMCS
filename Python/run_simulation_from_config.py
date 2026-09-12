@@ -93,8 +93,10 @@ def parse_config(config_path='config.json'):
     params['neut_r'] = adv.get('neut_r', 3.0)
     params['V_plasma_offset'] = adv.get('V_plasma_offset', 20.0)
     params['m_e_ratio'] = adv.get('m_e_ratio', 1000.0)
-    params['Lx'] = adv.get('Lx', 20.0)
-    params['Ly'] = adv.get('Ly', 3.0)
+    if 'Lx' in adv:
+        params['Lx'] = adv['Lx']
+    if 'Ly' in adv:
+        params['Ly'] = adv['Ly']
 
     # --- Cross-section files ---
     cs_store = {}
