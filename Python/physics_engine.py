@@ -665,7 +665,7 @@ class DigitalTwinSimulator:
         self.upstream_gap_mm = upstream_gap
 
         if grids:
-            self.Lx = upstream_gap + total_grid_thickness + 3.0
+            self.Lx = upstream_gap + total_grid_thickness # previously +3
         else:
             self.Lx = params.get('Lx', self.Lx)
 
@@ -1085,7 +1085,14 @@ class DigitalTwinSimulator:
         # —- NEUTRALIZER —-
         num_e_neut = int(params.get('neut_rate', 30))
         Te_eV = params.get('Te', 5.0)
-        neut_x_param = params.get('neut_x', self.Lx - 0.5)
+        # Default neutralizer position: 9/10 of the downstream plume region
+        # (between last grid exit and domain end), unless the user has overridden it.
+        if hasattr(self, 'grid_x_ends') and self.grid_x_ends:
+            _x_exit = self.grid_x_ends[-1]
+            _neut_default = _x_exit + 0.9 * (self.Lx - _x_exit)
+        else:
+            _neut_default = self.Lx - 0.5
+        neut_x_param = params.get('neut_x', _neut_default)
         neut_r_param = params.get('neut_r', self.Ly)
         neut_x = float(np.clip(neut_x_param, self.dx, self.Lx - self.dx))
         neut_r = float(np.clip(neut_r_param, self.dy, self.Ly))
@@ -1340,15 +1347,17 @@ class DigitalTwinSimulator:
         # ————————————————————————————————
         if getattr(self, 'periodic_y', False):
             # In periodic mode, p_y is already wrapped to [0, Ly], so it can never be OOB.
+            # Particles are tracked across the full domain to avoid artificial charge
+            # discontinuities; diagnostic plane remains at x_exit_last.
             out_of_bounds = (
                 (p_x < 0.0) |
-                (p_x > x_plume_boundary) |
+                (p_x > self.Lx) |
                 np.isnan(p_x)
             )
         else:
             out_of_bounds = (
                 (p_x < 0.0) |
-                (p_x > x_plume_boundary) |
+                (p_x > self.Lx) |
                 (p_y < 0.0) |
                 (p_y > self.Ly) |
                 np.isnan(p_x)
@@ -1518,15 +1527,11 @@ class DigitalTwinSimulator:
         p_vz = self.p_vz[:self.num_p]
         p_cex = self.p_isCEX[:self.num_p]
 
-        keep_mask = (p_x <= x_plume_boundary) | (p_vx < 0.0)
-        new_num_p = int(np.count_nonzero(keep_mask))
-        self.p_x[:new_num_p] = p_x[keep_mask]
-        self.p_y[:new_num_p] = p_y[keep_mask]
-        self.p_vx[:new_num_p] = p_vx[keep_mask]
-        self.p_vy[:new_num_p] = p_vy[keep_mask]
-        self.p_vz[:new_num_p] = p_vz[keep_mask]
-        self.p_isCEX[:new_num_p] = p_cex[keep_mask]
-        self.num_p = new_num_p
+        # Particles are now tracked across the full domain (up to self.Lx).
+        # The secondary plume-boundary purge has been removed: ions are only
+        # removed when they reach the actual domain edge (already handled by
+        # out_of_bounds above), eliminating the artificial charge discontinuity
+        # that occurred at x_plume_boundary.
 
         # ————————————————————————————————
         # E. PURGE DEAD ELECTRONS
