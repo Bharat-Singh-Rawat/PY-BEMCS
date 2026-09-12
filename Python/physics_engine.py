@@ -1104,7 +1104,14 @@ class DigitalTwinSimulator:
             _neut_default = self.Lx - 0.5
         neut_x_param = params.get('neut_x', _neut_default)
         neut_r_param = params.get('neut_r', self.Ly)
-        neut_x = float(np.clip(neut_x_param, self.dx, self.Lx - self.dx))
+        if neut_x_param > self.Lx or neut_x_param < 0.0:
+            if not getattr(self, '_warned_neut_oob', False):
+                print(f"[Warning] Neutralizer position x={neut_x_param:.3f} mm is outside x-domain [0, {self.Lx:.3f} mm]. Setting to x = Lx ({self.Lx:.3f} mm).")
+                self._warned_neut_oob = True
+            neut_x = float(self.Lx)
+        else:
+            self._warned_neut_oob = False
+            neut_x = float(neut_x_param)
         neut_r = float(np.clip(neut_r_param, self.dy, self.Ly))
         if num_e_neut > 0:
             new_ey = np.random.uniform(0.0, neut_r, num_e_neut).astype(_NP_FP)
