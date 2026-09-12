@@ -318,7 +318,7 @@ If you use this software in your research, please cite:
 
 ```bibtex
 @software{PY-BEMCS,
-  author       = {Bharat Singh Rawat and Nick Magrin},
+  author       = {Bharat Singh Rawat},
   title        = {Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)},
   year         = {2026},
   publisher    = {GitHub},
