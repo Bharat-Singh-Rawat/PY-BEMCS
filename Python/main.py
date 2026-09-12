@@ -710,8 +710,6 @@ class AdvancedSettingsDialog(QDialog):
             self.form.addRow(label, spin)
             self.inputs[key] = spin
 
-        add_spin("neut_x", "Neutralizer Axial Dist (x, mm):", 0, 100, current_params.get("neut_x", 10.0), decimals=3, step=0.5)
-        add_spin("neut_r", "Neutralizer Radius (y, mm):", 0.1, 50, current_params.get("neut_r", 1.5), decimals=2, step=0.1)
         add_spin("V_plasma_offset", "Plasma Potential Offset (V):", 0, 500, current_params.get("V_plasma_offset", 20.0))
         add_spin("m_e_ratio", "Electron Mass Ratio (m_Xe / X):", 1, 100000, current_params.get("m_e_ratio", 1000.0), 0, 100)
 
@@ -1477,6 +1475,13 @@ class DigitalTwinApp(QMainWindow):
         control_layout.addLayout(row)
         row, self.inputs["Te"] = self.create_input("e- Temp (eV):", 0.0, 1000.0, 0.1, 4)
         control_layout.addLayout(row)
+        row, self.inputs["neut_x"] = self.create_input("Axial Dist (x, mm):", 0.0, 500.0, 0.1, 3)
+        self.inputs["neut_x"].setToolTip("Neutralizer axial distance along x (mm). Auto-set to 90% into downstream plume if not manually edited.")
+        self.inputs["neut_x"].editingFinished.connect(self._validate_neut_x)
+        control_layout.addLayout(row)
+        row, self.inputs["neut_r"] = self.create_input("Radius (y, mm):", 0.01, 100.0, 0.1, 2)
+        self.inputs["neut_r"].setToolTip("Neutralizer radius (y, mm). Radial boundary for injected electrons.")
+        control_layout.addLayout(row)
 
         control_layout.addSpacing(15)
 
@@ -1608,8 +1613,6 @@ class DigitalTwinApp(QMainWindow):
 
         # Advanced params
         self.adv_params = {
-            "neut_x":           10.0,
-            "neut_r":            2.0,
             "V_plasma_offset":  20.0,
             "m_e_ratio":      1000.0,
             "entire_bulk_plasma": False,  # default: presheath mode
@@ -1633,6 +1636,7 @@ class DigitalTwinApp(QMainWindow):
         # Neutralizer
         self.inputs["neut_rate"].setValue(30.0)
         self.inputs["Te"].setValue(2.0)
+        self.inputs["neut_r"].setValue(1.5)
 
         # RF off
         self.chk_rf.setChecked(False)
@@ -1653,6 +1657,11 @@ class DigitalTwinApp(QMainWindow):
         self.adv_params["Ly"] = auto_Ly
         self._user_overrode_Lx = False
         self._user_overrode_Ly = False
+
+        x_exit = _auto_gap + (0.38 + 0.64) + (0.38 + 0.64) + 0.38
+        auto_neut_x = round(x_exit + 0.9 * (auto_Lx - x_exit), 3)
+        self._last_auto_neut_x = auto_neut_x
+        self.inputs["neut_x"].setValue(auto_neut_x)
 
         self.lbl_status.setText("Status: No config.json found — using default values.")
 
@@ -1717,6 +1726,23 @@ class DigitalTwinApp(QMainWindow):
 
         auto_Ly = round(auto_Ly, 3)
         return auto_Lx, auto_Ly
+
+    def _validate_neut_x(self):
+        """Warn and clamp neutralizer x position to Lx if it is settled outside the domain."""
+        if hasattr(self, 'sim') and hasattr(self.sim, 'Lx') and self.sim.Lx > 0:
+            val = self.inputs["neut_x"].value()
+            if val > self.sim.Lx or val < 0.0:
+                QMessageBox.warning(
+                    self,
+                    "Neutralizer Warning",
+                    f"Neutralizer axial position (x = {val:.3f} mm) is settled outside the x-domain [0, {self.sim.Lx:.3f} mm].\n\n"
+                    f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
+                )
+                self.inputs["neut_x"].blockSignals(True)
+                self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
+                self.inputs["neut_x"].blockSignals(False)
+                self._last_auto_neut_x = round(self.sim.Lx, 3)
+                print(f"[Warning] Neutralizer position x={val:.3f} mm is outside domain [0, {self.sim.Lx:.3f} mm]. Settled to x = Lx ({self.sim.Lx:.3f} mm).")
 
     def _update_debye_gap(self):
         """Auto-update the Upstream Gap spinbox when n0 or Te_up change.
@@ -1789,8 +1815,6 @@ class DigitalTwinApp(QMainWindow):
 
         adv = config.get("advanced_settings", {})
         self.adv_params = {
-            "neut_x": adv.get("neut_x", 10.0),
-            "neut_r": adv.get("neut_r", 2.0),
             "V_plasma_offset": adv.get("V_plasma_offset", 20.0),
             "m_e_ratio": adv.get("m_e_ratio", 1000.0),
             "entire_bulk_plasma": bool(adv.get("entire_bulk_plasma", False)),
@@ -1841,8 +1865,9 @@ class DigitalTwinApp(QMainWindow):
         self.spin_rf_amp.setValue(rf["rf_amp"])
 
         neut = config.get("neutralizer", {})
-        self.inputs["neut_rate"].setValue(neut["neut_rate"])
-        self.inputs["Te"].setValue(neut["Te"])
+        self.inputs["neut_rate"].setValue(neut.get("neut_rate", 30.0))
+        self.inputs["Te"].setValue(neut.get("Te", 2.0))
+        self.inputs["neut_r"].setValue(neut.get("neut_r", adv.get("neut_r", 1.5)))
 
         self.clear_grid_ui()
         grids = config.get("grids", [])
@@ -1874,6 +1899,24 @@ class DigitalTwinApp(QMainWindow):
         else:
             self.adv_params["Ly"] = auto_Ly
             self._user_overrode_Ly = False
+
+        # Neutralizer axial distance (x):
+        if "neut_x" in neut or "neut_x" in adv:
+            val_neut_x = float(neut.get("neut_x", adv.get("neut_x")))
+            if val_neut_x > auto_Lx or val_neut_x < 0.0:
+                print(f"[Warning] Neutralizer position x={val_neut_x:.3f} mm in config is outside domain [0, {auto_Lx:.3f} mm]. Settled to x = Lx ({auto_Lx:.3f} mm).")
+                val_neut_x = auto_Lx
+            self.inputs["neut_x"].setValue(val_neut_x)
+            self._last_auto_neut_x = val_neut_x
+        else:
+            if grids:
+                upstream = self.inputs["upstream_gap_mm"].value()
+                x_exit = upstream + sum(g["t"] + g["gap"] for g in grids[:-1]) + grids[-1]["t"]
+                auto_neut_x = round(x_exit + 0.9 * (auto_Lx - x_exit), 3)
+            else:
+                auto_neut_x = round(auto_Lx - 0.5, 3)
+            self.inputs["neut_x"].setValue(auto_neut_x)
+            self._last_auto_neut_x = auto_neut_x
 
         cfg_name = getattr(self, "current_config_name", "config.json")
         self.lbl_status.setText(f"Loaded {cfg_name} | {len(grids)} grids")
@@ -2032,6 +2075,8 @@ class DigitalTwinApp(QMainWindow):
             QMessageBox.warning(self, "Warning", "Build Domain first!")
             return
 
+        self._validate_neut_x()
+
         # If we are starting (not pausing), ensure injection is enabled again
         if not self.sim_isRunning:
             self.sim.injection_enabled = True
@@ -2126,11 +2171,25 @@ class DigitalTwinApp(QMainWindow):
         else:
             _neut_auto = round(self.sim.Lx - 0.5, 3)
         _last = getattr(self, '_last_auto_neut_x', None)
-        _current_neut = round(self.adv_params.get("neut_x", _neut_auto), 3)
-        if _last is None or abs(_current_neut - _last) <= 0.001:
+        _current_neut = round(self.inputs["neut_x"].value(), 3)
+        if _current_neut > self.sim.Lx or _current_neut < 0.0:
+            QMessageBox.warning(
+                self,
+                "Neutralizer Warning",
+                f"Neutralizer axial position (x = {_current_neut:.3f} mm) is settled outside the x-domain [0, {self.sim.Lx:.3f} mm].\n\n"
+                f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
+            )
+            self.inputs["neut_x"].blockSignals(True)
+            self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
+            self.inputs["neut_x"].blockSignals(False)
+            self._last_auto_neut_x = round(self.sim.Lx, 3)
+            print(f"[Warning] Neutralizer position x={_current_neut:.3f} mm is outside x-domain [0, {self.sim.Lx:.3f} mm]. Settled to x = Lx ({self.sim.Lx:.3f} mm).")
+        elif _last is None or abs(_current_neut - _last) <= 0.001:
             # User hasn't overridden — apply the new auto value
             self._last_auto_neut_x = _neut_auto
-            self.adv_params["neut_x"] = _neut_auto
+            self.inputs["neut_x"].blockSignals(True)
+            self.inputs["neut_x"].setValue(_neut_auto)
+            self.inputs["neut_x"].blockSignals(False)
             print(f"[Build Domain] neut_x auto-set to {_neut_auto:.3f} mm  "
                   f"(90% into plume: x_exit={_x_exit if hasattr(self.sim, 'grid_x_ends') and self.sim.grid_x_ends else '?':.3f} mm, Lx={self.sim.Lx:.3f} mm)")
 
