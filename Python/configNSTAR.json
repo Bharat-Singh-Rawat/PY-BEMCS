@@ -9,8 +9,6 @@
   },
 
   "advanced_settings": {
-    "neut_x": 10.0,
-    "neut_r": 1.5,
     "V_plasma_offset": 26.0,
     "m_e_ratio": 1000.0
   },
@@ -36,7 +34,9 @@
 
   "neutralizer": {
     "neut_rate": 0,
-    "Te": 5.0
+    "Te": 5.0,
+    "neut_x": 10.0,
+    "neut_r": 1.5
   },
 
   "grids": [
