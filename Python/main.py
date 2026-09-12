@@ -691,10 +691,10 @@ class CrossSectionViewerWindow(QWidget):
 
 # —- ADVANCED SETTINGS DIALOG —-
 class AdvancedSettingsDialog(QDialog):
-    def __init__(self, current_params, parent=None):
+    def __init__(self, current_params, parent=None, default_Lx=None, default_Ly=None):
         super().__init__(parent)
         self.setWindowTitle("Advanced Simulation Parameters")
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(380)
         layout = QVBoxLayout(self)
         self.setLayout(layout)
 
@@ -710,12 +710,23 @@ class AdvancedSettingsDialog(QDialog):
             self.form.addRow(label, spin)
             self.inputs[key] = spin
 
-        add_spin("neut_x", "Neutralizer Axial Dist (x, mm):", 0, 100, current_params["neut_x"])
-        add_spin("neut_r", "Neutralizer Radius (y, mm):", 0.1, 50, current_params["neut_r"])
-        add_spin("V_plasma_offset", "Plasma Potential Offset (V):", 0, 500, current_params["V_plasma_offset"])
-        add_spin("m_e_ratio", "Electron Mass Ratio (m_Xe / X):", 1, 100000, current_params["m_e_ratio"], 0, 100)
-        add_spin("Lx", "Domain Length (Lx, mm):", 5, 200, current_params["Lx"])
-        add_spin("Ly", "Domain Height (Ly, mm):", 1, 50, current_params["Ly"])
+        add_spin("neut_x", "Neutralizer Axial Dist (x, mm):", 0, 100, current_params.get("neut_x", 10.0), decimals=3, step=0.5)
+        add_spin("neut_r", "Neutralizer Radius (y, mm):", 0.1, 50, current_params.get("neut_r", 1.5), decimals=2, step=0.1)
+        add_spin("V_plasma_offset", "Plasma Potential Offset (V):", 0, 500, current_params.get("V_plasma_offset", 20.0))
+        add_spin("m_e_ratio", "Electron Mass Ratio (m_Xe / X):", 1, 100000, current_params.get("m_e_ratio", 1000.0), 0, 100)
+
+        val_Lx = current_params.get("Lx", default_Lx if default_Lx is not None else 20.0)
+        val_Ly = current_params.get("Ly", default_Ly if default_Ly is not None else 3.0)
+        add_spin("Lx", "Domain Length (Lx, mm):", 0.1, 500, val_Lx, decimals=3, step=0.5)
+        add_spin("Ly", "Domain Height (Ly, mm):", 0.1, 100, val_Ly, decimals=3, step=0.1)
+
+        if default_Lx is not None and default_Ly is not None:
+            btn_reset_domain = QPushButton(f"Reset Lx/Ly to Grid Defaults ({default_Lx:.3f} × {default_Ly:.3f} mm)")
+            btn_reset_domain.clicked.connect(lambda: (
+                self.inputs["Lx"].setValue(default_Lx),
+                self.inputs["Ly"].setValue(default_Ly)
+            ))
+            self.form.addRow(btn_reset_domain)
 
         # —- Entire Bulk Plasma option —-
         self.chk_bulk = QCheckBox("Entire Bulk Plasma")
@@ -1601,8 +1612,6 @@ class DigitalTwinApp(QMainWindow):
             "neut_r":            2.0,
             "V_plasma_offset":  20.0,
             "m_e_ratio":      1000.0,
-            "Lx":               20.0,
-            "Ly":                3.0,
             "entire_bulk_plasma": False,  # default: presheath mode
         }
 
@@ -1639,7 +1648,75 @@ class DigitalTwinApp(QMainWindow):
         self.add_grid_ui(-200.0, 0.38, 0.64, 0.70, 0.0)   # Accel grid
         self.add_grid_ui(  0.0,  0.38, 2.00, 0.75, 0.0)   # Deccel grid
 
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        self.adv_params["Lx"] = auto_Lx
+        self.adv_params["Ly"] = auto_Ly
+        self._user_overrode_Lx = False
+        self._user_overrode_Ly = False
+
         self.lbl_status.setText("Status: No config.json found — using default values.")
+
+    def compute_grid_domain_size(self):
+        """Compute default Lx and Ly directly from grid geometry and simulation settings.
+
+        Lx = upstream_gap + sum(t + gap for each grid)
+        Ly depends on geometry mode:
+          - 'two_holes': screen_r + 2*screen_r + pitch
+          - 'one_hole':  3 * screen_r
+          - 'half_hole': 0.5 * screen_r + 0.30 * pitch
+        """
+        if hasattr(self, 'grid_widgets') and self.grid_widgets:
+            grids = [{
+                "t": gw["t"].value(),
+                "gap": gw["gap"].value(),
+                "r": gw["r"].value()
+            } for gw in self.grid_widgets]
+        elif hasattr(self, 'config') and self.config and "grids" in self.config:
+            grids = self.config["grids"]
+        else:
+            grids = []
+
+        if grids:
+            total_grid_thickness = sum(float(g["t"]) + float(g["gap"]) for g in grids)
+            screen_r = float(grids[0]["r"])
+        else:
+            total_grid_thickness = 0.0
+            screen_r = 0.80
+
+        # Upstream gap
+        upstream_gap = 0.0
+        if hasattr(self, 'inputs') and "upstream_gap_mm" in self.inputs:
+            upstream_gap = self.inputs["upstream_gap_mm"].value()
+        if upstream_gap <= 0.0:
+            bulk = self.adv_params.get("entire_bulk_plasma", False) if hasattr(self, 'adv_params') else False
+            if bulk and hasattr(self, 'inputs') and "n0_plasma" in self.inputs and "Te_up" in self.inputs:
+                upstream_gap = compute_debye_upstream_gap(
+                    self.inputs["n0_plasma"].value(),
+                    self.inputs["Te_up"].value()
+                )
+            else:
+                upstream_gap = 0.75 * screen_r
+
+        auto_Lx = round(upstream_gap + total_grid_thickness, 3)
+
+        # Geometry for Ly
+        geom = "half_hole"
+        if hasattr(self, 'combo_geometry'):
+            geom = self.combo_geometry.currentText()
+        elif hasattr(self, 'config') and self.config and "simulation" in self.config:
+            geom = self.config["simulation"].get("geometry", "half_hole")
+
+        pitch = getattr(self, "pitch_mm", 3.0)
+
+        if geom == "two_holes":
+            auto_Ly = screen_r + 2.0 * screen_r + pitch
+        elif geom == "one_hole":
+            auto_Ly = 3.0 * screen_r
+        else:  # half_hole
+            auto_Ly = 0.5 * screen_r + 0.30 * pitch
+
+        auto_Ly = round(auto_Ly, 3)
+        return auto_Lx, auto_Ly
 
     def _update_debye_gap(self):
         """Auto-update the Upstream Gap spinbox when n0 or Te_up change.
@@ -1712,12 +1789,10 @@ class DigitalTwinApp(QMainWindow):
 
         adv = config.get("advanced_settings", {})
         self.adv_params = {
-            "neut_x": adv["neut_x"],
-            "neut_r": adv["neut_r"],
-            "V_plasma_offset": adv["V_plasma_offset"],
-            "m_e_ratio": adv["m_e_ratio"],
-            "Lx": adv["Lx"],
-            "Ly": adv["Ly"],
+            "neut_x": adv.get("neut_x", 10.0),
+            "neut_r": adv.get("neut_r", 2.0),
+            "V_plasma_offset": adv.get("V_plasma_offset", 20.0),
+            "m_e_ratio": adv.get("m_e_ratio", 1000.0),
             "entire_bulk_plasma": bool(adv.get("entire_bulk_plasma", False)),
         }
 
@@ -1784,6 +1859,22 @@ class DigitalTwinApp(QMainWindow):
 
         self.cs_store = load_cross_sections_from_config(config)
         self.pitch_mm = config.get("discharge_chamber", {}).get("pitch_mm", 3.0)
+
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if "Lx" in adv:
+            self.adv_params["Lx"] = adv["Lx"]
+            self._user_overrode_Lx = True
+        else:
+            self.adv_params["Lx"] = auto_Lx
+            self._user_overrode_Lx = False
+
+        if "Ly" in adv:
+            self.adv_params["Ly"] = adv["Ly"]
+            self._user_overrode_Ly = True
+        else:
+            self.adv_params["Ly"] = auto_Ly
+            self._user_overrode_Ly = False
+
         cfg_name = getattr(self, "current_config_name", "config.json")
         self.lbl_status.setText(f"Loaded {cfg_name} | {len(grids)} grids")
         self.lbl_temp.setText("Grid Temps: " + " | ".join([f"G{i+1}: ready" for i in range(len(grids))]))
@@ -1805,9 +1896,26 @@ class DigitalTwinApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Config Error", f"Failed to reload config:\n{e}")
     def open_advanced_settings(self):
-        dialog = AdvancedSettingsDialog(self.adv_params, self)
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Lx', False):
+            self.adv_params["Lx"] = auto_Lx
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
+
+        dialog = AdvancedSettingsDialog(self.adv_params, self, default_Lx=auto_Lx, default_Ly=auto_Ly)
         if dialog.exec_() == QDialog.Accepted:
-            self.adv_params.update(dialog.get_values())
+            new_vals = dialog.get_values()
+            if abs(new_vals.get("Lx", auto_Lx) - auto_Lx) > 1e-4:
+                self._user_overrode_Lx = True
+            else:
+                self._user_overrode_Lx = False
+
+            if abs(new_vals.get("Ly", auto_Ly) - auto_Ly) > 1e-4:
+                self._user_overrode_Ly = True
+            else:
+                self._user_overrode_Ly = False
+
+            self.adv_params.update(new_vals)
             # Refresh the upstream-gap spinbox auto-value to match the new mode,
             # but only if the user has not manually overridden it.
             if hasattr(self, '_last_auto_gap'):
@@ -1986,10 +2094,21 @@ class DigitalTwinApp(QMainWindow):
         _dxy_mm = 0.8 * _lambda_D_mm
         self.sim.dx = _dxy_mm
         self.sim.dy = _dxy_mm
-        print(f"[Build Domain] lambda_D = {_lambda_D_mm:.4f} mm  ->  dx = dy = {_dxy_mm:.4f} mm")
+        # Ensure Lx and Ly reflect current grid geometry if not manually overridden
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Lx', False):
+            self.adv_params["Lx"] = auto_Lx
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
 
         self.apply_advanced_settings_to_sim()
         self.sim.build_domain(self.get_params())
+
+        # Keep adv_params synchronized with the domain built
+        if not getattr(self, '_user_overrode_Lx', False):
+            self.adv_params["Lx"] = round(self.sim.Lx, 3)
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = round(self.sim.Ly, 3)
 
         # Sync the spinbox to the actual gap used (auto Debye or user override)
         gap_used = self.sim.upstream_gap_mm

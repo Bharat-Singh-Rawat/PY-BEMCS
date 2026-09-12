@@ -664,10 +664,13 @@ class DigitalTwinSimulator:
         upstream_gap = max(upstream_gap, self.dx * 2)  # minimum: 2 cells from boundary
         self.upstream_gap_mm = upstream_gap
 
-        if grids:
-            self.Lx = upstream_gap + total_grid_thickness # previously +3
+        grid_Lx = (upstream_gap + total_grid_thickness) if grids else 3.0
+        user_Lx = params.get('Lx', None)
+        if user_Lx is not None and float(user_Lx) > 0:
+            min_Lx = upstream_gap + total_grid_thickness if grids else 1.0
+            self.Lx = max(float(user_Lx), min_Lx)
         else:
-            self.Lx = params.get('Lx', self.Lx)
+            self.Lx = grid_Lx
 
         if self.dx * 1e-3 > debye_length or self.dy * 1e-3 > debye_length:
             raise ValueError(
@@ -714,13 +717,20 @@ class DigitalTwinSimulator:
         if grids:
             screen_r = grids[0]['r']
             if geometry == 'two_holes':
-                self.Ly = screen_r + 2.0 * screen_r + pitch      # full dual-hole pitch
+                grid_Ly = screen_r + 2.0 * screen_r + pitch      # full dual-hole pitch
             elif geometry == 'one_hole':
-                self.Ly = 3.0 * screen_r                         # full single-hole domain
+                grid_Ly = 3.0 * screen_r                         # full single-hole domain
             else:  # 'half_hole' (default)
-                self.Ly = 0.5 * screen_r + 0.30 * pitch         # half-pitch symmetry
+                grid_Ly = 0.5 * screen_r + 0.30 * pitch         # half-pitch symmetry
         else:
-            self.Ly = params.get('Ly', self.Ly)
+            grid_Ly = 3.0
+
+        user_Ly = params.get('Ly', None)
+        if user_Ly is not None and float(user_Ly) > 0:
+            min_Ly = screen_r if grids else 0.5
+            self.Ly = max(float(user_Ly), min_Ly)
+        else:
+            self.Ly = grid_Ly
 
         self.nx = int(self.Lx / self.dx) + 1
         self.ny = int(self.Ly / self.dy) + 1
