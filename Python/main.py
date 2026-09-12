@@ -1471,7 +1471,7 @@ class DigitalTwinApp(QMainWindow):
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel("5. NEUTRALIZER"))
-        row, self.inputs["neut_rate"] = self.create_input("e- Inject Rate:", 0.0, 1e9, 1.0, 4)
+        row, self.inputs["neut_rate"] = self.create_input("e- Inject Rate(macro):", 0.0, 1e9, 1.0, 4)
         control_layout.addLayout(row)
         row, self.inputs["Te"] = self.create_input("e- Temp (eV):", 0.0, 1000.0, 0.1, 4)
         control_layout.addLayout(row)
