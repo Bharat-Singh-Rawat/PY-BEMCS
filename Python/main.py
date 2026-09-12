@@ -1997,6 +1997,24 @@ class DigitalTwinApp(QMainWindow):
         self.inputs["upstream_gap_mm"].setValue(round(gap_used, 3))
         self.inputs["upstream_gap_mm"].blockSignals(False)
 
+        # Auto-sync neutralizer x position to the computed default:
+        # 9/10 of the distance between last grid exit and domain end.
+        # Only updates if user has not manually changed the value from the
+        # previously auto-set default (tracked via _last_auto_neut_x).
+        if hasattr(self.sim, 'grid_x_ends') and self.sim.grid_x_ends:
+            _x_exit = self.sim.grid_x_ends[-1]
+            _neut_auto = round(_x_exit + 0.9 * (self.sim.Lx - _x_exit), 3)
+        else:
+            _neut_auto = round(self.sim.Lx - 0.5, 3)
+        _last = getattr(self, '_last_auto_neut_x', None)
+        _current_neut = round(self.adv_params.get("neut_x", _neut_auto), 3)
+        if _last is None or abs(_current_neut - _last) <= 0.001:
+            # User hasn't overridden — apply the new auto value
+            self._last_auto_neut_x = _neut_auto
+            self.adv_params["neut_x"] = _neut_auto
+            print(f"[Build Domain] neut_x auto-set to {_neut_auto:.3f} mm  "
+                  f"(90% into plume: x_exit={_x_exit if hasattr(self.sim, 'grid_x_ends') and self.sim.grid_x_ends else '?':.3f} mm, Lx={self.sim.Lx:.3f} mm)")
+
         self.draw_static_domain()
 
         cfg_name = getattr(self, "current_config_name", "config.json")
