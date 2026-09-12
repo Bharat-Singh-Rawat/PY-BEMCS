@@ -12,9 +12,7 @@
     "neut_x": 10.0,
     "neut_r": 1.5,
     "V_plasma_offset": 26.0,
-    "m_e_ratio": 1000.0,
-    "Lx": 20.0,
-    "Ly": 3.0
+    "m_e_ratio": 1000.0
   },
 
   "simulation": {
