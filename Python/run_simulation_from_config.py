@@ -88,9 +88,11 @@ def parse_config(config_path='config.json'):
         })
 
     # --- Advanced settings ---
-    adv = config.get('advanced_settings', {})
-    params['neut_x'] = adv.get('neut_x', 19.9)
-    params['neut_r'] = adv.get('neut_r', 3.0)
+    neut = config.get('neutralizer', {})
+    params['neut_rate'] = neut.get('neut_rate', 30.0)
+    params['Te'] = neut.get('Te', 2.0)
+    params['neut_x'] = neut.get('neut_x', adv.get('neut_x', None))
+    params['neut_r'] = neut.get('neut_r', adv.get('neut_r', 1.5))
     params['V_plasma_offset'] = adv.get('V_plasma_offset', 20.0)
     params['m_e_ratio'] = adv.get('m_e_ratio', 1000.0)
     if 'Lx' in adv:
