@@ -766,7 +766,7 @@ class DigitalTwinSimulator:
             self.injection_enabled   = True
 
         n0         = params.get('n0_plasma', 1e17)
-        target_ppc = 80.0
+        target_ppc = 40.0
         cell_vol   = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3
         self.macro_weight = max(n0 * cell_vol / target_ppc, 1e3)
         self.mask_grids = []
