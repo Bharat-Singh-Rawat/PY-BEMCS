@@ -1315,7 +1315,7 @@ class DigitalTwinApp(QMainWindow):
 
         row1, spin_v = self.create_input("DC Voltage (V):", -5000, 15000, 100, 3)
         row2, spin_t = self.create_input("Thickness (mm):", 0.0, 10.0, 0.01, 4)
-        row3, spin_gap = self.create_input("Gap to Next (mm):", 0.0, 10.0, 0.01, 4)
+        row3, spin_gap = self.create_input("Gap to Next (mm):", 0.0, 1000.0, 0.01, 4)
         row4, spin_r = self.create_input("Hole Radius (mm):", 0.0, 10.0, 0.01, 4)
         row5, spin_cham = self.create_input("Chamfer (°):", 0.0, 45.0, 0.1, 3)
 
