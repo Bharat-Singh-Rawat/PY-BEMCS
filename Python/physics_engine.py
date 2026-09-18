@@ -1908,12 +1908,19 @@ class DigitalTwinSimulator:
 
         # ————————————————————————————————
         # G. MID-HOLE POTENTIAL DIAGNOSTIC
-        # Evaluate centrerline potential at the axial midpoint of the
-        # first downstream grid (grid 2 if present, else grid 1),
-        # at the radial centre of the relevant aperture(s).
+        # Evaluate centerline/saddle potential at the axial midpoint of the
+        # first downstream grid (grid 2 if present, else grid 1).
+        # In two_holes mode, evaluate at the radial center of the first hole
+        # (hole_centers[0] = 1.5 * screen_r), exactly matching one_hole mode.
         # ————————————————————————————————
         geometry = getattr(self, 'geometry', 'half_hole')
-        hole_centers = getattr(self, 'hole_centers', [0.0])
+        hole_centers = getattr(self, 'hole_centers', None)
+
+        if not hole_centers:
+            if grids and geometry in ('one_hole', 'two_holes'):
+                hole_centers = [1.5 * grids[0]['r']]
+            else:
+                hole_centers = [0.0]
 
         if len(grids) >= 2:
             x_grid_mm = 0.5 * (self.grid_x_starts[1] + self.grid_x_ends[1])
@@ -1924,16 +1931,13 @@ class DigitalTwinSimulator:
 
         x_idx = int(np.clip(round(x_grid_mm / self.dx), 0, self.nx - 1))
 
-        if hole_centers:
-            # For each hole centre, sample the potential and take the minimum
-            # (the critical saddle point for electron backstreaming)
-            pot_samples = []
-            for yc in hole_centers:
-                y_idx = int(np.clip(round(yc / self.dy), 0, self.ny - 1))
-                pot_samples.append(self.V[y_idx, x_idx])
-            min_pot = min(pot_samples)
-        else:
-            min_pot = self.V[self.ny // 2, x_idx]
+        # In all modes (half_hole: y=0, one_hole: y=1.5*rs, two_holes: y=1.5*rs),
+        # hole_centers[0] defines the centerline of the primary (first) aperture.
+        y_c_first = hole_centers[0]
+        y_idx = int(np.clip(round(y_c_first / self.dy), 0, self.ny - 1))
+        min_pot = float(self.V[y_idx, x_idx])
+        self.min_pot = min_pot
+        self.saddle_point_potential = min_pot
 
 
         # ————————————————————————————————
@@ -2061,6 +2065,26 @@ class DigitalTwinSimulator:
         if hasattr(self, 'current_ppc_map'):
             return self.current_ppc_map.astype(np.float64)
         return np.zeros((self.ny, self.nx), dtype=np.float64)
+
+    def get_centerline_potential_profile(self):
+        """
+        Returns (x_coords_mm, V_centerline_V) along the axial direction through the center
+        of the first hole.
+        Consistent across half_hole (y=0), one_hole (y=1.5*r_s), and two_holes (y=1.5*r_s).
+        """
+        geometry = getattr(self, 'geometry', 'half_hole')
+        hole_centers = getattr(self, 'hole_centers', None)
+        if not hole_centers:
+            if hasattr(self, 'grids') and self.grids and geometry in ('one_hole', 'two_holes'):
+                y_c = 1.5 * self.grids[0]['r']
+            else:
+                y_c = 0.0
+        else:
+            y_c = hole_centers[0]
+
+        y_idx = int(np.clip(round(y_c / self.dy), 0, self.ny - 1))
+        x_pts = getattr(self, 'xpts', np.linspace(0, self.Lx, self.nx))
+        return x_pts.copy(), self.V[y_idx, :].copy()
 
     def enable_perf_monitor(self, **kwargs):
         """
