@@ -2069,7 +2069,7 @@ class DigitalTwinSimulator:
         Keyword arguments are forwarded to PerformanceMonitor.__init__
         (log_every, warn_particles, warn_memory_mb, warn_step_time_ms).
         """
-        from performance_monitor import PerformanceMonitor
+        from diagnostics.performance_monitor import PerformanceMonitor
         self._perf_monitor = PerformanceMonitor(**kwargs)
         return self._perf_monitor
 
@@ -2082,137 +2082,20 @@ class DigitalTwinSimulator:
     def get_total_energy(self):
         """
         Compute and store the instantaneous total energy of the PIC system:
-
             E_total = E_kinetic_ions + E_kinetic_electrons + E_field
-
-        where:
-            E_kinetic_ions  = sum_p  0.5 * m_ion * (vx^2+vy^2+vz^2) * macro_weight
-            E_kinetic_electrons = sum_e  0.5 * m_e  * (vx^2+vy^2+vz^2) * macro_weight
-            E_field         = (eps0/2) * sum_cells (Ex^2 + Ey^2) * dx*dy*dz
-
-        Also appends results to the energy history and prints a terminal warning
-        if the total energy changes by more than `energy_warning_threshold` (5%) in a
-        single step, which signals a violation of energy conservation.
-
-        Returns
-        -------
-        dict with keys: t_s, ke_ions_J, ke_elec_J, field_J, total_J
+        Delegates calculation and warning logging to diagnostics.metrics.compute_energy_budget.
         """
-        t_now = self.iteration * self.dt
-
-        # --- Ion kinetic energy ---
-        if self.num_p > 0:
-            v2 = (self.p_vx[:self.num_p]**2
-                  + self.p_vy[:self.num_p]**2
-                  + self.p_vz[:self.num_p]**2)
-            ke_i = float(np.sum(v2)) * 0.5 * self.m_ion * self.macro_weight
-        else:
-            ke_i = 0.0
-
-        # --- Electron kinetic energy ---
-        # Electrons share the same macro_weight as ions (quasi-neutrality assumption)
-        if self.num_e > 0:
-            v2e = (self.e_vx[:self.num_e]**2
-                   + self.e_vy[:self.num_e]**2
-                   + self.e_vz[:self.num_e]**2)
-            ke_e = float(np.sum(v2e)) * 0.5 * self.m_e * self.macro_weight
-        else:
-            ke_e = 0.0
-
-        # --- Electrostatic field energy: (eps0/2) * integral(|E|^2) dV ---
-        # Cell volume uses 2D slice with unit depth of 1 m (standard 2D PIC convention)
-        cell_area = (self.dx * 1e-3) * (self.dy * 1e-3)  # [m^2]
-        e_field = float(np.sum(self.Ex**2 + self.Ey**2)) * 0.5 * self.eps0 * cell_area
-
-        total = ke_i + ke_e + e_field
-
-        # --- Step-to-step conservation warning ---
-        if self._prev_total_energy is not None and self._prev_total_energy > 0.0:
-            rel_change = abs(total - self._prev_total_energy) / self._prev_total_energy
-            if rel_change > self.energy_warning_threshold:
-                print(
-                    f"[Energy Warning] iter={self.iteration}: "
-                    f"total energy changed by {rel_change*100:.1f}% in one step "
-                    f"(prev={self._prev_total_energy:.4e} J, now={total:.4e} J). "
-                    f"KE_i={ke_i:.3e} J, KE_e={ke_e:.3e} J, E_field={e_field:.3e} J"
-                )
-        self._prev_total_energy = total
-
-        # Append to history
-        self.energy_history_t.append(t_now)
-        self.energy_history_ke_i.append(ke_i)
-        self.energy_history_ke_e.append(ke_e)
-        self.energy_history_fe.append(e_field)
-        self.energy_history_tot.append(total)
-
-        return dict(t_s=t_now, ke_ions_J=ke_i, ke_elec_J=ke_e, field_J=e_field, total_J=total)
+        from diagnostics.metrics import compute_energy_budget
+        return compute_energy_budget(self)
 
     def get_total_charge(self):
         """
         Compute and store the instantaneous charge budget of the PIC system:
-
-            Q_ions        = sum_p  q_ion * macro_weight
-            Q_electrons   = - sum_e e * macro_weight
-            Q_boltzmann   = integral (rho_e_continuum) dV
-            Q_free        = Q_ions + Q_electrons   (discrete macroparticles)
-            Q_net         = Q_free + Q_boltzmann   (total space charge)
-
-        Returns
-        -------
-        dict with keys: t_s, q_ions_C, q_elec_C, q_boltz_C, q_free_C, q_net_C
+            Q_net = Q_ions + Q_electrons + Q_boltzmann
+        Delegates calculation and history logging to diagnostics.metrics.compute_charge_budget.
         """
-        t_now = self.iteration * self.dt
-
-        # --- Ion charge ---
-        if self.num_p > 0:
-            q_i = float(self.num_p) * self.q_ion * self.macro_weight
-        else:
-            q_i = 0.0
-
-        # --- Kinetic Electron charge ---
-        if self.num_e > 0:
-            q_e = - float(self.num_e) * self.q * self.macro_weight
-        else:
-            q_e = 0.0
-
-        # --- Boltzmann fluid electron charge ---
-        # rho_e = -q * n0 * exp((min(V, Vp) - Vp)/Te)
-        if hasattr(self, 'V') and self.V is not None:
-            # cell volume in m^3 (consistent with macro_weight 1mm depth)
-            cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3
-            grids = getattr(self, 'grids', [{'V': 1000}])
-            v_offset = getattr(self, 'V_plasma_offset', 20.0)
-            V_p = grids[0]['V'] + v_offset if grids else 1020.0
-            Te = getattr(self, 'Te_up', 3.0)
-            n0 = getattr(self, 'n0_plasma', 1e17)
-
-            interior = ~self.isBound if hasattr(self, 'isBound') else slice(None)
-            bf = np.exp((np.minimum(self.V[interior], V_p) - V_p) / Te)
-            q_b = float(np.sum(-self.q * n0 * bf)) * cell_vol
-        else:
-            q_b = 0.0
-
-        q_free = q_i + q_e
-        q_net  = q_free + q_b
-
-        # Append to history
-        self.charge_history_t.append(t_now)
-        self.charge_history_q_i.append(q_i)
-        self.charge_history_q_e.append(q_e)
-        self.charge_history_q_b.append(q_b)
-        self.charge_history_q_free.append(q_free)
-        self.charge_history_q_net.append(q_net)
-
-        self._prev_total_charge = q_net
-
-        return dict(
-            t_s=t_now,
-            q_ions_C=q_i,
-            q_elec_C=q_e,
-            q_boltz_C=q_b,
-            q_free_C=q_free,
-            q_net_C=q_net,
-        )
+        from diagnostics.metrics import compute_charge_budget
+        return compute_charge_budget(self)
 
     # —————————————————————————————————
     def get_third_grid_transparency_frame(self):

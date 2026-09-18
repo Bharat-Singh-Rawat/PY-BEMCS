@@ -6,7 +6,7 @@ PPC statistics, memory usage, wall-clock timing) and provides periodic console
 summaries, threshold-based warnings, and CSV export for post-processing.
 
 Usage:
-    from performance_monitor import PerformanceMonitor
+    from diagnostics.performance_monitor import PerformanceMonitor
 
     monitor = PerformanceMonitor(log_every=50)
     # ... inside simulation loop:
