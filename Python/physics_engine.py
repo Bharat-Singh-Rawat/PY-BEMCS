@@ -458,6 +458,16 @@ class DigitalTwinSimulator:
         # Warning threshold: relative change in total energy per step (5%)
         self.energy_warning_threshold = 0.05
 
+        # Charge balance tracking
+        self.charge_history_t    = []   # simulation time [s]
+        self.charge_history_q_i  = []   # ion charge [C]
+        self.charge_history_q_e  = []   # kinetic electron charge [C]
+        self.charge_history_q_b  = []   # fluid Boltzmann electron charge [C]
+        self.charge_history_q_free = [] # net particle charge (q_i + q_e) [C]
+        self.charge_history_q_net= []   # total net space charge (q_free + q_b) [C]
+        self._prev_total_charge  = None # for step-to-step change detection
+        self.charge_warning_threshold = 0.10
+
     def _recompute_cell_constants(self):
         self.C_cell = self.mat_rho * (self.dx*1e-3) * (self.dy*1e-3) * 1e-3 * self.mat_cp
         self.A_cell = 2 * (self.dx*1e-3) * 1e-3
@@ -788,6 +798,22 @@ class DigitalTwinSimulator:
         self.T_grids    = []
         self.isBound.fill(False)
         self.V_fixed.fill(0.0)
+
+        # Reset energy and charge conservation histories
+        self.energy_history_t.clear()
+        self.energy_history_ke_i.clear()
+        self.energy_history_ke_e.clear()
+        self.energy_history_fe.clear()
+        self.energy_history_tot.clear()
+        self._prev_total_energy = None
+
+        self.charge_history_t.clear()
+        self.charge_history_q_i.clear()
+        self.charge_history_q_e.clear()
+        self.charge_history_q_b.clear()
+        self.charge_history_q_free.clear()
+        self.charge_history_q_net.clear()
+        self._prev_total_charge = None
 
         if not hasattr(self, 'grid_deflections') or len(self.grid_deflections) != len(grids):
             self.grid_deflections = [0.0] * len(grids)
@@ -2120,6 +2146,73 @@ class DigitalTwinSimulator:
         self.energy_history_tot.append(total)
 
         return dict(t_s=t_now, ke_ions_J=ke_i, ke_elec_J=ke_e, field_J=e_field, total_J=total)
+
+    def get_total_charge(self):
+        """
+        Compute and store the instantaneous charge budget of the PIC system:
+
+            Q_ions        = sum_p  q_ion * macro_weight
+            Q_electrons   = - sum_e e * macro_weight
+            Q_boltzmann   = integral (rho_e_continuum) dV
+            Q_free        = Q_ions + Q_electrons   (discrete macroparticles)
+            Q_net         = Q_free + Q_boltzmann   (total space charge)
+
+        Returns
+        -------
+        dict with keys: t_s, q_ions_C, q_elec_C, q_boltz_C, q_free_C, q_net_C
+        """
+        t_now = self.iteration * self.dt
+
+        # --- Ion charge ---
+        if self.num_p > 0:
+            q_i = float(self.num_p) * self.q_ion * self.macro_weight
+        else:
+            q_i = 0.0
+
+        # --- Kinetic Electron charge ---
+        if self.num_e > 0:
+            q_e = - float(self.num_e) * self.q * self.macro_weight
+        else:
+            q_e = 0.0
+
+        # --- Boltzmann fluid electron charge ---
+        # rho_e = -q * n0 * exp((min(V, Vp) - Vp)/Te)
+        if hasattr(self, 'V') and self.V is not None:
+            # cell volume in m^3 (consistent with macro_weight 1mm depth)
+            cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3
+            grids = getattr(self, 'grids', [{'V': 1000}])
+            v_offset = getattr(self, 'V_plasma_offset', 20.0)
+            V_p = grids[0]['V'] + v_offset if grids else 1020.0
+            Te = getattr(self, 'Te_up', 3.0)
+            n0 = getattr(self, 'n0_plasma', 1e17)
+
+            interior = ~self.isBound if hasattr(self, 'isBound') else slice(None)
+            bf = np.exp((np.minimum(self.V[interior], V_p) - V_p) / Te)
+            q_b = float(np.sum(-self.q * n0 * bf)) * cell_vol
+        else:
+            q_b = 0.0
+
+        q_free = q_i + q_e
+        q_net  = q_free + q_b
+
+        # Append to history
+        self.charge_history_t.append(t_now)
+        self.charge_history_q_i.append(q_i)
+        self.charge_history_q_e.append(q_e)
+        self.charge_history_q_b.append(q_b)
+        self.charge_history_q_free.append(q_free)
+        self.charge_history_q_net.append(q_net)
+
+        self._prev_total_charge = q_net
+
+        return dict(
+            t_s=t_now,
+            q_ions_C=q_i,
+            q_elec_C=q_e,
+            q_boltz_C=q_b,
+            q_free_C=q_free,
+            q_net_C=q_net,
+        )
 
     # —————————————————————————————————
     def get_third_grid_transparency_frame(self):
