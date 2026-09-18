@@ -904,25 +904,22 @@ class PPCWindow(QWidget):
 
         mode = self.combo_mode.currentText()
         if "Time-Averaged" in mode:
-            data = sim.get_avg_ppc_map()
+            raw_ppc = sim.get_avg_ppc_map()
             title = f"Time-Averaged PPC — {getattr(sim, 'ppc_steps_count', 0)} steps"
         elif "Instantaneous" in mode:
-            data = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx))).astype(float)
+            raw_ppc = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx))).astype(float)
             title = f"Instantaneous PPC — Step {sim.iteration}"
         else:
-            cur = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx)))
-            data = np.where((cur > 0) & (cur < 3), 1.0, 0.0)
-            title = f"Low PPC Warning (< 3 particles/cell) — Step {sim.iteration}"
+            raw_ppc = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx))).astype(float)
+            title = f"Low PPC Warning Mask (< 3 particles/cell) — Step {sim.iteration}"
 
-        # Statistics
-        active_mask  = data > 0
+        # True active and low PPC masks based on actual particle numbers
+        active_mask  = (raw_ppc > 0)
+        low_mask     = (raw_ppc > 0) & (raw_ppc < 3)
         total_active = int(np.count_nonzero(active_mask))
-        if "Low PPC" in mode:
-            low_count = int(np.count_nonzero(data == 1.0))
-        else:
-            low_count = int(np.count_nonzero((data > 0) & (data < 3)))
-        pct_low     = (low_count / total_active * 100.0) if total_active > 0 else 0.0
-        mean_active = float(np.mean(data[active_mask])) if total_active > 0 else 0.0
+        low_count    = int(np.count_nonzero(low_mask))
+        pct_low      = (low_count / total_active * 100.0) if total_active > 0 else 0.0
+        mean_active  = float(np.mean(raw_ppc[active_mask])) if total_active > 0 else 0.0
 
         # Physical zone boundaries
         x_up   = getattr(sim, 'upstream_gap_mm', 0.8)
@@ -932,7 +929,7 @@ class PPCWindow(QWidget):
 
         def _zone_stats(cols):
             a = int(np.count_nonzero(active_mask[:, cols]))
-            l = int(np.count_nonzero((data[:, cols] > 0) & (data[:, cols] < 3)))
+            l = int(np.count_nonzero(low_mask[:, cols]))
             p = (l / a * 100.0) if a > 0 else 0.0
             return a, l, p
 
@@ -946,6 +943,16 @@ class PPCWindow(QWidget):
             f"Optics {pct_opt:.1f}% ({low_opt}/{act_opt})  |  "
             f"Plume {pct_plm:.1f}% ({low_plm}/{act_plm})"
         )
+        if low_count > 0:
+            self.lbl_stats.setStyleSheet(
+                "font-family: monospace; font-size: 11px; background-color: #fff8e6; "
+                "padding: 6px; border: 1px solid #e3a008; border-radius: 4px;"
+            )
+        else:
+            self.lbl_stats.setStyleSheet(
+                "font-family: monospace; font-size: 11px; background-color: #f0fdf4; "
+                "padding: 6px; border: 1px solid #86efac; border-radius: 4px;"
+            )
 
         # Clear axes safely — reset axes locator to prevent matplotlib from
         # nesting ColorbarLocator wrappers on every iteration (which triggers RecursionError after ~1000 steps).
@@ -961,12 +968,19 @@ class PPCWindow(QWidget):
         extent = [0, sim.Lx, 0, sim.Ly]
 
         if "Low PPC" in mode:
-            cmap = matplotlib.colormaps['Reds'].resampled(2)
-            im = self.ax.imshow(data, origin='lower', extent=extent,
-                                cmap=cmap, vmin=0, vmax=1, aspect='auto')
+            from matplotlib.colors import ListedColormap, BoundaryNorm
+            # 3 categories: 0 = Empty / Vacuum, 1 = OK (>= 3), 2 = LOW (< 3)
+            cat_map = np.zeros((sim.ny, sim.nx), dtype=float)
+            cat_map[raw_ppc >= 3] = 1.0
+            cat_map[low_mask]     = 2.0
+
+            cmap = ListedColormap(['#eef1f6', '#2ca02c', '#d62728'])
+            norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
+            im = self.ax.imshow(cat_map, origin='lower', extent=extent,
+                                cmap=cmap, norm=norm, aspect='auto')
         else:
-            vmax = max(10.0, float(np.percentile(data[data > 0], 98))) if np.any(data > 0) else 10.0
-            im = self.ax.imshow(data, origin='lower', extent=extent,
+            vmax = max(10.0, float(np.percentile(raw_ppc[raw_ppc > 0], 98))) if np.any(raw_ppc > 0) else 10.0
+            im = self.ax.imshow(raw_ppc, origin='lower', extent=extent,
                                 cmap='turbo', vmin=0, vmax=vmax, aspect='auto')
 
         # Grid boundary overlay
@@ -993,12 +1007,10 @@ class PPCWindow(QWidget):
         # Colorbar drawn into the pre-allocated cax (no shared-axis corruption)
         self.cbar = self.fig.colorbar(im, cax=self.cax)
         if "Low PPC" in mode:
-            self.cbar.set_ticks([0.25, 0.75])
-            self.cbar.set_ticklabels(["OK (>= 3)", "LOW (< 3)"])
+            self.cbar.set_ticks([0, 1, 2])
+            self.cbar.set_ticklabels(["Empty", "OK (>= 3)", "LOW (< 3)"])
         else:
             self.cbar.set_label("Particles / Cell (PPC)", fontsize=8)
-
-        self.canvas.draw_idle()
 
         self.canvas.draw_idle()
 
