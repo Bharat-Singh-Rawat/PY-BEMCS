@@ -882,7 +882,8 @@ class DigitalTwinSimulator:
         V_plasma = grids[0]['V'] + v_offset
         Te_up    = params.get('Te_up', 3.0)
         n0       = params.get('n0_plasma', 1e17)
-        omega    = float(params.get('poisson_omega', 0.2))
+        omega_min = float(params.get('poisson_omega', 0.2))
+        omega_max = float(params.get('poisson_omega_max', 0.35)) if params.get('poisson_adaptive_omega', False) else omega_min
 
         # Adaptive Picard settings:
         target_tol = float(tol_V if tol_V is not None else params.get('poisson_tol_V', 0.05))
@@ -902,11 +903,11 @@ class DigitalTwinSimulator:
 
         if _GPU_POISSON and self.laplacian_lu_gpu is not None:
             n_done, delta_V, rms_V, status = self._recalc_poisson_gpu(
-                max_it, coeff, V_plasma, Te_up, n0, omega, target_tol, min_it, tol_rms, peak_guard
+                max_it, coeff, V_plasma, Te_up, n0, omega_min, omega_max, target_tol, min_it, tol_rms, peak_guard
             )
         else:
             n_done, delta_V, rms_V, status = self._recalc_poisson_cpu(
-                max_it, coeff, V_plasma, Te_up, n0, omega, target_tol, min_it, tol_rms, peak_guard
+                max_it, coeff, V_plasma, Te_up, n0, omega_min, omega_max, target_tol, min_it, tol_rms, peak_guard
             )
 
         self.last_poisson_iters = n_done
@@ -941,7 +942,7 @@ class DigitalTwinSimulator:
         self.Ey = self.Ey.astype(_NP_FP)
         self.Ex = self.Ex.astype(_NP_FP)
 
-    def _recalc_poisson_cpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
+    def _recalc_poisson_cpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega_min=0.2, omega_max=0.35, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
         b = np.zeros(self.nx * self.ny, dtype=np.float64)
         V_fixed_flat = self.V_fixed.flatten()
         rhs_rho_mask = getattr(self, 'is_rhs_rho_mask', self.is_interior_mask)
@@ -954,11 +955,12 @@ class DigitalTwinSimulator:
         last_rms = 0.0
         iters_done = 0
         # Method 1 (Trust-Region Step-Clamping): bound per-iteration jump to fraction of Te
-        max_step = max(1.5 * float(Te_up), 3.0)
+        max_step = max(5.0 * float(Te_up), 20.0)
 
         for it in range(1, max_iters + 1):
             iters_done = it
-            rho_e     = -self.q * n0 * np.exp((np.minimum(self.V, V_plasma) - V_plasma) / Te_up)
+            boltzmann_factor = np.exp((np.minimum(self.V, V_plasma) - V_plasma) / Te_up)
+            rho_e     = -self.q * n0 * boltzmann_factor
             rho_total = self.rho + rho_e
             rho_flat  = rho_total.flatten()
 
@@ -979,14 +981,16 @@ class DigitalTwinSimulator:
                 best_diff = last_diff
                 V_best = self.V.copy()
 
-            # Method 1: Trust-region step-clamping (Safeguarded Picard)
+            # Method 1: Trust-region step-clamping with Spatially-Adaptive Omega
             if it == 1 and last_diff > 50.0:
                 # Cold start: first iteration seeds the macroscopic Laplace potential field
                 self.V = V_new.astype(np.float64)
             else:
                 # Clamps large overshoots at stiff meniscus cells, preventing flip-flop divergence
                 delta_V_clamped = np.clip(delta_V_raw, -max_step, max_step)
-                self.V = (self.V + omega * delta_V_clamped).astype(np.float64)
+                # Spatially-adaptive omega: damped (omega_min) at sheath, fast (omega_max) in gap & plume
+                omega_map = omega_max - (omega_max - omega_min) * boltzmann_factor
+                self.V = (self.V + omega_map * delta_V_clamped).astype(np.float64)
 
             # Check 1: Dual-norm convergence (Method 3)
             converged_linf = (last_diff <= tol_V)
@@ -1011,14 +1015,16 @@ class DigitalTwinSimulator:
             if it >= min_iters + 5:
                 w = diff_history[-5:]
                 progress = (w[0] - w[-1]) / max(w[0], 1e-12)
-                # Less than 2% improvement or less than 5 mV change near the noise floor
-                if progress < 0.02 or (w[0] - w[-1] < 0.005 and last_diff <= 0.30):
+                abs_change = w[0] - w[-1]
+                # Stagnation occurs if progress has genuinely flatlined (< 1% and < 50 mV change)
+                # or if hovering at the macroparticle shot-noise floor (< 5 mV change and delta_V <= 0.30 V)
+                if (progress < 0.01 and abs_change < 0.05) or (abs_change < 0.005 and last_diff <= 0.30):
                     status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
                     break
 
         return iters_done, last_diff, last_rms, status
 
-    def _recalc_poisson_gpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
+    def _recalc_poisson_gpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega_min=0.2, omega_max=0.35, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
         V_gpu            = cp.asarray(self.V, dtype=cp.float64)
         rho_gpu          = cp.asarray(self.rho).astype(cp.float64)
         V_fixed_flat_gpu = cp.asarray(self.V_fixed.ravel(), dtype=cp.float64)
@@ -1036,11 +1042,12 @@ class DigitalTwinSimulator:
         last_diff = 0.0
         last_rms = 0.0
         iters_done = 0
-        max_step = max(1.5 * float(Te_up), 3.0)
+        max_step = max(5.0 * float(Te_up), 20.0)
 
         for it in range(1, max_iters + 1):
             iters_done = it
-            rho_e_gpu    = -q * n0 * cp.exp((cp.minimum(V_gpu, V_plasma) - V_plasma) / Te_up)
+            boltzmann_factor_gpu = cp.exp((cp.minimum(V_gpu, V_plasma) - V_plasma) / Te_up)
+            rho_e_gpu    = -q * n0 * boltzmann_factor_gpu
             rho_flat_gpu = (rho_gpu + rho_e_gpu).ravel()
             b_gpu[:] = 0.0
             b_gpu[bound_mask_gpu]   = V_fixed_flat_gpu[bound_mask_gpu]
@@ -1059,12 +1066,13 @@ class DigitalTwinSimulator:
                 best_diff = last_diff
                 V_best_gpu = V_gpu.copy()
 
-            # Method 1: Trust-region step-clamping
+            # Method 1: Trust-region step-clamping with Spatially-Adaptive Omega
             if it == 1 and last_diff > 50.0:
                 V_gpu = V_new_gpu
             else:
                 delta_V_clamped_gpu = cp.clip(delta_V_raw_gpu, -max_step, max_step)
-                V_gpu = V_gpu + omega * delta_V_clamped_gpu
+                omega_map_gpu = omega_max - (omega_max - omega_min) * boltzmann_factor_gpu
+                V_gpu = V_gpu + omega_map_gpu * delta_V_clamped_gpu
 
             # Check 1: Dual-norm convergence (Method 3)
             converged_linf = (last_diff <= tol_V)
@@ -1089,7 +1097,8 @@ class DigitalTwinSimulator:
             if it >= min_iters + 5:
                 w = diff_history[-5:]
                 progress = (w[0] - w[-1]) / max(w[0], 1e-12)
-                if progress < 0.02 or (w[0] - w[-1] < 0.005 and last_diff <= 0.30):
+                abs_change = w[0] - w[-1]
+                if (progress < 0.01 and abs_change < 0.05) or (abs_change < 0.005 and last_diff <= 0.30):
                     status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
                     break
 
