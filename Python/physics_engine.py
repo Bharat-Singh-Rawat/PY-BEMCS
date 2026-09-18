@@ -777,9 +777,13 @@ class DigitalTwinSimulator:
             self.injection_enabled   = True
 
         n0         = params.get('n0_plasma', 1e17)
-        target_ppc = 40.0
+        self.target_ppc = float(params.get('target_ppc', 40.0))
         cell_vol   = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3
-        self.macro_weight = max(n0 * cell_vol / target_ppc, 1e3)
+        entire_bulk_plasma = params.get('entire_bulk_plasma', False)
+        bohm_factor = 1.0 if entire_bulk_plasma else 0.61
+        # Flux-compensated macro_weight: Bohm injection flux carries bohm_factor * n0.
+        # Calibrating with bohm_factor ensures steady-state upstream PPC matches target_ppc.
+        self.macro_weight = max(bohm_factor * n0 * cell_vol / self.target_ppc, 1e2)
         self.mask_grids = []
         self.T_grids    = []
         self.isBound.fill(False)
