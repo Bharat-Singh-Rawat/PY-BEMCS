@@ -243,13 +243,17 @@ def run_simulation():
         print(f"Built Grid {i}: V={g['V']} V, t={g['t']} mm, gap={g['gap']} mm, r={g['r']} mm, cham={g['cham']} deg")
     print("Domain built successfully.")
 
+    # Enable runtime performance monitor
+    monitor = sim.enable_perf_monitor(log_every=50)
+    print("Performance monitor enabled (summary every 50 steps).")
+
     print("Starting simulation...")
     print("Press Ctrl+C to stop.")
 
     try:
         while True:
             start_time = time.time()
-            remeshed, min_pot, current_div, T_grids = sim.step(params)
+            remeshed, min_pot, current_div, T_grids, _ = sim.step(params)
             end_time = time.time()
 
             if sim.iteration % 10 == 0:
@@ -283,9 +287,16 @@ def run_simulation():
         print("Simulation stopped by user.")
     except Exception as e:
         print(f"An error occurred during the simulation: {e}")
+    finally:
+        # Final report and CSV export
+        if monitor is not None:
+            monitor.print_final_report()
+            csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'perf_log.csv')
+            monitor.export_csv(csv_path)
 
 if __name__ == "__main__":
     run_simulation() 
+
 """
 ================================================================================
 EXAMPLE config.ini file
