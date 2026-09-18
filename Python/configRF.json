@@ -22,7 +22,8 @@
     "Accel": 0.5,
     "Thresh": 10000.0,
     "sim_mode": "Thermal",
-    "geometry": "half_hole"
+    "geometry": "half_hole",
+    "target_ppc": 200
   },
 
   "rf_co_extraction": {
@@ -50,7 +51,7 @@
     {
       "V": -200.0,
       "t": 2,
-      "gap": 6,
+      "gap": 8,
       "r": 1,
       "cham": 0.0
     }
