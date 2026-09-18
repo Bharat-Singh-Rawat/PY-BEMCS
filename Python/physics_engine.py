@@ -4,6 +4,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import factorized
 import taichi as ti
 import sys
+import time as _time_mod
 
 # Taichi-on when running from Python, off when running from a frozen .exe
 USE_TAICHI = not getattr(sys, "frozen", False)
@@ -358,6 +359,16 @@ class DigitalTwinSimulator:
         self.transmitted_ions_step = 0.0
         self.entered_optics      = 0.0
         self.entered_optics_step = 0.0
+        self.lost_to_oob_step    = 0.0
+
+        # Runtime performance monitor (opt-in)
+        self._perf_monitor = None
+        self._last_injection_area = 0.0  # logged for diagnostics
+        self.last_poisson_iters = 0
+        self.last_poisson_delta_V = 0.0
+        self.last_poisson_rms = 0.0
+        self.last_poisson_converged = True
+        self.last_poisson_status = 'converged'
 
         self.Lx = 3
         self.Ly = 3
@@ -857,7 +868,7 @@ class DigitalTwinSimulator:
         self.recalc_poisson(iterations=30 if not preserve_state else 10, params=params)
 
     # —————————————————————————————————
-    def recalc_poisson(self, iterations=5, params=None):
+    def recalc_poisson(self, iterations=None, params=None, tol_V=None, min_iters=3):
         if self.laplacian_lu is None:
             return
 
@@ -871,12 +882,49 @@ class DigitalTwinSimulator:
         V_plasma = grids[0]['V'] + v_offset
         Te_up    = params.get('Te_up', 3.0)
         n0       = params.get('n0_plasma', 1e17)
-        omega    = 0.2
+        omega    = float(params.get('poisson_omega', 0.2))
+
+        # Adaptive Picard settings:
+        target_tol = float(tol_V if tol_V is not None else params.get('poisson_tol_V', 0.05))
+        tol_rms    = float(params.get('poisson_tol_V_rms', target_tol * 0.2))
+        peak_guard = float(params.get('poisson_tol_peak_guard', target_tol * 5.0))
+        min_it     = int(min_iters if min_iters is not None else params.get('poisson_min_iters', 3))
+        # Default max allowed is now high (60 in simulation steps, 100 in build_domain)
+        # to allow difficult evaluations to converge, protected by stagnation/divergence checks.
+        default_max = 100 if getattr(self, 'iteration', 0) == 0 else 60
+        if iterations is not None and iterations > default_max:
+            max_it = iterations
+        elif iterations is not None and not params.get('poisson_adaptive', True):
+            max_it = iterations
+            target_tol = 0.0  # run exactly the requested fixed count
+        else:
+            max_it = int(params.get('poisson_max_iters', default_max))
 
         if _GPU_POISSON and self.laplacian_lu_gpu is not None:
-            self._recalc_poisson_gpu(iterations, coeff, V_plasma, Te_up, n0, omega)
+            n_done, delta_V, rms_V, status = self._recalc_poisson_gpu(
+                max_it, coeff, V_plasma, Te_up, n0, omega, target_tol, min_it, tol_rms, peak_guard
+            )
         else:
-            self._recalc_poisson_cpu(iterations, coeff, V_plasma, Te_up, n0, omega)
+            n_done, delta_V, rms_V, status = self._recalc_poisson_cpu(
+                max_it, coeff, V_plasma, Te_up, n0, omega, target_tol, min_it, tol_rms, peak_guard
+            )
+
+        self.last_poisson_iters = n_done
+        self.last_poisson_delta_V = delta_V
+        self.last_poisson_rms = rms_V
+        self.last_poisson_status = status
+        self.last_poisson_converged = (status in ['converged', 'stagnated_noise_floor'])
+
+        if status == 'diverged':
+            print(
+                f"[Poisson Warning] Iter {self.iteration}: Divergence detected in Poisson solver "
+                f"(error grew to {delta_V:.2f} V, rms {rms_V*1000:.1f} mV). Terminated early at Picard iter {n_done}."
+            )
+        elif status == 'stagnated':
+            print(
+                f"[Poisson Warning] Iter {self.iteration}: Stagnation detected in Poisson solver "
+                f"(stuck at delta_V = {delta_V:.2f} V, rms {rms_V*1000:.1f} mV, progress < 2% over 5 iters). Terminated at Picard iter {n_done}."
+            )
 
         self.Ey, self.Ex = np.gradient(-self.V, self.dy*1e-3, self.dx*1e-3)
 
@@ -893,12 +941,23 @@ class DigitalTwinSimulator:
         self.Ey = self.Ey.astype(_NP_FP)
         self.Ex = self.Ex.astype(_NP_FP)
 
-    def _recalc_poisson_cpu(self, iterations, coeff, V_plasma, Te_up, n0, omega):
+    def _recalc_poisson_cpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
         b = np.zeros(self.nx * self.ny, dtype=np.float64)
         V_fixed_flat = self.V_fixed.flatten()
         rhs_rho_mask = getattr(self, 'is_rhs_rho_mask', self.is_interior_mask)
 
-        for _ in range(iterations):
+        diff_history = []
+        V_best = self.V.copy()
+        best_diff = float('inf')
+        status = 'max_iters'
+        last_diff = 0.0
+        last_rms = 0.0
+        iters_done = 0
+        # Method 1 (Trust-Region Step-Clamping): bound per-iteration jump to fraction of Te
+        max_step = max(1.5 * float(Te_up), 3.0)
+
+        for it in range(1, max_iters + 1):
+            iters_done = it
             rho_e     = -self.q * n0 * np.exp((np.minimum(self.V, V_plasma) - V_plasma) / Te_up)
             rho_total = self.rho + rho_e
             rho_flat  = rho_total.flatten()
@@ -909,9 +968,57 @@ class DigitalTwinSimulator:
 
             V_new_flat = self.laplacian_lu(b)
             V_new      = V_new_flat.reshape((self.ny, self.nx))
-            self.V     = ((1-omega)*self.V + omega*V_new).astype(np.float64)
+            
+            delta_V_raw = V_new - self.V
+            last_diff  = float(np.max(np.abs(delta_V_raw)))
+            last_rms   = float(np.sqrt(np.mean(delta_V_raw**2)))
+            diff_history.append(last_diff)
 
-    def _recalc_poisson_gpu(self, iterations, coeff, V_plasma, Te_up, n0, omega):
+            # Track best state seen so far
+            if last_diff < best_diff:
+                best_diff = last_diff
+                V_best = self.V.copy()
+
+            # Method 1: Trust-region step-clamping (Safeguarded Picard)
+            if it == 1 and last_diff > 50.0:
+                # Cold start: first iteration seeds the macroscopic Laplace potential field
+                self.V = V_new.astype(np.float64)
+            else:
+                # Clamps large overshoots at stiff meniscus cells, preventing flip-flop divergence
+                delta_V_clamped = np.clip(delta_V_raw, -max_step, max_step)
+                self.V = (self.V + omega * delta_V_clamped).astype(np.float64)
+
+            # Check 1: Dual-norm convergence (Method 3)
+            converged_linf = (last_diff <= tol_V)
+            converged_rms  = (last_rms <= tol_rms and last_diff <= peak_guard)
+            if it >= min_iters and (converged_linf or converged_rms):
+                status = 'converged'
+                break
+
+            # Check 2: Divergence detection
+            if it >= 4:
+                baseline = diff_history[1] if len(diff_history) > 1 and diff_history[0] > 50.0 else diff_history[0]
+                if (last_diff > 3.0 * baseline and last_diff > 2.0) or (
+                    len(diff_history) >= 4 and
+                    diff_history[-1] > diff_history[-2] > diff_history[-3] > diff_history[-4] and
+                    last_diff > 1.0
+                ) or np.isnan(last_diff) or last_diff > 50000.0:
+                    status = 'diverged'
+                    self.V = V_best  # Revert to best known potential
+                    break
+
+            # Check 3: Stagnation detection (over a 5-iteration window)
+            if it >= min_iters + 5:
+                w = diff_history[-5:]
+                progress = (w[0] - w[-1]) / max(w[0], 1e-12)
+                # Less than 2% improvement or less than 5 mV change near the noise floor
+                if progress < 0.02 or (w[0] - w[-1] < 0.005 and last_diff <= 0.30):
+                    status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
+                    break
+
+        return iters_done, last_diff, last_rms, status
+
+    def _recalc_poisson_gpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
         V_gpu            = cp.asarray(self.V, dtype=cp.float64)
         rho_gpu          = cp.asarray(self.rho).astype(cp.float64)
         V_fixed_flat_gpu = cp.asarray(self.V_fixed.ravel(), dtype=cp.float64)
@@ -922,7 +1029,17 @@ class DigitalTwinSimulator:
         rhs_rho_mask_gpu = cp.asarray(rhs_rho_mask)
         bound_mask_gpu   = cp.asarray(self.is_bound_mask)
 
-        for _ in range(iterations):
+        diff_history = []
+        V_best_gpu = V_gpu.copy()
+        best_diff = float('inf')
+        status = 'max_iters'
+        last_diff = 0.0
+        last_rms = 0.0
+        iters_done = 0
+        max_step = max(1.5 * float(Te_up), 3.0)
+
+        for it in range(1, max_iters + 1):
+            iters_done = it
             rho_e_gpu    = -q * n0 * cp.exp((cp.minimum(V_gpu, V_plasma) - V_plasma) / Te_up)
             rho_flat_gpu = (rho_gpu + rho_e_gpu).ravel()
             b_gpu[:] = 0.0
@@ -930,9 +1047,55 @@ class DigitalTwinSimulator:
             b_gpu[rhs_rho_mask_gpu] = -coeff * rho_flat_gpu[rhs_rho_mask_gpu]
             V_new_flat = self.laplacian_lu_gpu.solve(b_gpu)
             V_new_gpu  = V_new_flat.reshape((self.ny, self.nx))
-            V_gpu      = (1.0-omega)*V_gpu + omega*V_new_gpu
+            
+            delta_V_raw_gpu = V_new_gpu - V_gpu
+            diff_gpu   = cp.max(cp.abs(delta_V_raw_gpu))
+            rms_gpu    = cp.sqrt(cp.mean(delta_V_raw_gpu**2))
+            last_diff  = float(cp.asnumpy(diff_gpu))
+            last_rms   = float(cp.asnumpy(rms_gpu))
+            diff_history.append(last_diff)
+
+            if last_diff < best_diff:
+                best_diff = last_diff
+                V_best_gpu = V_gpu.copy()
+
+            # Method 1: Trust-region step-clamping
+            if it == 1 and last_diff > 50.0:
+                V_gpu = V_new_gpu
+            else:
+                delta_V_clamped_gpu = cp.clip(delta_V_raw_gpu, -max_step, max_step)
+                V_gpu = V_gpu + omega * delta_V_clamped_gpu
+
+            # Check 1: Dual-norm convergence (Method 3)
+            converged_linf = (last_diff <= tol_V)
+            converged_rms  = (last_rms <= tol_rms and last_diff <= peak_guard)
+            if it >= min_iters and (converged_linf or converged_rms):
+                status = 'converged'
+                break
+
+            # Check 2: Divergence detection
+            if it >= 4:
+                baseline = diff_history[1] if len(diff_history) > 1 and diff_history[0] > 50.0 else diff_history[0]
+                if (last_diff > 3.0 * baseline and last_diff > 2.0) or (
+                    len(diff_history) >= 4 and
+                    diff_history[-1] > diff_history[-2] > diff_history[-3] > diff_history[-4] and
+                    last_diff > 1.0
+                ) or np.isnan(last_diff) or last_diff > 50000.0:
+                    status = 'diverged'
+                    V_gpu = V_best_gpu
+                    break
+
+            # Check 3: Stagnation detection
+            if it >= min_iters + 5:
+                w = diff_history[-5:]
+                progress = (w[0] - w[-1]) / max(w[0], 1e-12)
+                if progress < 0.02 or (w[0] - w[-1] < 0.005 and last_diff <= 0.30):
+                    status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
+                    break
 
         self.V = cp.asnumpy(V_gpu)
+        return iters_done, last_diff, last_rms, status
+
 
     # —————————————————————————————————
     def compute_particle_substeps(self, x, y, vx, vy, vz, qm, dt, frac=0.25):
@@ -985,11 +1148,13 @@ class DigitalTwinSimulator:
         t_current = self.iteration * self.dt
         grids = params.get('grids', [])
 
+        self._step_t0 = _time_mod.perf_counter()
         self.transmitted_ions_step = 0.0
         self.transmitted3_step = 0.0
         self.entered_optics_step = 0.0
         self.injected_ions_step = 0.0
         self.lost_to_grid_step = 0.0
+        self.lost_to_oob_step = 0.0
 
         # —- RF CO-EXTRACTION —-
         if params.get('rf_enable') and grids:
@@ -1012,9 +1177,42 @@ class DigitalTwinSimulator:
 
             v_bohm = np.sqrt(self.q_ion * Te_up / self.m_ion)
 
-            injection_area_scale = 0.005 # 0.005
-            #injection_area_scale = 0.1
-            injection_area = self.Ly * 1e-3 * injection_area_scale
+            # ------------------------------------------------------------------
+            # Physics-correct injection area.
+            #
+            # The injection plane spans the same y-range where particles are
+            # actually placed (see geometry branches below).  The z-depth is
+            # 1 mm (= 1e-3 m), consistent with the cell_vol definition:
+            #     cell_vol = dx_m * dy_m * 1e-3
+            #
+            # An optional 'injection_area_scale' in params overrides this
+            # for backward-compatible runs (old arbitrary scale factor).
+            # ------------------------------------------------------------------
+            _user_scale = params.get('injection_area_scale', None)
+            if _user_scale is not None:
+                # Legacy override: use the old arbitrary scaling
+                injection_area = self.Ly * 1e-3 * float(_user_scale)
+            else:
+                geometry = getattr(self, 'geometry', 'half_hole')
+                _unit_depth_m = 1e-3   # 1 mm z-depth convention
+                if grids:
+                    screen_r = grids[0]['r']
+                    pitch_inj = params.get('pitch_mm', 0.0)
+                    if geometry == 'two_holes':
+                        h1 = min(2.5 * screen_r, self.Ly - self.dy) - max(self.dy, 0.5 * screen_r)
+                        h2 = (min(2.5 * screen_r + pitch_inj, self.Ly - self.dy)
+                              - max(self.dy, 0.5 * screen_r + pitch_inj))
+                        inj_height_mm = max(h1, 0.0) + max(h2, 0.0)
+                    elif geometry == 'one_hole':
+                        inj_height_mm = (min(2.5 * screen_r, self.Ly - self.dy)
+                                         - max(self.dy, 0.5 * screen_r))
+                    else:  # half_hole
+                        inj_height_mm = min(screen_r, self.Ly - self.dy)
+                else:
+                    inj_height_mm = self.Ly - 2.0 * self.dy
+                inj_height_mm = max(inj_height_mm, self.dy)  # safety floor
+                injection_area = inj_height_mm * 1e-3 * _unit_depth_m  # m^2
+            self._last_injection_area = injection_area
             # Presheath mode: include Bohm factor 0.61 at the injection plane.
             # Entire Bulk Plasma mode: no 0.61 (full density assumed at boundary).
             entire_bulk_plasma = params.get('entire_bulk_plasma', False)
@@ -1379,6 +1577,7 @@ class DigitalTwinSimulator:
                 (p_y > self.Ly) |
                 np.isnan(p_x)
             )
+        self.lost_to_oob_step = float(np.count_nonzero(out_of_bounds))
 
         remeshed = False
 
@@ -1803,6 +2002,11 @@ class DigitalTwinSimulator:
             # Optional: Find exact coordinates of violating cells
             # bad_iy, bad_ix = np.where(low_ppc_mask)
             # print(f"First violating cell at x={bad_ix[0]*self.dx:.2f}mm, y={bad_iy[0]*self.dy:.2f}mm")
+        # ---- Performance monitor ----
+        if self._perf_monitor is not None:
+            step_wall = _time_mod.perf_counter() - self._step_t0
+            self._perf_monitor.record_step(self, step_wall)
+
         return remeshed, min_pot, current_div, self.T_grids, trans_last_frame
 
     def reset_ppc_accumulator(self):
@@ -1818,6 +2022,23 @@ class DigitalTwinSimulator:
         if hasattr(self, 'current_ppc_map'):
             return self.current_ppc_map.astype(np.float64)
         return np.zeros((self.ny, self.nx), dtype=np.float64)
+
+    def enable_perf_monitor(self, **kwargs):
+        """
+        Enable the runtime performance monitor.
+
+        Keyword arguments are forwarded to PerformanceMonitor.__init__
+        (log_every, warn_particles, warn_memory_mb, warn_step_time_ms).
+        """
+        from performance_monitor import PerformanceMonitor
+        self._perf_monitor = PerformanceMonitor(**kwargs)
+        return self._perf_monitor
+
+    def disable_perf_monitor(self):
+        """Disable and return the performance monitor (for final report / export)."""
+        mon = self._perf_monitor
+        self._perf_monitor = None
+        return mon
 
     def get_total_energy(self):
         """
