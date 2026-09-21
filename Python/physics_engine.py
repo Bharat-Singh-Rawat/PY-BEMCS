@@ -369,6 +369,8 @@ class DigitalTwinSimulator:
         self.last_poisson_rms = 0.0
         self.last_poisson_converged = True
         self.last_poisson_status = 'converged'
+        self.last_poisson_anderson_steps = 0
+        self.last_poisson_backtracks = 0
 
         self.Lx = 3
         self.Ly = 3
@@ -945,16 +947,25 @@ class DigitalTwinSimulator:
         self.last_poisson_rms = rms_V
         self.last_poisson_status = status
         self.last_poisson_converged = (status in ['converged', 'stagnated_noise_floor'])
+        self.last_poisson_anderson_steps = getattr(self, '_last_anderson_count', 0)
+        self.last_poisson_backtracks = getattr(self, '_last_backtrack_count', 0)
 
         if status == 'diverged':
+            bt_info = f", backtracks={self.last_poisson_backtracks}" if self.last_poisson_backtracks > 0 else ""
             print(
                 f"[Poisson Warning] Iter {self.iteration}: Divergence detected in Poisson solver "
-                f"(error grew to {delta_V:.2f} V, rms {rms_V*1000:.1f} mV). Terminated early at Picard iter {n_done}."
+                f"(error grew to {delta_V:.2f} V, rms {rms_V*1000:.1f} mV{bt_info}). Terminated early at Picard iter {n_done}."
             )
         elif status == 'stagnated':
+            details = []
+            if self.last_poisson_anderson_steps > 0:
+                details.append(f"AA steps={self.last_poisson_anderson_steps}")
+            if self.last_poisson_backtracks > 0:
+                details.append(f"backtracks={self.last_poisson_backtracks}")
+            extra_info = f", {', '.join(details)}" if details else ""
             print(
                 f"[Poisson Warning] Iter {self.iteration}: Stagnation detected in Poisson solver "
-                f"(stuck at delta_V = {delta_V:.2f} V, rms {rms_V*1000:.1f} mV, progress < 2% over 5 iters). Terminated at Picard iter {n_done}."
+                f"(stuck at delta_V = {delta_V:.2f} V, rms {rms_V*1000:.1f} mV, progress < 2% over 5 iters{extra_info}). Terminated at Picard iter {n_done}."
             )
 
         self.Ey, self.Ex = np.gradient(-self.V, self.dy*1e-3, self.dx*1e-3)
@@ -984,8 +995,18 @@ class DigitalTwinSimulator:
         last_diff = 0.0
         last_rms = 0.0
         iters_done = 0
-        # Method 1 (Trust-Region Step-Clamping): bound per-iteration jump to fraction of Te
-        max_step = max(5.0 * float(Te_up), 20.0)
+        anderson_history = []
+        last_was_anderson = False
+        anderson_count = 0
+        backtrack_count = 0
+        omega_scale = 1.0
+        min_omega_scale = 0.15
+
+        # Asymmetric Clamping bounds: prevent exponential Boltzmann surges (upward in V)
+        # while permitting rapid field updates in the linear gap / plume.
+        te_val = float(Te_up)
+        up_limit = min(1.5 * te_val, 15.0)
+        down_limit = min(3.0 * te_val, 20.0)
 
         for it in range(1, max_iters + 1):
             iters_done = it
@@ -1011,16 +1032,100 @@ class DigitalTwinSimulator:
                 best_diff = last_diff
                 V_best = self.V.copy()
 
-            # Method 1: Trust-region step-clamping with Spatially-Adaptive Omega
+            # Record state before update for Anderson history
+            V_curr = self.V.copy()
+            R_curr = delta_V_raw.copy()
+
+            # Divergence & Surge Detection with Adaptive Backtracking Line Search
+            if it >= 4:
+                if np.isnan(last_diff) or last_diff > 50000.0:
+                    status = 'diverged'
+                    self.V = V_best.copy()
+                    break
+
+                baseline = diff_history[1] if len(diff_history) > 1 and diff_history[0] > 50.0 else diff_history[0]
+                is_surging = (
+                    (last_diff > 2.5 * best_diff and last_diff > 1.5) or
+                    (last_diff > 3.0 * baseline and last_diff > 2.0) or
+                    (
+                        len(diff_history) >= 4 and
+                        diff_history[-1] > diff_history[-2] > diff_history[-3] > diff_history[-4] and
+                        last_diff > 1.0
+                    )
+                )
+                if is_surging:
+                    if omega_scale > min_omega_scale:
+                        # Backtrack: halve relaxation factor, restore best potential state, flush memory
+                        omega_scale *= 0.5
+                        self.V = V_best.copy()
+                        anderson_history.clear()
+                        last_was_anderson = False
+                        backtrack_count += 1
+                        diff_history.pop()
+                        continue
+                    else:
+                        status = 'diverged'
+                        self.V = V_best.copy()
+                        break
+
+            # Asymmetric Spatially-Aware Clamping Maps:
+            # - In plasma (boltzmann_factor -> 1): bound upward jumps to <= 1.5*Te to eliminate
+            #   exponential charge explosions (e^(1.5) <= 4.5x charge surge max).
+            # - In vacuum / gap (boltzmann_factor -> 0): allow full step size up to 25 V.
+            max_up_map = 25.0 - (25.0 - up_limit) * boltzmann_factor
+            max_down_map = 25.0 - (25.0 - down_limit) * boltzmann_factor
+
+            # Adaptive relaxation map scaled by backtracking damping
+            omega_map = (omega_max - (omega_max - omega_min) * boltzmann_factor) * omega_scale
+
+            # Method 1 & 4: Trust-region step-clamping with Spatially-Adaptive Omega & On-Demand Anderson Acceleration
             if it == 1 and last_diff > 50.0:
                 # Cold start: first iteration seeds the macroscopic Laplace potential field
                 self.V = V_new.astype(np.float64)
+                anderson_history.clear()
+                last_was_anderson = False
             else:
-                # Clamps large overshoots at stiff meniscus cells, preventing flip-flop divergence
-                delta_V_clamped = np.clip(delta_V_raw, -max_step, max_step)
-                # Spatially-adaptive omega: damped (omega_min) at sheath, fast (omega_max) in gap & plume
-                omega_map = omega_max - (omega_max - omega_min) * boltzmann_factor
-                self.V = (self.V + omega_map * delta_V_clamped).astype(np.float64)
+                # On-Demand Anderson Acceleration trigger
+                use_anderson = False
+                if it >= 4 and not last_was_anderson and last_diff > 0.25 and len(anderson_history) >= 1:
+                    if len(diff_history) >= 4:
+                        prog = (diff_history[-4] - diff_history[-1]) / max(diff_history[-4], 1e-12)
+                        abs_ch = diff_history[-4] - diff_history[-1]
+                        is_bouncing = (diff_history[-1] >= diff_history[-2] and diff_history[-2] <= diff_history[-3])
+                        if prog < 0.10 or abs_ch < 0.05 or is_bouncing:
+                            use_anderson = True
+                    elif len(diff_history) >= 3:
+                        prog = (diff_history[-3] - diff_history[-1]) / max(diff_history[-3], 1e-12)
+                        is_bouncing = (diff_history[-1] >= diff_history[-2] and diff_history[-2] <= diff_history[-3])
+                        if prog < 0.07 or is_bouncing:
+                            use_anderson = True
+
+                if use_anderson:
+                    V_prev, R_prev = anderson_history[-1]
+                    delta_V_hist = V_curr - V_prev
+                    delta_R_hist = R_curr - R_prev
+                    dot_f_df = float(np.sum(R_curr * delta_R_hist))
+                    norm_df_sq = float(np.sum(delta_R_hist * delta_R_hist))
+                    gamma = dot_f_df / (norm_df_sq + 1e-16)
+                    gamma = float(np.clip(gamma, -1.5, 1.5))
+
+                    V_AA = V_curr - gamma * delta_V_hist
+                    R_AA = R_curr - gamma * delta_R_hist
+
+                    # Damped extrapolation step using scaled spatially-adaptive omega map
+                    delta_V_update = (V_AA - V_curr) + omega_map * R_AA
+                    delta_V_clamped = np.clip(delta_V_update, -max_down_map, max_up_map)
+                    self.V = (V_curr + delta_V_clamped).astype(np.float64)
+                    last_was_anderson = True
+                    anderson_count += 1
+                else:
+                    delta_V_clamped = np.clip(delta_V_raw, -max_down_map, max_up_map)
+                    self.V = (self.V + omega_map * delta_V_clamped).astype(np.float64)
+                    last_was_anderson = False
+
+                if len(anderson_history) >= 2:
+                    anderson_history.pop(0)
+                anderson_history.append((V_curr, R_curr))
 
             # Check 1: Dual-norm convergence (Method 3)
             converged_linf = (last_diff <= tol_V)
@@ -1028,18 +1133,6 @@ class DigitalTwinSimulator:
             if it >= min_iters and (converged_linf or converged_rms):
                 status = 'converged'
                 break
-
-            # Check 2: Divergence detection
-            if it >= 4:
-                baseline = diff_history[1] if len(diff_history) > 1 and diff_history[0] > 50.0 else diff_history[0]
-                if (last_diff > 3.0 * baseline and last_diff > 2.0) or (
-                    len(diff_history) >= 4 and
-                    diff_history[-1] > diff_history[-2] > diff_history[-3] > diff_history[-4] and
-                    last_diff > 1.0
-                ) or np.isnan(last_diff) or last_diff > 50000.0:
-                    status = 'diverged'
-                    self.V = V_best  # Revert to best known potential
-                    break
 
             # Check 3: Stagnation detection (over a 5-iteration window)
             if it >= min_iters + 5:
@@ -1052,6 +1145,8 @@ class DigitalTwinSimulator:
                     status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
                     break
 
+        self._last_anderson_count = anderson_count
+        self._last_backtrack_count = backtrack_count
         return iters_done, last_diff, last_rms, status
 
     def _recalc_poisson_gpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega_min=0.2, omega_max=0.35, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
@@ -1072,7 +1167,16 @@ class DigitalTwinSimulator:
         last_diff = 0.0
         last_rms = 0.0
         iters_done = 0
-        max_step = max(5.0 * float(Te_up), 20.0)
+        anderson_history = []
+        last_was_anderson = False
+        anderson_count = 0
+        backtrack_count = 0
+        omega_scale = 1.0
+        min_omega_scale = 0.15
+
+        te_val = float(Te_up)
+        up_limit = min(1.5 * te_val, 15.0)
+        down_limit = min(3.0 * te_val, 20.0)
 
         for it in range(1, max_iters + 1):
             iters_done = it
@@ -1096,13 +1200,93 @@ class DigitalTwinSimulator:
                 best_diff = last_diff
                 V_best_gpu = V_gpu.copy()
 
-            # Method 1: Trust-region step-clamping with Spatially-Adaptive Omega
+            # Record state before update for Anderson history
+            V_curr_gpu = V_gpu.copy()
+            R_curr_gpu = delta_V_raw_gpu.copy()
+
+            # Divergence & Surge Detection with Adaptive Backtracking Line Search
+            if it >= 4:
+                if np.isnan(last_diff) or last_diff > 50000.0:
+                    status = 'diverged'
+                    V_gpu = V_best_gpu.copy()
+                    break
+
+                baseline = diff_history[1] if len(diff_history) > 1 and diff_history[0] > 50.0 else diff_history[0]
+                is_surging = (
+                    (last_diff > 2.5 * best_diff and last_diff > 1.5) or
+                    (last_diff > 3.0 * baseline and last_diff > 2.0) or
+                    (
+                        len(diff_history) >= 4 and
+                        diff_history[-1] > diff_history[-2] > diff_history[-3] > diff_history[-4] and
+                        last_diff > 1.0
+                    )
+                )
+                if is_surging:
+                    if omega_scale > min_omega_scale:
+                        omega_scale *= 0.5
+                        V_gpu = V_best_gpu.copy()
+                        anderson_history.clear()
+                        last_was_anderson = False
+                        backtrack_count += 1
+                        diff_history.pop()
+                        continue
+                    else:
+                        status = 'diverged'
+                        V_gpu = V_best_gpu.copy()
+                        break
+
+            # Asymmetric Spatially-Aware Clamping Maps
+            max_up_map_gpu = 25.0 - (25.0 - up_limit) * boltzmann_factor_gpu
+            max_down_map_gpu = 25.0 - (25.0 - down_limit) * boltzmann_factor_gpu
+
+            # Adaptive relaxation map scaled by backtracking damping
+            omega_map_gpu = (omega_max - (omega_max - omega_min) * boltzmann_factor_gpu) * omega_scale
+
+            # Method 1 & 4: Trust-region step-clamping with Spatially-Adaptive Omega & On-Demand Anderson Acceleration
             if it == 1 and last_diff > 50.0:
                 V_gpu = V_new_gpu
+                anderson_history.clear()
+                last_was_anderson = False
             else:
-                delta_V_clamped_gpu = cp.clip(delta_V_raw_gpu, -max_step, max_step)
-                omega_map_gpu = omega_max - (omega_max - omega_min) * boltzmann_factor_gpu
-                V_gpu = V_gpu + omega_map_gpu * delta_V_clamped_gpu
+                # On-Demand Anderson Acceleration trigger
+                use_anderson = False
+                if it >= 4 and not last_was_anderson and last_diff > 0.25 and len(anderson_history) >= 1:
+                    if len(diff_history) >= 4:
+                        prog = (diff_history[-4] - diff_history[-1]) / max(diff_history[-4], 1e-12)
+                        abs_ch = diff_history[-4] - diff_history[-1]
+                        is_bouncing = (diff_history[-1] >= diff_history[-2] and diff_history[-2] <= diff_history[-3])
+                        if prog < 0.10 or abs_ch < 0.05 or is_bouncing:
+                            use_anderson = True
+                    elif len(diff_history) >= 3:
+                        prog = (diff_history[-3] - diff_history[-1]) / max(diff_history[-3], 1e-12)
+                        is_bouncing = (diff_history[-1] >= diff_history[-2] and diff_history[-2] <= diff_history[-3])
+                        if prog < 0.07 or is_bouncing:
+                            use_anderson = True
+
+                if use_anderson:
+                    V_prev_gpu, R_prev_gpu = anderson_history[-1]
+                    delta_V_hist_gpu = V_curr_gpu - V_prev_gpu
+                    delta_R_hist_gpu = R_curr_gpu - R_prev_gpu
+                    dot_f_df = cp.sum(R_curr_gpu * delta_R_hist_gpu)
+                    norm_df_sq = cp.sum(delta_R_hist_gpu * delta_R_hist_gpu)
+                    gamma_gpu = cp.clip(dot_f_df / (norm_df_sq + 1e-16), -1.5, 1.5)
+
+                    V_AA_gpu = V_curr_gpu - gamma_gpu * delta_V_hist_gpu
+                    R_AA_gpu = R_curr_gpu - gamma_gpu * delta_R_hist_gpu
+
+                    delta_V_update_gpu = (V_AA_gpu - V_curr_gpu) + omega_map_gpu * R_AA_gpu
+                    delta_V_clamped_gpu = cp.clip(delta_V_update_gpu, -max_down_map_gpu, max_up_map_gpu)
+                    V_gpu = V_curr_gpu + delta_V_clamped_gpu
+                    last_was_anderson = True
+                    anderson_count += 1
+                else:
+                    delta_V_clamped_gpu = cp.clip(delta_V_raw_gpu, -max_down_map_gpu, max_up_map_gpu)
+                    V_gpu = V_gpu + omega_map_gpu * delta_V_clamped_gpu
+                    last_was_anderson = False
+
+                if len(anderson_history) >= 2:
+                    anderson_history.pop(0)
+                anderson_history.append((V_curr_gpu, R_curr_gpu))
 
             # Check 1: Dual-norm convergence (Method 3)
             converged_linf = (last_diff <= tol_V)
@@ -1110,18 +1294,6 @@ class DigitalTwinSimulator:
             if it >= min_iters and (converged_linf or converged_rms):
                 status = 'converged'
                 break
-
-            # Check 2: Divergence detection
-            if it >= 4:
-                baseline = diff_history[1] if len(diff_history) > 1 and diff_history[0] > 50.0 else diff_history[0]
-                if (last_diff > 3.0 * baseline and last_diff > 2.0) or (
-                    len(diff_history) >= 4 and
-                    diff_history[-1] > diff_history[-2] > diff_history[-3] > diff_history[-4] and
-                    last_diff > 1.0
-                ) or np.isnan(last_diff) or last_diff > 50000.0:
-                    status = 'diverged'
-                    V_gpu = V_best_gpu
-                    break
 
             # Check 3: Stagnation detection
             if it >= min_iters + 5:
@@ -1132,6 +1304,8 @@ class DigitalTwinSimulator:
                     status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
                     break
 
+        self._last_anderson_count = anderson_count
+        self._last_backtrack_count = backtrack_count
         self.V = cp.asnumpy(V_gpu)
         return iters_done, last_diff, last_rms, status
 
