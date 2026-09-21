@@ -41,24 +41,41 @@ def accumulate_rho_taichi(
     x: ti.types.ndarray(dtype=_TI_FP),
     y: ti.types.ndarray(dtype=_TI_FP),
     rho: ti.types.ndarray(dtype=_TI_FP),
+    cell_vol: ti.types.ndarray(dtype=_TI_FP),
     num_p: ti.i32,
-    dx: ti.f32,
     dy: ti.f32,
     nx: ti.i32,
     ny: ti.i32,
-    charge_density: ti.f32
+    charge_per_particle: ti.f32,
+    zb0: ti.f32,
+    zb1: ti.f32,
+    zdx0: ti.f32,
+    zdx1: ti.f32,
+    zdx2: ti.f32,
+    zoff0: ti.i32,
+    zoff1: ti.i32,
+    zoff2: ti.i32
 ):
-    """Parallel density accumulation replacing np.add.at"""
+    """Parallel density accumulation with 3-zone O(1) cell lookup."""
     for i in range(num_p):
-        ix = ti.cast(ti.round(x[i] / dx), ti.i32)
-        iy = ti.cast(ti.round(y[i] / dy), ti.i32)
+        px = x[i]
+        py = y[i]
+        ix = 0
+        if px < zb0:
+            ix = ti.cast(ti.round(px / zdx0), ti.i32) + zoff0
+        elif px < zb1:
+            ix = ti.cast(ti.round((px - zb0) / zdx1), ti.i32) + zoff1
+        else:
+            ix = ti.cast(ti.round((px - zb1) / zdx2), ti.i32) + zoff2
+
+        iy = ti.cast(ti.round(py / dy), ti.i32)
 
         # Clamp to avoid out-of-bounds access
         ix = ti.max(1, ti.min(ix, nx - 2))
         iy = ti.max(1, ti.min(iy, ny - 2))
 
         # Taichi handles atomic additions automatically on the GPU
-        rho[iy, ix] += charge_density
+        rho[iy, ix] += charge_per_particle / cell_vol[ix]
 
 
 @ti.kernel
@@ -74,28 +91,46 @@ def push_particles_boris_taichi(
     By:  ti.types.ndarray(dtype=_TI_FP),
     Bz:  ti.types.ndarray(dtype=_TI_FP),
     num_p: ti.i32,
-    dx: ti.f32,
     dy: ti.f32,
     nx: ti.i32,
     ny: ti.i32,
     dt: ti.f32,
-    q_m: ti.f32
+    q_m: ti.f32,
+    zb0: ti.f32,
+    zb1: ti.f32,
+    zdx0: ti.f32,
+    zdx1: ti.f32,
+    zdx2: ti.f32,
+    zoff0: ti.i32,
+    zoff1: ti.i32,
+    zoff2: ti.i32
 ):
-    """Parallel bilinear interpolation with 2D3V Boris Algorithm"""
+    """Parallel bilinear interpolation with 2D3V Boris Algorithm on 3-zone mesh"""
     for i in range(num_p):
         px = x[i]
         py = y[i]
 
-        idx_x = px / dx
-        idx_y = py / dy
+        ix0 = 0
+        fx = 0.0
+        if px < zb0:
+            local_i = ti.cast(ti.floor(px / zdx0), ti.i32)
+            ix0 = local_i + zoff0
+            fx = (px - ti.cast(local_i, ti.f32) * zdx0) / zdx0
+        elif px < zb1:
+            local_i = ti.cast(ti.floor((px - zb0) / zdx1), ti.i32)
+            ix0 = local_i + zoff1
+            fx = (px - (zb0 + ti.cast(local_i, ti.f32) * zdx1)) / zdx1
+        else:
+            local_i = ti.cast(ti.floor((px - zb1) / zdx2), ti.i32)
+            ix0 = local_i + zoff2
+            fx = (px - (zb1 + ti.cast(local_i, ti.f32) * zdx2)) / zdx2
 
-        ix0 = ti.cast(ti.floor(idx_x), ti.i32)
+        idx_y = py / dy
         iy0 = ti.cast(ti.floor(idx_y), ti.i32)
 
         ix0 = ti.max(0, ti.min(ix0, nx - 2))
         iy0 = ti.max(0, ti.min(iy0, ny - 2))
-
-        fx = idx_x - ti.cast(ix0, ti.f32)
+        fx = ti.max(0.0, ti.min(fx, 1.0))
         fy = idx_y - ti.cast(iy0, ti.f32)
 
         Ex_p = Ex[iy0, ix0]*(1.0-fx)*(1.0-fy) + Ex[iy0, ix0+1]*fx*(1.0-fy) + \
@@ -176,33 +211,43 @@ def thermal_conduction_taichi(
 # CPU FALLBACK VERSIONS
 # =============================================================================
 
-def accumulate_rho_cpu(x, y, rho, num_p, dx, dy, nx, ny, charge_density):
-    """Vectorised NGP charge deposition — replaces the Python particle loop."""
+def accumulate_rho_cpu(x, y, rho, num_p, dy, nx, ny, charge_per_particle,
+                       zone_boundaries, zone_dx, zone_offsets, cell_vol_1d):
+    """Vectorised NGP charge deposition on 3-zone piecewise-uniform mesh."""
     n = int(num_p)
     if n == 0:
         return
-    ix = np.clip(np.round(x[:n] / dx).astype(np.int32), 1, nx - 2)
+    z = np.searchsorted(zone_boundaries[1:-1], x[:n])
+    ix = zone_offsets[z] + np.round((x[:n] - zone_boundaries[z]) / zone_dx[z]).astype(np.int32)
+    ix = np.clip(ix, 1, nx - 2)
     iy = np.clip(np.round(y[:n] / dy).astype(np.int32), 1, ny - 2)
-    np.add.at(rho, (iy, ix), charge_density)
+    np.add.at(rho, (iy, ix), charge_per_particle / cell_vol_1d[ix])
 
 
 def push_particles_boris_cpu(x, y, vx, vy, vz,
-                              Ex, Ey, Bx, By, Bz,
-                              num_p, dx, dy, nx, ny, dt, q_m):
-    """Vectorised 2D3V Boris pusher — replaces the Python particle loop."""
+                             Ex, Ey, Bx, By, Bz,
+                             num_p, dy, nx, ny, dt, q_m,
+                             zone_boundaries, zone_dx, zone_offsets, x_coords):
+    """Vectorised 2D3V Boris pusher on 3-zone piecewise-uniform mesh."""
     n = int(num_p)
     if n == 0:
         return
 
-    # —- Bilinear (CIL) field interpolation —-
     nx_m1 = nx - 1
     ny_m1 = ny - 1
 
-    idx_x = x[:n] / dx
-    idx_y = y[:n] / dy
-    ix0 = np.clip(np.floor(idx_x).astype(np.int32), 0, nx_m1 - 1)
+    px = x[:n]
+    py = y[:n]
+
+    z = np.searchsorted(zone_boundaries[1:-1], px)
+    ix0 = zone_offsets[z] + np.floor((px - zone_boundaries[z]) / zone_dx[z]).astype(np.int32)
+    ix0 = np.clip(ix0, 0, nx_m1 - 1)
+
+    idx_y = py / dy
     iy0 = np.clip(np.floor(idx_y).astype(np.int32), 0, ny_m1 - 1)
-    fx  = idx_x - ix0
+
+    dx_local = x_coords[ix0 + 1] - x_coords[ix0]
+    fx  = np.clip((px - x_coords[ix0]) / dx_local, 0.0, 1.0)
     fy  = idx_y - iy0
     ix1 = np.minimum(ix0 + 1, nx_m1)
     iy1 = np.minimum(iy0 + 1, ny_m1)
@@ -382,14 +427,37 @@ class DigitalTwinSimulator:
         self.dx = self.Lx / (self.nx - 1)
         self.dy = self.Ly / (self.ny - 1)
 
+        self.x_coords = np.linspace(0, self.Lx, self.nx)
+        self.y_coords = np.linspace(0, self.Ly, self.ny)
+        self.x_pts = self.x_coords
+        self.y_pts = self.y_coords
+        self.xpts = self.x_coords
+        self.ypts = self.y_coords
+        self.dx_cells = np.diff(self.x_coords)
+        self.dy_cells = np.diff(self.y_coords)
+        self.dx_min = float(self.dx)
+        self.dx_max = float(self.dx)
+
+        hx = np.zeros(self.nx, dtype=np.float64)
+        hx[0] = 0.5 * self.dx_cells[0]
+        hx[1:-1] = 0.5 * (self.dx_cells[:-1] + self.dx_cells[1:])
+        hx[-1] = 0.5 * self.dx_cells[-1]
+        self.hx_cells = hx
+        self.cell_vol_1d = (hx * 1e-3) * (self.dy * 1e-3) * 1e-3
+        self.cell_vol_2d = np.tile(self.cell_vol_1d, (self.ny, 1))
+        self.cell_area_1d = (hx * 1e-3) * (self.dy * 1e-3)
+        self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
+
+        self.zone_boundaries = np.array([0.0, self.Lx / 3.0, 2.0 * self.Lx / 3.0, self.Lx], dtype=np.float64)
+        self.zone_dx = np.array([self.dx, self.dx, self.dx], dtype=np.float64)
+        self.zone_offsets = np.array([0, int(self.nx / 3), int(2 * self.nx / 3)], dtype=np.int32)
+
         self._recompute_cell_constants()
 
         self.T_grids  = []
         self.mask_grids = []
         self.V_dc     = None
 
-        self.x_pts = np.linspace(0, self.Lx, self.nx)
-        self.y_pts = np.linspace(0, self.Ly, self.ny)
         self.X, self.Y = np.meshgrid(self.x_pts, self.y_pts)
 
         self.iteration  = 0
@@ -473,6 +541,70 @@ class DigitalTwinSimulator:
     def _recompute_cell_constants(self):
         self.C_cell = self.mat_rho * (self.dx*1e-3) * (self.dy*1e-3) * 1e-3 * self.mat_cp
         self.A_cell = 2 * (self.dx*1e-3) * 1e-3
+
+    def _x_to_ix(self, x):
+        """Vectorized O(1) nearest-grid-point node index lookup for piecewise-uniform mesh."""
+        if np.isscalar(x):
+            z = int(np.searchsorted(self.zone_boundaries[1:-1], x))
+            ix = self.zone_offsets[z] + int(np.round((x - self.zone_boundaries[z]) / self.zone_dx[z]))
+            return int(np.clip(ix, 0, self.nx - 1))
+        else:
+            x_arr = np.asarray(x)
+            if len(x_arr) == 0:
+                return np.empty(0, dtype=np.int32)
+            z = np.searchsorted(self.zone_boundaries[1:-1], x_arr)
+            ix = self.zone_offsets[z] + np.round((x_arr - self.zone_boundaries[z]) / self.zone_dx[z]).astype(np.int32)
+            return np.clip(ix, 0, self.nx - 1)
+
+    def _x_to_ix_floor(self, x):
+        """Vectorized O(1) cell left-node index lookup for piecewise-uniform mesh."""
+        if np.isscalar(x):
+            z = int(np.searchsorted(self.zone_boundaries[1:-1], x))
+            ix0 = self.zone_offsets[z] + int(np.floor((x - self.zone_boundaries[z]) / self.zone_dx[z]))
+            return int(np.clip(ix0, 0, self.nx - 2))
+        else:
+            x_arr = np.asarray(x)
+            if len(x_arr) == 0:
+                return np.empty(0, dtype=np.int32)
+            z = np.searchsorted(self.zone_boundaries[1:-1], x_arr)
+            ix0 = self.zone_offsets[z] + np.floor((x_arr - self.zone_boundaries[z]) / self.zone_dx[z]).astype(np.int32)
+            return np.clip(ix0, 0, self.nx - 2)
+
+    def _build_nonuniform_x_coords(self, zone_configs, Lx, dx0):
+        """
+        Build piecewise-uniform x_coords across 3 axial zones.
+        zone_configs: list of dicts with keys 'x_start', 'x_end', 'factor'
+        Returns:
+            x_coords (1D ndarray), bounds (1D ndarray), dxs (1D ndarray), offsets (1D ndarray)
+        """
+        node_lists = []
+        offsets = []
+        dxs = []
+        bounds = []
+        curr_offset = 0
+        for i, z in enumerate(zone_configs):
+            x_start = float(z['x_start'])
+            x_end = float(z['x_end'])
+            factor = float(z.get('factor', 1.0))
+            L = x_end - x_start
+            if L <= 1e-6:
+                continue
+            dx_target = dx0 * factor
+            n = max(1, int(round(L / dx_target)))
+            dx_act = L / n
+            nodes = np.linspace(x_start, x_end, n + 1)
+            if len(node_lists) == 0:
+                node_lists.append(nodes)
+            else:
+                node_lists.append(nodes[1:])
+            bounds.append(x_start)
+            dxs.append(dx_act)
+            offsets.append(curr_offset)
+            curr_offset += n
+
+        bounds.append(Lx)
+        x_coords = np.concatenate(node_lists) if node_lists else np.linspace(0, Lx, int(Lx/dx0) + 1)
+        return x_coords, np.array(bounds, dtype=np.float64), np.array(dxs, dtype=np.float64), np.array(offsets, dtype=np.int32)
 
     def set_material(self, name=None, props=None):
         """
@@ -596,30 +728,47 @@ class DigitalTwinSimulator:
             row.append(idx_bot); col.append(idx_bot);         data.append( np.ones_like(idx_bot))
             row.append(idx_bot); col.append(idx_bot+self.nx); data.append(-np.ones_like(idx_bot))
 
+        # Finite-volume stencil coefficients for non-uniform x and uniform y
+        # Control volume width hx_i = (x_{i+1} - x_{i-1}) / 2
+        # Fluxes: dV/dx at half-nodes (x_{i+1} - x_i)
+        # Scaled by dy^2 so off-diagonals in y are 1.0
+        dx_m = self.x_coords[1:-1] - self.x_coords[:-2]
+        dx_p = self.x_coords[2:] - self.x_coords[1:-1]
+        hx = 0.5 * (dx_m + dx_p)
+
+        cW = np.zeros(self.nx, dtype=np.float64)
+        cE = np.zeros(self.nx, dtype=np.float64)
+        cW[1:-1] = (self.dy**2) / (hx * dx_m)
+        cE[1:-1] = (self.dy**2) / (hx * dx_p)
+        cP = -(cW + cE + 2.0)
+
         # —- Standard 5-point interior stencil —-
         idx_in = idx[is_interior]
-        row.append(idx_in); col.append(idx_in);          data.append(np.full_like(idx_in, -4.0))
-        row.append(idx_in); col.append(idx_in-1);        data.append(np.ones_like(idx_in))
-        row.append(idx_in); col.append(idx_in+1);        data.append(np.ones_like(idx_in))
+        x_in   = x_[is_interior]
+        row.append(idx_in); col.append(idx_in);          data.append(cP[x_in])
+        row.append(idx_in); col.append(idx_in-1);        data.append(cW[x_in])
+        row.append(idx_in); col.append(idx_in+1);        data.append(cE[x_in])
         row.append(idx_in); col.append(idx_in-self.nx);  data.append(np.ones_like(idx_in))
         row.append(idx_in); col.append(idx_in+self.nx);  data.append(np.ones_like(idx_in))
 
         if periodic_y:
             # —- Periodic bottom row (iy=0): 5-pt with south neighbour = iy=ny-1 —-
             idx_pb   = idx[is_per_bot]
-            col_south = (self.ny - 1) * self.nx + (idx_pb % self.nx)
-            row.append(idx_pb); col.append(idx_pb);         data.append(np.full_like(idx_pb, -4.0))
-            row.append(idx_pb); col.append(idx_pb - 1);     data.append(np.ones_like(idx_pb))  # west
-            row.append(idx_pb); col.append(idx_pb + 1);     data.append(np.ones_like(idx_pb))  # east
+            x_pb     = x_[is_per_bot]
+            col_south = (self.ny - 1) * self.nx + x_pb
+            row.append(idx_pb); col.append(idx_pb);         data.append(cP[x_pb])
+            row.append(idx_pb); col.append(idx_pb - 1);     data.append(cW[x_pb])
+            row.append(idx_pb); col.append(idx_pb + 1);     data.append(cE[x_pb])
             row.append(idx_pb); col.append(idx_pb + self.nx); data.append(np.ones_like(idx_pb)) # north (iy=1)
             row.append(idx_pb); col.append(col_south);      data.append(np.ones_like(idx_pb))  # periodic south
 
             # —- Periodic top row (iy=ny-1): 5-pt with north neighbour = iy=0 —-
             idx_pt   = idx[is_per_top]
-            col_north = idx_pt % self.nx  # iy=0
-            row.append(idx_pt); col.append(idx_pt);         data.append(np.full_like(idx_pt, -4.0))
-            row.append(idx_pt); col.append(idx_pt - 1);     data.append(np.ones_like(idx_pt))  # west
-            row.append(idx_pt); col.append(idx_pt + 1);     data.append(np.ones_like(idx_pt))  # east
+            x_pt     = x_[is_per_top]
+            col_north = x_pt  # iy=0
+            row.append(idx_pt); col.append(idx_pt);         data.append(cP[x_pt])
+            row.append(idx_pt); col.append(idx_pt - 1);     data.append(cW[x_pt])
+            row.append(idx_pt); col.append(idx_pt + 1);     data.append(cE[x_pt])
             row.append(idx_pt); col.append(idx_pt - self.nx); data.append(np.ones_like(idx_pt)) # south (iy=ny-2)
             row.append(idx_pt); col.append(col_north);      data.append(np.ones_like(idx_pt))  # periodic north
 
@@ -755,13 +904,54 @@ class DigitalTwinSimulator:
         else:
             self.Ly = grid_Ly
 
-        self.nx = int(self.Lx / self.dx) + 1
-        self.ny = int(self.Ly / self.dy) + 1
-        self.dx = self.Lx / (self.nx - 1)
-        self.dy = self.Ly / (self.ny - 1)
+        # Zone boundaries auto-detection from geometry
+        if grids:
+            x_screen_start = self.upstream_gap_mm
+            x_last_grid_end = self.upstream_gap_mm + sum(g['t'] + g['gap'] for g in grids) - grids[-1]['gap']
+        else:
+            x_screen_start = self.Lx / 3.0
+            x_last_grid_end = 2.0 * self.Lx / 3.0
 
-        self.xpts = np.linspace(0, self.Lx, self.nx)
+        mesh_zones_cfg = params.get('mesh_zones', {})
+        presheath_factor = float(mesh_zones_cfg.get('presheath_factor', 1.0))
+        optics_factor    = float(mesh_zones_cfg.get('optics_factor', 1.0))
+        plume_factor     = float(mesh_zones_cfg.get('plume_factor', 4.0))
+
+        zone_configs = [
+            {'x_start': 0.0, 'x_end': min(x_screen_start, self.Lx), 'factor': presheath_factor},
+            {'x_start': min(x_screen_start, self.Lx), 'x_end': min(x_last_grid_end, self.Lx), 'factor': optics_factor},
+            {'x_start': min(x_last_grid_end, self.Lx), 'x_end': self.Lx, 'factor': plume_factor},
+        ]
+
+        # Generate non-uniform x_coords and lookup tables
+        self.x_coords, self.zone_boundaries, self.zone_dx, self.zone_offsets = (
+            self._build_nonuniform_x_coords(zone_configs, self.Lx, self.dx)
+        )
+        self.xpts = self.x_coords
+        self.x_pts = self.x_coords
+        self.nx = len(self.x_coords)
+        self.dx_cells = np.diff(self.x_coords)
+        self.dx_min = float(np.min(self.dx_cells))
+        self.dx_max = float(np.max(self.dx_cells))
+
+        self.ny = int(self.Ly / self.dy) + 1
+        self.dy = self.Ly / (self.ny - 1)
         self.ypts = np.linspace(0, self.Ly, self.ny)
+        self.y_coords = self.ypts
+        self.y_pts = self.y_coords
+        self.dy_cells = np.diff(self.y_coords)
+
+        # Control volume width hx for each x node
+        hx = np.zeros(self.nx, dtype=np.float64)
+        hx[0] = 0.5 * self.dx_cells[0]
+        hx[1:-1] = 0.5 * (self.dx_cells[:-1] + self.dx_cells[1:])
+        hx[-1] = 0.5 * self.dx_cells[-1]
+        self.hx_cells = hx
+        self.cell_vol_1d = (hx * 1e-3) * (self.dy * 1e-3) * 1e-3
+        self.cell_vol_2d = np.tile(self.cell_vol_1d, (self.ny, 1))
+        self.cell_area_1d = (hx * 1e-3) * (self.dy * 1e-3)
+        self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
+
         self.X, self.Y = np.meshgrid(self.xpts, self.ypts)
 
         if not preserve_state:
@@ -790,7 +980,7 @@ class DigitalTwinSimulator:
 
         n0         = params.get('n0_plasma', 1e17)
         self.target_ppc = float(params.get('target_ppc', 40.0))
-        cell_vol   = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3
+        cell_vol   = self.cell_vol_1d[0]
         entire_bulk_plasma = params.get('entire_bulk_plasma', False)
         bohm_factor = 1.0 if entire_bulk_plasma else 0.61
         # Flux-compensated macro_weight: Bohm injection flux carries bohm_factor * n0.
@@ -904,8 +1094,8 @@ class DigitalTwinSimulator:
         if self.laplacian_lu is None:
             return
 
-        dx_m2 = (self.dx * 1e-3)**2
-        coeff  = dx_m2 / self.eps0
+        dy_m2 = (self.dy * 1e-3)**2
+        coeff  = dy_m2 / self.eps0
 
         if params is None:
             params = {}
@@ -968,7 +1158,7 @@ class DigitalTwinSimulator:
                 f"(stuck at delta_V = {delta_V:.2f} V, rms {rms_V*1000:.1f} mV, progress < 2% over 5 iters{extra_info}). Terminated at Picard iter {n_done}."
             )
 
-        self.Ey, self.Ex = np.gradient(-self.V, self.dy*1e-3, self.dx*1e-3)
+        self.Ey, self.Ex = np.gradient(-self.V, self.y_coords*1e-3, self.x_coords*1e-3)
 
         # Fix Ey at the y-domain edges: np.gradient uses one-sided differences there,
         # which assumes zero-gradient (Neumann). In periodic mode we need central
@@ -1321,11 +1511,12 @@ class DigitalTwinSimulator:
         electric field interpolation, and prevents tunneling through grid boundaries.
         """
         if len(x) == 0:
-            return 1, 0.0, frac * min(self.dx, self.dy) * 1e-3
+            return 1, 0.0, frac * min(getattr(self, 'dx_min', self.dx), self.dy) * 1e-3
 
-        ix0 = np.clip(np.floor(x / self.dx).astype(int), 0, self.nx - 2)
+        ix0 = self._x_to_ix_floor(x)
         iy0 = np.clip(np.floor(y / self.dy).astype(int), 0, self.ny - 2)
-        fx = x / self.dx - ix0
+        dx_local = self.x_coords[ix0 + 1] - self.x_coords[ix0]
+        fx = np.clip((x - self.x_coords[ix0]) / dx_local, 0.0, 1.0)
         fy = y / self.dy - iy0
         ix1 = ix0 + 1
         iy1 = iy0 + 1
@@ -1345,11 +1536,12 @@ class DigitalTwinSimulator:
         v_mag = np.sqrt(vx*vx + vy*vy + vz*vz)
 
         ds_pred = v_mag * dt + 0.5 * a_mag * dt**2
+        ds_lim = frac * np.minimum(dx_local, self.dy) * 1e-3
+        ds_lim_min = float(np.min(ds_lim))
         ds_max = float(np.max(ds_pred))
-        ds_lim = frac * min(self.dx, self.dy) * 1e-3
 
-        n_sub = max(1, int(np.ceil(ds_max / max(ds_lim, 1e-30))))
-        return n_sub, ds_max, ds_lim
+        n_sub = max(1, int(np.ceil(np.max(ds_pred / np.maximum(ds_lim, 1e-30)))))
+        return n_sub, ds_max, ds_lim_min
     
     # —————————————————————————————————
     def step(self, params):
@@ -1537,8 +1729,18 @@ class DigitalTwinSimulator:
         # B. POISSON SOLVER
         # ————————————————————————————————
         self.rho.fill(0.0)
-        cell_vol = (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3
         charge_per_particle = self.q * self.macro_weight
+
+        zb0 = np.float32(self.zone_boundaries[1])
+        zb1 = np.float32(self.zone_boundaries[2])
+        zdx0 = np.float32(self.zone_dx[0])
+        zdx1 = np.float32(self.zone_dx[1])
+        zdx2 = np.float32(self.zone_dx[2])
+        zoff0 = int(self.zone_offsets[0])
+        zoff1 = int(self.zone_offsets[1])
+        zoff2 = int(self.zone_offsets[2])
+        _dy = np.float32(self.dy)
+        cvol_ti = _ti_arr(self.cell_vol_1d.astype(_NP_FP))
 
         if self.num_p > 0:
             if USE_TAICHI:
@@ -1546,12 +1748,13 @@ class DigitalTwinSimulator:
                     _ti_arr(self.p_x[:self.num_p]),
                     _ti_arr(self.p_y[:self.num_p]),
                     self.rho,
+                    cvol_ti,
                     self.num_p,
-                    np.float32(self.dx),
-                    np.float32(self.dy),
+                    _dy,
                     self.nx,
                     self.ny,
-                    np.float32(charge_per_particle / cell_vol)
+                    np.float32(charge_per_particle),
+                    zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
                 )
             else:
                 accumulate_rho_cpu(
@@ -1559,11 +1762,14 @@ class DigitalTwinSimulator:
                     self.p_y[:self.num_p],
                     self.rho,
                     self.num_p,
-                    self.dx,
                     self.dy,
                     self.nx,
                     self.ny,
-                    charge_per_particle / cell_vol
+                    charge_per_particle,
+                    self.zone_boundaries,
+                    self.zone_dx,
+                    self.zone_offsets,
+                    self.cell_vol_1d
                 )
 
         if self.num_e > 0:
@@ -1572,12 +1778,13 @@ class DigitalTwinSimulator:
                     _ti_arr(self.e_x[:self.num_e]),
                     _ti_arr(self.e_y[:self.num_e]),
                     self.rho,
+                    cvol_ti,
                     self.num_e,
-                    np.float32(self.dx),
-                    np.float32(self.dy),
+                    _dy,
                     self.nx,
                     self.ny,
-                    np.float32(-charge_per_particle / cell_vol)
+                    np.float32(-charge_per_particle),
+                    zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
                 )
             else:
                 accumulate_rho_cpu(
@@ -1585,11 +1792,14 @@ class DigitalTwinSimulator:
                     self.e_y[:self.num_e],
                     self.rho,
                     self.num_e,
-                    self.dx,
                     self.dy,
                     self.nx,
                     self.ny,
-                    -charge_per_particle / cell_vol
+                    -charge_per_particle,
+                    self.zone_boundaries,
+                    self.zone_dx,
+                    self.zone_offsets,
+                    self.cell_vol_1d
                 )
 
         if self.iteration % 2 == 0:
@@ -1603,8 +1813,6 @@ class DigitalTwinSimulator:
         p_x_old = self.p_x[:num_p_step].copy()
         p_y_old = self.p_y[:num_p_step].copy()
 
-        _dx = np.float32(self.dx)
-        _dy = np.float32(self.dy)
         _dt = np.float32(self.dt)
         _qm_ion = np.float32(self.q_ion / self.m_ion)
         _qm_e = np.float32(-self.q / self.m_e)
@@ -1657,7 +1865,8 @@ class DigitalTwinSimulator:
                     push_particles_boris_taichi(
                         px_ti, py_ti, pvx_ti, pvy_ti, pvz_ti,
                         self.Ex, self.Ey, self.Bx, self.By, self.Bz,
-                        num_p_step, _dx, _dy, self.nx, self.ny, dt_ion, _qm_ion
+                        num_p_step, _dy, self.nx, self.ny, dt_ion, _qm_ion,
+                        zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
                     )
 
                 self.p_x[:num_p_step] = px_ti
@@ -1675,9 +1884,13 @@ class DigitalTwinSimulator:
                         self.p_vy[:num_p_step],
                         self.p_vz[:num_p_step],
                         self.Ex, self.Ey, self.Bx, self.By, self.Bz,
-                        num_p_step, self.dx, self.dy, self.nx, self.ny,
+                        num_p_step, self.dy, self.nx, self.ny,
                         self.dt / n_sub_ion,
-                        self.q_ion / self.m_ion
+                        self.q_ion / self.m_ion,
+                        self.zone_boundaries,
+                        self.zone_dx,
+                        self.zone_offsets,
+                        self.x_coords
                     )
 
         if num_e_step > 0:
@@ -1694,7 +1907,8 @@ class DigitalTwinSimulator:
                     push_particles_boris_taichi(
                         ex_ti, ey_ti, evx_ti, evy_ti, evz_ti,
                         self.Ex, self.Ey, self.Bx, self.By, self.Bz,
-                        num_e_step, _dx, _dy, self.nx, self.ny, dt_e, _qm_e
+                        num_e_step, _dy, self.nx, self.ny, dt_e, _qm_e,
+                        zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
                     )
 
                 self.e_x[:num_e_step] = ex_ti
@@ -1712,9 +1926,13 @@ class DigitalTwinSimulator:
                         self.e_vy[:num_e_step],
                         self.e_vz[:num_e_step],
                         self.Ex, self.Ey, self.Bx, self.By, self.Bz,
-                        num_e_step, self.dx, self.dy, self.nx, self.ny,
+                        num_e_step, self.dy, self.nx, self.ny,
                         self.dt / n_sub_e,
-                        -self.q / self.m_e
+                        -self.q / self.m_e,
+                        self.zone_boundaries,
+                        self.zone_dx,
+                        self.zone_offsets,
+                        self.x_coords
                     )
 
         # ————————————————————————————————
@@ -1758,7 +1976,7 @@ class DigitalTwinSimulator:
         self.entered_optics += float(n_entered)
         self.prev_entered = self.entered_optics_step
 
-        ix = np.clip(np.round(p_x / self.dx).astype(int), 0, self.nx - 1)
+        ix = self._x_to_ix(p_x)
         iy = np.clip(np.round(p_y / self.dy).astype(int), 0, self.ny - 1)
 
         hit_grid_final = self.isBound[iy, ix]
@@ -1812,7 +2030,7 @@ class DigitalTwinSimulator:
                 if np.any(hit_g2):
                     n_g2 = int(np.count_nonzero(hit_g2))
                     max_dT = float(np.max(dT_heat[hit_g2]))
-                    x_hits = hit_ix_sub[hit_g2] * self.dx
+                    x_hits = self.x_coords[hit_ix_sub[hit_g2]]
                     y_hits = hit_iy_sub[hit_g2] * self.dy
                     e_ev_g2 = (0.5 * self.m_ion * v_mag_sq[hit_g2]) / self.q
                     # print(
@@ -1972,7 +2190,7 @@ class DigitalTwinSimulator:
             e_vy = self.e_vy[:self.num_e]
             e_vz = self.e_vz[:self.num_e]
 
-            ix_e = np.clip(np.round(e_x / self.dx).astype(int), 0, self.nx - 1)
+            ix_e = self._x_to_ix(e_x)
             iy_e = np.clip(np.round(e_y / self.dy).astype(int), 0, self.ny - 1)
             hit_grid_e = self.isBound[iy_e, ix_e]
             out_e = (
@@ -2103,7 +2321,7 @@ class DigitalTwinSimulator:
         else:
             x_grid_mm = self.Lx * 0.5
 
-        x_idx = int(np.clip(round(x_grid_mm / self.dx), 0, self.nx - 1))
+        x_idx = self._x_to_ix(x_grid_mm)
 
         # In all modes (half_hole: y=0, one_hole: y=1.5*rs, two_holes: y=1.5*rs),
         # hole_centers[0] defines the centerline of the primary (first) aperture.
@@ -2183,9 +2401,8 @@ class DigitalTwinSimulator:
 
         # 2. Map continuous coordinates to grid cell indices.
         # Particle positions (p_x, p_y) are stored in mm; self.dx/self.dy are also in mm.
-        # Dividing mm by mm gives a dimensionless cell index — do NOT convert dx to metres here.
-        ix = np.clip((p_x_active / self.dx).astype(int), 0, self.nx - 1)
-        iy = np.clip((p_y_active / self.dy).astype(int), 0, self.ny - 1)
+        ix = self._x_to_ix(p_x_active)
+        iy = np.clip(np.round(p_y_active / self.dy).astype(int), 0, self.ny - 1)
 
         # 3. Convert 2D indices to a 1D flat index for bincount
         flat_idx = iy * self.nx + ix
@@ -2310,14 +2527,14 @@ class DigitalTwinSimulator:
     def _segment_hits_grid(self, x0, y0, x1, y1, samples=8):
         hit = np.zeros(len(x0), dtype=bool)
         # Default to ending cell (will be overwritten for hits)
-        hit_ix = np.clip(np.round(x1 / self.dx).astype(int), 0, self.nx - 1)
+        hit_ix = self._x_to_ix(x1)
         hit_iy = np.clip(np.round(y1 / self.dy).astype(int), 0, self.ny - 1)
         
         for i in range(1, samples+1):
             f = i / float(samples)
             xi = x0 + (x1 - x0) * f
             yi = y0 + (y1 - y0) * f
-            c_x = np.clip(np.round(xi / self.dx).astype(int), 0, self.nx - 1)
+            c_x = self._x_to_ix(xi)
             c_y = np.clip(np.round(yi / self.dy).astype(int), 0, self.ny - 1)
             step_hit = self.isBound[c_y, c_x]
             
