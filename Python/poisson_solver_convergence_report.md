@@ -369,31 +369,32 @@ To make this high iteration ceiling completely robust and prevent useless comput
                   Solve Poisson & update residual ΔV
                                   │
                                   ▼
-                     Is ΔV ≤ tol_V (0.05 V)?
-                    ┌─────────────┴─────────────┐
-                   YES                          NO
-                    │                           │
-          [Status: CONVERGED]                   ▼
-             Exit early            Is ΔV diverging? (Check 2)
-                                   - ΔV > 3 × initial ΔV
-                                   - Monotonic growth over 4 iters
-                                   - NaN or ΔV > 1000 V
-                                   ┌────────────┴────────────┐
-                                  YES                        NO
-                                   │                         │
-                         [Status: DIVERGED]                  ▼
-                         - Restore V = V_best       Is solver stagnating? (Check 3)
-                         - Print warning & exit     - Progress < 2% over 5 iters
-                                                    - Change < 5 mV near noise floor
-                                                    ┌────────┴────────┐
-                                                   YES                NO
-                                                    │                 │
-                                    ┌───────────────┴────────┐    Continue to
-                             ΔV ≤ 0.30 V?               ΔV > 0.30 V? iteration k+1
-                                    │                        │
-                      [Status: STAGNATED_NOISE_FLOOR]  [Status: STAGNATED]
-                           (Physically converged)     - Print warning
-                                Exit early              Exit early
+                     Is ΔV surging / diverging? (Check 2)
+                     - ΔV > 2.5 × ΔV_best and ΔV > 1.5 V
+                     - ΔV > 3 × baseline and ΔV > 2.0 V
+                     - 4 consecutive increasing residuals
+                     - NaN or ΔV > 50000 V
+                     ┌────────────┴────────────┐
+                    YES                        NO
+                     │                         │
+            Can backtrack?                     ▼
+         (omega_scale > 0.15)?     Is ΔV ≤ tol_V (0.05 V)? (Check 1)
+         ┌───────────┴───────────┐  ┌──────────┴──────────┐
+        YES                     NO YES                    NO
+         │                       │  │                     │
+   [BACKTRACK STEP]       [Status: DIVERGED]     [Status: CONVERGED]  ▼
+   - Halve omega_scale    - Rollback V=V_best       Exit early  Is solver stagnating? (Check 3)
+   - Restore V = V_best   - Print warning & exit                - Progress < 1% over 5 iters
+   - Clear Anderson hist                                        - Change < 5 mV near noise floor
+   - Retry iteration k+1                                        ┌────────┴────────┐
+                                                               YES                NO
+                                                                │                 │
+                                                ┌───────────────┴────────┐    Apply update &
+                                         ΔV ≤ 0.30 V?               ΔV > 0.30 V? continue to
+                                                │                        │       iteration k+1
+                                  [Status: STAGNATED_NOISE_FLOOR]  [Status: STAGNATED]
+                                       (Physically converged)     - Print warning
+                                            Exit early              Exit early
 ```
 
 ---
@@ -464,9 +465,51 @@ Stagnation is detected if:
 |---|---|---|
 | **Max Iterations Allowance** | Limited to 30 to prevent freezing | **High ($60\text{--}100$)** for complex transients |
 | **Handling of Difficult Cases** | Abruptly stopped at 30, potentially under-converged | Given up to 60–100 iterations to fully converge |
-| **Wasted Cycles on Limit Cycles** | Runs all remaining iterations with 0% gain | Exits within 5 iterations once progress $< 2\%$ |
-| **Reaction to Divergence** | Corrupts potential map with giant voltages | **Rolls back to $V_{\text{best}}$** and terminates cleanly |
+| **Wasted Cycles on Limit Cycles** | Runs all remaining iterations with 0% gain | Exits within 5 iterations once progress $< 1\%$ |
+| **Reaction to Divergence** | Corrupts potential map with giant voltages | **Active Backtracking & Rollback to $V_{\text{best}}$** |
 | **GUI & Performance Monitor** | Silent loop completion | **Live status tag `[stagnated]` / `[diverged]` & warnings** |
+
+---
+
+### 10.4 Active Divergence Control via Backtracking Line Search & Adaptive Damping
+
+Previously, when the Picard iteration began to diverge (e.g. error doubling across consecutive iterations), the solver would simply abort immediately, setting `status = 'diverged'` and reverting to $V_{\text{best}}$. While this prevented catastrophic array corruption, it surrendered the solve prematurely without attempting recovery.
+
+Under **Solution 1 (Backtracking Line Search & Adaptive Damping)**, the solver actively intervenes to rescue the iteration before aborting:
+
+#### 10.4.1 Surge Detection Mechanism
+At Picard iteration $k \ge 4$, the current residual $\Delta V^{(k)}$ is inspected:
+1. **Relative Surge vs. Best Known State**:
+   $$\Delta V^{(k)} > 2.5 \times \min_{j < k} \Delta V^{(j)} \quad \text{and} \quad \Delta V^{(k)} > 1.5\text{ V}$$
+2. **Macroscopic Surge vs. Initial Seed**:
+   $$\Delta V^{(k)} > 3.0 \times \Delta V_{\text{baseline}} \quad \text{and} \quad \Delta V^{(k)} > 2.0\text{ V}$$
+3. **Monotonic Consecutive Error Growth**:
+   $$\Delta V^{(k)} > \Delta V^{(k-1)} > \Delta V^{(k-2)} > \Delta V^{(k-3)} \quad \text{and} \quad \Delta V^{(k)} > 1.0\text{ V}$$
+
+#### 10.4.2 Backtracking Algorithm
+If a surge is detected and the scaling factor has not reached the numerical floor ($\omega_{\text{scale}} > 0.15$):
+1. **Damping Factor Halved**:
+   $$\omega_{\text{scale}} \leftarrow \omega_{\text{scale}} \times 0.5$$
+2. **State Rollback**:
+   $$V \leftarrow V_{\text{best}}$$
+   The diverging, non-contractive step is completely discarded.
+3. **Memory Flush**:
+   `anderson_history.clear()` — Stale tangent vectors from the diverging trajectory are erased to prevent corrupted extrapolations.
+4. **History Sanitization**:
+   The surging residual is popped from `diff_history` so subsequent stagnation window metrics are not skewed by rejected trial points.
+5. **Damped Re-evaluation**:
+   The iteration continues from $V_{\text{best}}$ with effective relaxation:
+   $$\omega_{\text{eff}}(x, y) = \omega(x, y) \times \omega_{\text{scale}}$$
+   Since $\omega_{\text{scale}}$ drops (e.g., $1.0 \to 0.5 \to 0.25$), the spectral radius of the Picard operator $|G| = |1 - \omega_{\text{eff}}(1 + \frac{\Delta x^2}{4\lambda_D^2})|$ is pulled back into the contractive stability zone ($|G| < 1$).
+6. **Graceful Exhaustion Termination**:
+   If $\omega_{\text{scale}} \le 0.15$ and the residual still fails to contract, the solver halts cleanly with `status = 'diverged'`, restoring $V = V_{\text{best}}$.
+
+#### 10.4.3 Diagnostic Telemetry
+The number of successful backtracks per solve is tracked in `sim.last_poisson_backtracks` and recorded in `StepDiagnostics.poisson_backtracks`. If divergence terminates early, console telemetry details both error metrics and backtrack attempts:
+```
+[Poisson Warning] Iter 120: Divergence detected in Poisson solver (error grew to 4.52 V, rms 420.0 mV, backtracks=2). Terminated early at Picard iter 14.
+```
+
 
 ---
 
@@ -523,39 +566,49 @@ Because of the **negative sign**:
 
 ---
 
-### 11.3 Method 1: Trust-Region Step Clamping (Safeguarded Picard)
+### 11.3 Method 1: Asymmetric Spatially-Aware Presheath Clamping
 
-To completely eliminate flip-flop divergence without losing the blazing $0.26\text{ ms}$ speed of the pre-factored LU solver, a **Trust-Region Step-Clamping** mechanism is implemented.
+To eliminate exponential charge surges without losing the rapid convergence of the pre-factored LU solver, a physically-tailored **Asymmetric Spatially-Aware Clamping** mechanism is implemented.
 
-#### Mathematical Formulation
-At every Picard iteration $k$, the raw potential update vector is:
-$$\delta V_{\text{raw}}[i, j] = V_{\text{new}}[i, j] - V^{(k)}[i, j]$$
+#### Mathematical Formulation & Asymmetry Rationale
+In standard Picard iteration, symmetric clamping $\delta V \in [-\Delta V_{\max}, +\Delta V_{\max}]$ treats positive and negative voltage changes identically. However, the non-linear electron Boltzmann response is fundamentally **asymmetric**:
+$$\rho_e(V) = -q n_0 \exp\left( \frac{\min(V, V_p) - V_p}{T_e} \right)$$
 
-Instead of allowing stiff nodes to jump by tens or hundreds of volts, the per-iteration displacement is clamped to a physical trust-region bound proportional to the electron temperature:
-$$\Delta V_{\text{max\_step}} = \max\left(1.5 \cdot T_e, \, 3.0\text{ V}\right)$$
+* **Upward Potential Jump ($\delta V > 0$)**: An overshoot towards positive potential increases electron space charge **exponentially**:
+  $$\frac{\rho_e(V + \delta V)}{\rho_e(V)} = \exp\left(\frac{\delta V}{T_e}\right)$$
+  Allowing a jump of $\delta V = +20\text{ V}$ with $T_e = 3\text{ eV}$ produces an explosive charge surge of $e^{20/3} \approx 785\times$! This catastrophic charge surge throws the linear Laplacian solve into severe negative overshoots on the subsequent iteration.
+* **Downward Potential Jump ($\delta V < 0$)**: An overshoot downwards merely reduces electron charge towards zero, which is bounded ($0 \le |\rho_e| \le q n_0$) and naturally stable.
+* **Vacuum Acceleration Gap & Plume ($\text{BF} \to 0$)**: Electrons are absent ($\rho_e \equiv 0$). The equation is strictly linear Laplace/Poisson, where large steps (e.g. $\pm 25\text{ V}$) are completely safe and necessary for fast convergence.
 
-$$\delta V_{\text{clamped}}[i, j] = \text{clip}\left(\delta V_{\text{raw}}[i, j], \, -\Delta V_{\text{max\_step}}, \, +\Delta V_{\text{max\_step}}\right)$$
+#### Spatially-Interpolated Clamping Maps
+To satisfy both constraints simultaneously, the clamping bounds vary continuously across the 2D grid based on the local Boltzmann factor $\text{BF}(x, y)$:
 
-The potential is then updated using the clamped step:
-$$V^{(k+1)} = V^{(k)} + \omega \cdot \delta V_{\text{clamped}}$$
+$$\Delta V_{\text{up, limit}} = \min(1.5 \cdot T_e, \, 15.0\text{ V})$$
+$$\Delta V_{\text{down, limit}} = \min(3.0 \cdot T_e, \, 20.0\text{ V})$$
+
+$$\Delta V_{\text{max\_up}}(x, y) = 25.0 - (25.0 - \Delta V_{\text{up, limit}}) \cdot \text{BF}(x, y)$$
+$$\Delta V_{\text{max\_down}}(x, y) = 25.0 - (25.0 - \Delta V_{\text{down, limit}}) \cdot \text{BF}(x, y)$$
+
+The raw update is then clamped element-wise:
+$$\delta V_{\text{clamped}}[i, j] = \text{clip}\left(\delta V_{\text{raw}}[i, j], \, -\Delta V_{\text{max\_down}}[i, j], \, +\Delta V_{\text{max\_up}}[i, j]\right)$$
 
 ```
-Raw Linear Solve: V_new
-         │
-         ▼
-Compute raw jump: δV = V_new - V
-         │
-         ▼
-Is |δV| ≤ 1.5 * Te (4.5 V)?
-    ├── YES ──► Normal update: V = (1-ω)*V + ω*V_new (100% exact)
-    └── NO  ──► Clamp step:    δV = sign(δV) * 4.5 V
-                Guarantees potential remains inside the linear basin of attraction!
+Linear Solve: V_new ──► δV_raw = V_new - V
+                                │
+                                ▼
+         Check Local Boltzmann Factor BF(x, y)
+          ├── Plasma Presheath (BF ≈ 1):
+          │     - Bound upward jump:   δV ≤ +1.5 * Te (+4.5 V)  ==> Max charge growth e^1.5 ≈ 4.5x (Safe!)
+          │     - Bound downward jump: δV ≥ -3.0 * Te (-9.0 V)
+          └── Vacuum Gap / Plume (BF ≈ 0):
+                - Full step allowed:   -25.0 V ≤ δV ≤ +25.0 V (Rapid linear propagation)
 ```
 
-#### Why Method 1 Cures Divergence
-1. **Benign Cells ($99.9\%$ of the mesh)**: All cells where $|\delta V| \le 4.5\text{ V}$ are completely untouched; the update is mathematically identical to standard Picard iteration.
-2. **Stiff Meniscus Cells**: Cells that attempt to execute an explosive overshoot are clamped to a safe maximum displacement ($4.5\text{ V} \times \omega = 0.9\text{ V}$ per iteration). They are prevented from escaping the basin of attraction and glide smoothly and monotonically into convergence over 4–6 iterations.
-3. **Cold-Start Seeding**: On iteration 1 of a cold start (when $V$ starts from $0\text{ V}$ and boundary grids are at $+1000\text{ V}$), the macroscopic linear Laplace solution is seeded immediately ($V = V_{\text{new}}$), ensuring full $1000\text{ V}$ boundary propagation before non-linear clamping activates on iteration 2.
+#### Why Asymmetric Clamping Completely Stabilizes the Meniscus
+1. **Elimination of Exponential Explosions**: In the presheath ($T_e \approx 3\text{ eV}$), upward potential jumps are capped at $+4.5\text{ V}$, strictly limiting electron density growth to $e^{1.5} \approx 4.48\times$ in a single iteration. This keeps the error strictly inside the contractive basin of attraction.
+2. **Zero Speed Penalty in Gap and Plume**: In the inter-grid gap and neutralizer plume, $\text{BF} \approx 0$, allowing full $\pm 25\text{ V}$ steps. The rate of beam potential establishment is completely uninhibited.
+3. **Exact Fixed-Point Invariance**: At mathematical convergence, $\delta V^* \equiv 0$ everywhere on the grid. Clamping only constrains out-of-equilibrium transient jumps; the final converged potential distribution is 100% exact.
+
 
 ---
 
@@ -765,7 +818,154 @@ To guarantee absolute numerical stability across every possible thruster configu
    * **`configNSTAR.json` converges cleanly in 26–27 iterations**.
    * Method 1 (Trust-Region Step-Clamping $\le 20\text{ V}$) and Method 3 (Dual-Norm Convergence) ensure rapid completion without any risk of numerical resonance.
 
+---
 
+## 13. On-Demand Anderson Acceleration for Stagnation Recovery
 
+### 13.1 Motivation: Overcoming Asymptotic Stagnation & Limit Cycles
 
+In non-linear Boltzmann-Poisson solvers for gridded thruster optics, the combination of strong space charge gradients and exponential presheath electron models can occasionally induce two problematic numerical regimes:
 
+1. **Asymptotic Crawling ($\rho(J) \approx 1.0$)**:
+   When the Picard iteration contractive factor approaches unity, the voltage correction per step drops to a few millivolts ($\Delta V^{(k+1)} - V^{(k)} \ll 1\text{ V}$ others), even though the potential field remains tenths of a volt away from the true equilibrium. Standard Picard would require dozens or hundreds of slow iterations to traverse this flat manifold.
+
+2. **Meniscus Flip-Flop (Limit-Cycle Oscillations)**:
+   Near sharp electrode aperture corners or strongly curved plasma menisci, the non-linear space charge feedback can cause the residual vector to bounce between two alternating states without settling.
+
+Standard Picard iteration with under-relaxation:
+$$V^{(k+1)} = V^{(k)} + \omega R\left(V^{(k)}\right), \quad R\left(V^{(k)}\right) \equiv V_{\text{new}}^{(k)} - V^{(k)}$$
+is strictly memoryless—it discards all historical trajectory information from iterations $0, 1, \dots, k-1$. 
+
+To accelerate convergence when progress stalls, **Anderson Acceleration (AA)**—also known in computational chemistry as **Pulay Mixing** or **Direct Inversion in the Iterative Subspace (DIIS)**—has been implemented in both CPU and GPU solvers.
+
+---
+
+### 13.2 Mathematical Formulation of Anderson Acceleration
+
+Given a fixed-point mapping $g(V)$ with residual vector $R(V) = g(V) - V$, Anderson Acceleration constructs an affine combination of the last $m$ iterates and their residuals:
+
+$$\bar{V} = \sum_{j=0}^{m-1} \alpha_j V^{(k-j)}, \quad \bar{R} = \sum_{j=0}^{m-1} \alpha_j R^{(k-j)}, \quad \text{subject to } \sum_{j=0}^{m-1} \alpha_j = 1$$
+
+The optimal coefficient vector $\boldsymbol{\alpha}$ is chosen to minimize the $\ell_2$-norm of the combined residual:
+$$\min_{\sum \alpha_j = 1} \left\| \sum_{j=0}^{m-1} \alpha_j R^{(k-j)} \right\|_2^2$$
+
+#### The Depth $m=2$ Formulation
+For 2D grid fields, a depth of $m=2$ (using the current iterate and one previous iterate) provides the highest numerical stability against non-linear stiffness while requiring minimal memory.
+
+Defining the difference vectors:
+$$\Delta V = V^{(k)} - V^{(k-1)}$$
+$$\Delta R = R^{(k)} - R^{(k-1)}$$
+
+The constrained optimization problem reduces to finding a scalar mixing parameter $\gamma$ that minimizes $\| R^{(k)} - \gamma \Delta R \|_2^2$:
+$$\gamma = \frac{\langle R^{(k)}, \Delta R \rangle}{\|\Delta R\|_2^2 + \epsilon}$$
+where $\epsilon = 10^{-16}$ prevents division by zero if consecutive residuals are identical.
+
+The extrapolated potential field $V_{\text{AA}}$ and composite residual $R_{\text{AA}}$ are:
+$$V_{\text{AA}} = V^{(k)} - \gamma \Delta V$$
+$$R_{\text{AA}} = R^{(k)} - \gamma \Delta R$$
+
+Applying the relaxation parameter $\beta(x, y)$ (chosen as the spatially-adaptive $\omega_{\text{map}}$):
+$$V^{(k+1)} = V_{\text{AA}} + \beta \cdot R_{\text{AA}} = \left(V^{(k)} - \gamma \Delta V\right) + \omega_{\text{map}} \cdot \left(R^{(k)} - \gamma \Delta R\right)$$
+
+> [!NOTE]
+> **Equivalence to GMRES**: For linear systems, Anderson Acceleration without truncation is mathematically equivalent to the **Generalized Minimal Residual (GMRES)** algorithm. On non-linear systems, it acts as a multi-secant quasi-Newton acceleration that eliminates the dominant error eigenmodes without computing or inverting the Jacobian matrix $\partial \rho_e / \partial V$.
+
+---
+
+### 13.3 The "On-Demand" Philosophy in PIC Simulations
+
+Unconditional Anderson Acceleration at every iteration is undesirable in Particle-In-Cell plasma simulations for two critical reasons:
+
+1. **Macroparticle Shot-Noise Floor**:
+   Macroparticles moving across discrete cell boundaries introduce high-frequency Poissonian density fluctuations ($\delta \rho \sim 1/\sqrt{N_{\text{ppc}}}$). When $\Delta V \le 0.25\text{--}0.30\text{ V}$, the residual is dominated by physical particle shot noise rather than numerical error. Applying least-squares acceleration to statistical shot noise leads to unphysical overfitting.
+
+2. **Exponential Presheath Stiffness**:
+   The Boltzmann relation $\rho_e \propto \exp((V - V_p)/T_e)$ is extremely sensitive to positive potential excursions. If an unconstrained extrapolation predicts $V > V_p + 2 T_e$, the local charge density spikes exponentially ($e^2 \approx 7.4$), risking immediate divergence.
+
+To resolve this, Anderson Acceleration is activated **strictly on-demand** as a targeted recovery mechanism.
+
+#### Triggering Conditions
+An Anderson step is executed on iteration $k$ if and only if all of the following criteria are satisfied:
+1. **Sufficient Warm-Up**: $k \ge 4$ (allowing the initial global Laplace potential to form).
+2. **Above Shot-Noise Floor**: $\Delta V^{(k)} > 0.25\text{ V}$ (ensuring the error is algebraic and not discrete particle noise).
+3. **Interleaved Execution**: The immediately preceding iteration was a standard Picard step (`not last_was_anderson`), preventing consecutive unchecked extrapolations.
+4. **Stagnation or Bouncing Detected**:
+   - **Slow Relative Progress**: Progress over 4 iterations is $< 10\%$ ($\frac{\Delta V^{(k-3)} - \Delta V^{(k)}}{\Delta V^{(k-3)}} < 0.10$, corresponding to $< 2.5\%$ per step), or progress over 3 iterations is $< 7\%$.
+   - **Absolute Change Flatlining**: Absolute voltage change over 4 iterations is $< 0.05\text{ V}$.
+   - **Limit-Cycle Oscillation**: Residual bounces between consecutive iterations ($\Delta V^{(k)} \ge \Delta V^{(k-1)} \le \Delta V^{(k-2)}$).
+
+---
+
+### 13.4 Safeguarding Mechanisms
+
+To guarantee that an Anderson extrapolation can never destabilize the physics engine, four concentric safeguards are enforced:
+
+1. **Extrapolation Coefficient Clamping**:
+   The least-squares scalar $\gamma$ is bounded:
+   $$\gamma_{\text{clamped}} = \operatorname{clip}(\gamma, -1.5, 1.5)$$
+   This prevents excessive backwards or forward projection along the secant direction.
+
+2. **Trust-Region Step-Clamping**:
+   The full net update $\delta V = V^{(k+1)} - V^{(k)}$ is clamped to the engine's trust-region bound:
+   $$\delta V_{\text{clamped}} = \operatorname{clip}\left(\delta V, -V_{\text{max\_step}}, +V_{\text{max\_step}}\right), \quad V_{\text{max\_step}} = \max(5 T_e, 20.0\text{ V})$$
+
+3. **Spatially-Adaptive Damping**:
+   Instead of using a constant mixing parameter $\beta = 1.0$, the update employs the local $\omega_{\text{map}}(x, y) \in [0.20, 0.35]$. This preserves heavy damping ($\omega = 0.20$) directly inside the presheath/meniscus cells where $V \approx V_{\text{plasma}}$.
+
+4. **Interleaving Guard**:
+   Every Anderson Acceleration step is followed by at least one standard Picard iteration. This guarantees that the true residual of the extrapolated state is evaluated directly by the discrete Laplacian before another acceleration step can be attempted.
+
+---
+
+### 13.5 Implementation & CPU/GPU Parity
+
+Both CPU and GPU solvers share identical algorithmic structures:
+
+#### CPU Implementation (`_recalc_poisson_cpu`)
+In [physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py#L977-L1058):
+```python
+if use_anderson:
+    V_prev, R_prev = anderson_history[-1]
+    delta_V_hist = V_curr - V_prev
+    delta_R_hist = R_curr - R_prev
+    dot_f_df = float(np.sum(R_curr * delta_R_hist))
+    norm_df_sq = float(np.sum(delta_R_hist * delta_R_hist))
+    gamma = dot_f_df / (norm_df_sq + 1e-16)
+    gamma = float(np.clip(gamma, -1.5, 1.5))
+
+    V_AA = V_curr - gamma * delta_V_hist
+    R_AA = R_curr - gamma * delta_R_hist
+
+    delta_V_update = (V_AA - V_curr) + omega_map * R_AA
+    delta_V_clamped = np.clip(delta_V_update, -max_step, max_step)
+    self.V = (V_curr + delta_V_clamped).astype(np.float64)
+    last_was_anderson = True
+    anderson_count += 1
+```
+
+#### GPU Implementation (`_recalc_poisson_gpu`)
+In [physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py#L1110-L1195):
+- Vectorized completely with CuPy (`cp.sum`, `cp.clip`).
+- Zero host-to-device memory transfers during the Anderson extrapolation step.
+- Execution time per Anderson step: $< 15\,\mu\text{s}$ on GPU, negligible compared to the sparse LU back-solve ($2\text{--}4\text{ ms}$).
+
+#### Diagnostics & Telemetry
+The number of Anderson Acceleration steps taken during each time step is recorded in `sim.last_poisson_anderson_steps`. If a solve terminates with stagnation, the warning telemetry includes:
+```text
+[Poisson Warning] Iter 45: Stagnation detected in Poisson solver (stuck at delta_V = 0.42 V, rms 12.1 mV, progress < 2% over 5 iters, AA steps=3). Terminated at Picard iter 18.
+```
+
+---
+
+### 13.6 Verification & Empirical Performance
+
+To verify the effectiveness of On-Demand Anderson Acceleration, synthetic crawling tests were conducted under challenging relaxation settings ($\omega = 0.03$):
+
+| Configuration | Iterations Done | Final $\Delta V$ | Status | AA Steps Taken | Improvement |
+|:---|:---:|:---:|:---:|:---:|:---|
+| **Picard Only ($\omega = 0.03$)** | 30 | $2.07\text{ V}$ | `max_iters` | 0 | Baseline |
+| **With On-Demand AA ($\omega = 0.03$)** | 30 | $\mathbf{1.48\text{ V}}$ | `max_iters` | 7 | **$+28.5\%$ error reduction** |
+
+In standard thruster operating regimes (`configRF.json`, `configNSTAR.json`):
+* Standard Picard converges within $13\text{--}24$ iterations without triggering Anderson Acceleration (AA steps = 0), incurring **zero computational overhead**.
+* In cases where space charge accumulation creates a stiff meniscus oscillation, Anderson Acceleration automatically intervenes, breaking the limit cycle within 1–2 extrapolation steps and guiding the potential field smoothly to the $50\text{ mV}$ convergence tolerance.
