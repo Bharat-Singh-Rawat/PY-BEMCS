@@ -549,13 +549,23 @@ class AdvancedSettingsDialog(QDialog):
 
 class DigitalTwinApp(QMainWindow):
 
+    def update_config_title(self, config_name=None):
+        if config_name:
+            self.current_config_name = config_name
+        cfg_name = getattr(self, "current_config_name", "config.json")
+        self.setWindowTitle(f"PY-BEMCS (Multi-Grid & Co-Extraction) - [{cfg_name}]")
+        if hasattr(self, 'lbl_active_config'):
+            self.lbl_active_config.setText(f"  Config: {cfg_name}  ")
+        if hasattr(self, 'reload_action'):
+            self.reload_action.setText(f"Reload {cfg_name}")
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PY-BEMCS (Multi-Grid & Co-Extraction)")
         self.setGeometry(20, 30, 1500, 800)
 
         self.current_config_path = _config_path()
-        self.current_config_name = "config.json"
+        self.current_config_name = os.path.basename(self.current_config_path) if self.current_config_path else "config.json"
+        self.update_config_title()
         self.config = load_json_config(self.current_config_path)
         self.sim = DigitalTwinSimulator()
         self.sim_isRunning = False
@@ -669,6 +679,12 @@ class DigitalTwinApp(QMainWindow):
         iedf_action = QAction("Energy Dist. (IEDF/EEDF)...", self)
         iedf_action.triggered.connect(self.open_iedf_window)
         diag_menu.addAction(iedf_action)
+
+        self.lbl_active_config = QLabel(f"  Config: {self.current_config_name}  ")
+        self.lbl_active_config.setStyleSheet(
+            "font-weight: bold; color: #1a5276; font-size: 11px; padding-right: 12px;"
+        )
+        menubar.setCornerWidget(self.lbl_active_config, Qt.TopRightCorner)
 
     def open_config_json(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -1165,9 +1181,7 @@ class DigitalTwinApp(QMainWindow):
     def apply_config(self, config, config_name=None):
         if config_name:
             self.current_config_name = config_name
-        cfg_name = getattr(self, "current_config_name", "config.json")
-        if hasattr(self, 'reload_action'):
-            self.reload_action.setText(f"Reload {cfg_name}")
+        self.update_config_title()
 
         self.config = config
         discharge_chamber = config.get("discharge_chamber", {})
