@@ -46,8 +46,11 @@ def compute_energy_budget(sim):
         ke_e = 0.0
 
     # --- Electrostatic field energy: (eps0/2) * integral(|E|^2) dV ---
-    cell_area = (sim.dx * 1e-3) * (sim.dy * 1e-3)  # [m^2]
-    e_field = float(np.sum(sim.Ex**2 + sim.Ey**2)) * 0.5 * sim.eps0 * cell_area
+    if hasattr(sim, 'cell_area_2d'):
+        e_field = float(np.sum((sim.Ex**2 + sim.Ey**2) * sim.cell_area_2d)) * 0.5 * sim.eps0
+    else:
+        cell_area = (sim.dx * 1e-3) * (sim.dy * 1e-3)  # [m^2]
+        e_field = float(np.sum(sim.Ex**2 + sim.Ey**2)) * 0.5 * sim.eps0 * cell_area
 
     total = ke_i + ke_e + e_field
 
@@ -103,7 +106,6 @@ def compute_charge_budget(sim):
 
     # --- Boltzmann fluid electron charge ---
     if hasattr(sim, 'V') and sim.V is not None:
-        cell_vol = (sim.dx * 1e-3) * (sim.dy * 1e-3) * 1e-3
         grids = getattr(sim, 'grids', [{'V': 1000}])
         v_offset = getattr(sim, 'V_plasma_offset', 20.0)
         V_p = grids[0]['V'] + v_offset if grids else 1020.0
@@ -112,7 +114,12 @@ def compute_charge_budget(sim):
 
         interior = ~sim.isBound if hasattr(sim, 'isBound') else slice(None)
         bf = np.exp((np.minimum(sim.V[interior], V_p) - V_p) / Te)
-        q_b = float(np.sum(-sim.q * n0 * bf)) * cell_vol
+        if hasattr(sim, 'cell_vol_2d'):
+            cvol_int = sim.cell_vol_2d[interior]
+            q_b = float(np.sum(-sim.q * n0 * bf * cvol_int))
+        else:
+            cell_vol = (sim.dx * 1e-3) * (sim.dy * 1e-3) * 1e-3
+            q_b = float(np.sum(-sim.q * n0 * bf)) * cell_vol
     else:
         q_b = 0.0
 

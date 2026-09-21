@@ -113,8 +113,8 @@ class PPCWindow(QWidget):
         # Physical zone boundaries
         x_up = getattr(sim, 'upstream_gap_mm', 0.8)
         x_last = sim.grid_x_ends[-1] if hasattr(sim, 'grid_x_ends') and sim.grid_x_ends else sim.Lx * 0.5
-        ix_up = int(np.clip(round(x_up / sim.dx), 0, sim.nx))
-        ix_last = int(np.clip(round(x_last / sim.dx), 0, sim.nx))
+        ix_up = int(np.clip(sim._x_to_ix(x_up) if hasattr(sim, '_x_to_ix') else round(x_up / sim.dx), 0, sim.nx))
+        ix_last = int(np.clip(sim._x_to_ix(x_last) if hasattr(sim, '_x_to_ix') else round(x_last / sim.dx), 0, sim.nx))
 
         def _zone_stats(cols):
             a = int(np.count_nonzero(active_mask[:, cols]))
@@ -153,7 +153,8 @@ class PPCWindow(QWidget):
         self.ax.set_xlabel("Axial Position [mm]")
         self.ax.set_ylabel("Radial Position [mm]")
 
-        extent = [0, sim.Lx, 0, sim.Ly]
+        X = getattr(sim, 'X', None)
+        Y = getattr(sim, 'Y', None)
 
         if "Low PPC" in mode:
             # 3 categories: 0 = Empty / Vacuum, 1 = OK (>= 3), 2 = LOW (< 3)
@@ -163,17 +164,33 @@ class PPCWindow(QWidget):
 
             cmap = ListedColormap(['#eef1f6', '#2ca02c', '#d62728'])
             norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
-            im = self.ax.imshow(cat_map, origin='lower', extent=extent,
-                                cmap=cmap, norm=norm, aspect='auto')
+            if X is not None and Y is not None:
+                im = self.ax.pcolormesh(X, Y, cat_map, cmap=cmap, norm=norm, shading='nearest')
+            else:
+                extent = [0, sim.Lx, 0, sim.Ly]
+                im = self.ax.imshow(cat_map, origin='lower', extent=extent,
+                                    cmap=cmap, norm=norm, aspect='auto')
         else:
             vmax = max(10.0, float(np.percentile(raw_ppc[raw_ppc > 0], 98))) if np.any(raw_ppc > 0) else 10.0
-            im = self.ax.imshow(raw_ppc, origin='lower', extent=extent,
-                                cmap='turbo', vmin=0, vmax=vmax, aspect='auto')
+            if X is not None and Y is not None:
+                im = self.ax.pcolormesh(X, Y, raw_ppc, cmap='turbo', vmin=0, vmax=vmax, shading='nearest')
+            else:
+                extent = [0, sim.Lx, 0, sim.Ly]
+                im = self.ax.imshow(raw_ppc, origin='lower', extent=extent,
+                                    cmap='turbo', vmin=0, vmax=vmax, aspect='auto')
+
+        self.ax.set_xlim(0, sim.Lx)
+        self.ax.set_ylim(0, sim.Ly)
 
         # Grid boundary overlay
         if hasattr(sim, 'isBound') and np.any(sim.isBound):
             gy, gx = np.where(sim.isBound)
-            self.ax.scatter(gx * sim.dx, gy * sim.dy, s=3, c='black', alpha=0.7)
+            x_pts = getattr(sim, 'x_coords', getattr(sim, 'xpts', None))
+            y_pts = getattr(sim, 'y_coords', getattr(sim, 'ypts', None))
+            if x_pts is not None and y_pts is not None:
+                self.ax.scatter(x_pts[gx], y_pts[gy], s=3, c='black', alpha=0.7)
+            else:
+                self.ax.scatter(gx * sim.dx, gy * sim.dy, s=3, c='black', alpha=0.7)
 
         # Zone delimiter lines and labels
         if self.chk_zones.isChecked():

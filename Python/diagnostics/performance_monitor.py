@@ -166,7 +166,7 @@ class PerformanceMonitor:
                 x_first = grid_x_starts[0]
                 x_last = grid_x_ends[-1]
                 # Build x-coordinate for each cell column
-                x_cell = np.arange(sim.nx) * sim.dx
+                x_cell = getattr(sim, 'x_coords', getattr(sim, 'xpts', np.arange(sim.nx) * sim.dx))
                 upstream_cols = x_cell < x_first
                 plume_cols = x_cell > x_last
 
