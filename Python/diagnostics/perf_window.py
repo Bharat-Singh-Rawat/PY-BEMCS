@@ -17,11 +17,11 @@ from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog, QScrollArea
     )
 except ImportError:
     from PyQt6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog, QScrollArea
     )
 
 
@@ -32,6 +32,7 @@ class PerformanceMonitorWindow(QWidget):
         - Step flux balance: Injected vs. Losses (Grid, OOB, Transmitted)
         - Spatial PPC quality: Mean PPC in Upstream and Plume zones
         - Computational footprint: Step wall-clock latency (ms) and RAM RSS (MB)
+        - Poisson solver error and convergence events (Stagnation & Divergence)
 
     Also provides one-click export of complete runtime performance metrics to CSV.
     Features clickable checkmarks ([x] / [ ]) embedded directly within each individual
@@ -42,7 +43,7 @@ class PerformanceMonitorWindow(QWidget):
         super().__init__()
         self.parent_app = parent
         self.setWindowTitle("Runtime Performance & Particle Diagnostics Monitor")
-        self.setGeometry(160, 140, 960, 660)
+        self.setGeometry(120, 60, 1020, 840)
 
         layout = QVBoxLayout(self)
 
@@ -71,11 +72,22 @@ class PerformanceMonitorWindow(QWidget):
         )
         layout.addWidget(self.lbl_stats)
 
-        # Matplotlib figure (2x2 subplots)
-        self.fig, self.axs = plt.subplots(2, 2, figsize=(9.2, 5.6))
-        self.fig.subplots_adjust(hspace=0.36, wspace=0.28, left=0.08, right=0.96, top=0.93, bottom=0.09)
+        # Matplotlib figure (3 rows x 2 columns: 4 upper subplots, 1 full-width bottom subplot)
+        self.fig = Figure(figsize=(9.6, 7.8))
+        gs = self.fig.add_gridspec(3, 2, hspace=0.42, wspace=0.28, left=0.08, right=0.96, top=0.94, bottom=0.07)
+        self.ax1 = self.fig.add_subplot(gs[0, 0])
+        self.ax2 = self.fig.add_subplot(gs[0, 1])
+        self.ax3 = self.fig.add_subplot(gs[1, 0])
+        self.ax4 = self.fig.add_subplot(gs[1, 1])
+        self.ax5 = self.fig.add_subplot(gs[2, :])  # Spans across both columns for Poisson solver error
+        self.all_axs = [self.ax1, self.ax2, self.ax3, self.ax4, self.ax5]
+        self.axs = np.array([[self.ax1, self.ax2], [self.ax3, self.ax4], [self.ax5, self.ax5]])
+
         self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.canvas)
+        layout.addWidget(scroll)
 
         # Curve visibility state per subplot (checkmarks directly inside each graph legend)
         self.curve_visibility = {
@@ -92,6 +104,11 @@ class PerformanceMonitorWindow(QWidget):
             'p3_target': True,
             'p4_dt': True,
             'p4_rss': True,
+            'p5_max_err': True,
+            'p5_rms_err': True,
+            'p5_tol': True,
+            'p5_stag': True,
+            'p5_div': True,
         }
         self._legend_pick_map = {}
         self._last_sim = None
@@ -118,14 +135,18 @@ class PerformanceMonitorWindow(QWidget):
         legend_handles = []
         legend_labels = []
 
-        for key, name, color, ls, lw in quantities:
+        for item in quantities:
+            key, name, color, ls, lw = item[0], item[1], item[2], item[3], item[4]
+            marker = item[5] if len(item) > 5 else None
             active = self.curve_visibility.get(key, True)
             marker_str = "[x]" if active else "[ ]"
             alpha = 1.0 if active else 0.3
             label = f"{marker_str} {name}"
 
             handle = Line2D(
-                [0], [0], color=color, linestyle=ls, lw=lw,
+                [0], [0], color=color, linestyle=ls if ls else 'none', lw=lw,
+                marker=marker, markersize=6 if marker else 0,
+                markeredgecolor=color, markerfacecolor=color,
                 alpha=alpha
             )
             legend_handles.append(handle)
@@ -137,7 +158,8 @@ class PerformanceMonitorWindow(QWidget):
         )
 
         if leg is not None:
-            for leg_line, leg_text, (key, _, _, _, _) in zip(leg.get_lines(), leg.get_texts(), quantities):
+            for leg_line, leg_text, item in zip(leg.get_lines(), leg.get_texts(), quantities):
+                key = item[0]
                 if not self.curve_visibility.get(key, True):
                     leg_text.set_alpha(0.35)
                 leg_line.set_picker(True)
@@ -185,9 +207,9 @@ class PerformanceMonitorWindow(QWidget):
         self._last_sim = sim
         mon = getattr(sim, '_perf_monitor', None) if sim is not None else None
         if mon is None or not mon.history:
-            for ax in self.axs.flat:
+            for ax in self.all_axs:
                 ax.clear()
-            self.axs[0, 0].set_title("No performance data yet — start simulation", fontsize=9)
+            self.ax1.set_title("No performance data yet — start simulation", fontsize=9)
             self.canvas.draw_idle()
             return
 
@@ -264,7 +286,7 @@ class PerformanceMonitorWindow(QWidget):
             )
 
         # Plot 1: Particle Populations
-        ax1 = self.axs[0, 0]
+        ax1 = self.ax1
         ax1.clear()
         has_warn = (mon.warn_particles < np.max(num_ions) * 1.3)
         has_any_1 = False
@@ -300,7 +322,7 @@ class PerformanceMonitorWindow(QWidget):
         self._build_interactive_legend(ax1, p1_quantities, loc='upper left')
 
         # Plot 2: Flux & Balance
-        ax2 = self.axs[0, 1]
+        ax2 = self.ax2
         ax2.clear()
         has_any_2 = False
 
@@ -342,7 +364,7 @@ class PerformanceMonitorWindow(QWidget):
         self._build_interactive_legend(ax2, p2_quantities, loc='upper right')
 
         # Plot 3: PPC Upstream vs Plume
-        ax3 = self.axs[1, 0]
+        ax3 = self.ax3
         ax3.clear()
         has_any_3 = False
 
@@ -376,7 +398,7 @@ class PerformanceMonitorWindow(QWidget):
         self._build_interactive_legend(ax3, p3_quantities, loc='upper left')
 
         # Plot 4: Step Latency & Memory
-        ax4 = self.axs[1, 1]
+        ax4 = self.ax4
         ax4.clear()
         has_any_4 = False
         has_rss = np.any(rss_mb > 0)
@@ -406,5 +428,70 @@ class PerformanceMonitorWindow(QWidget):
         if has_rss:
             p4_quantities.append(('p4_rss', "RAM RSS [MB]", '#17becf', '--', 1.3))
         self._build_interactive_legend(ax4, p4_quantities, loc='upper right')
+
+        # Plot 5: Poisson Equation Solver Error vs Iteration
+        ax5 = self.ax5
+        ax5.clear()
+        has_any_5 = False
+
+        delta_V = np.array([d.poisson_delta_V for d in data])
+        rms_V = np.array([getattr(d, 'poisson_rms', 0.0) for d in data])
+        statuses = [getattr(d, 'poisson_status', 'converged') for d in data]
+
+        # 1. Max Error curve
+        if self.curve_visibility.get('p5_max_err', True):
+            ax5.plot(iters, delta_V, color='#1f77b4', lw=1.5, zorder=3)
+            has_any_5 = True
+
+        # 2. RMS Error curve
+        if self.curve_visibility.get('p5_rms_err', True):
+            ax5.plot(iters, rms_V, color='#16a085', lw=1.3, linestyle='--', zorder=3)
+            has_any_5 = True
+
+        # 3. Tolerance Target (50 mV reference line)
+        if self.curve_visibility.get('p5_tol', True):
+            ax5.axhline(0.05, color='#888888', linestyle=':', alpha=0.7, lw=1.2, zorder=2)
+            has_any_5 = True
+
+        # 4. Stagnation events (points)
+        stag_mask = np.array([s in ['stagnated', 'stagnated_noise_floor'] for s in statuses])
+        if np.any(stag_mask) and self.curve_visibility.get('p5_stag', True):
+            ax5.scatter(
+                iters[stag_mask], delta_V[stag_mask],
+                color='#f39c12', edgecolor='#7e4100', s=55, marker='o',
+                label='Stagnation', zorder=5
+            )
+            has_any_5 = True
+
+        # 5. Divergence events (points)
+        div_mask = np.array([s == 'diverged' for s in statuses])
+        if np.any(div_mask) and self.curve_visibility.get('p5_div', True):
+            ax5.scatter(
+                iters[div_mask], delta_V[div_mask],
+                color='#d62728', edgecolor='#600000', s=70, marker='X',
+                label='Divergence', zorder=6
+            )
+            has_any_5 = True
+
+        if not has_any_5:
+            if len(iters) > 1:
+                ax5.set_xlim(iters[0], iters[-1])
+            ax5.text(0.5, 0.5, "No quantities selected in legend",
+                     ha='center', va='center', transform=ax5.transAxes,
+                     color='gray', fontsize=8, fontstyle='italic')
+
+        ax5.set_title("Poisson Equation Solver Error & Convergence Events", fontsize=9, fontweight='bold')
+        ax5.set_xlabel("Iteration", fontsize=8)
+        ax5.set_ylabel("Error Magnitude [V]", fontsize=8)
+        ax5.grid(True, alpha=0.3)
+
+        p5_quantities = [
+            ('p5_max_err', "Max Error (ΔV)", '#1f77b4', '-', 1.5),
+            ('p5_rms_err', "RMS Error", '#16a085', '--', 1.3),
+            ('p5_tol', "Tol (50 mV)", '#888888', ':', 1.2),
+            ('p5_stag', "Stagnation", '#f39c12', 'none', 0, 'o'),
+            ('p5_div', "Divergence", '#d62728', 'none', 0, 'X'),
+        ]
+        self._build_interactive_legend(ax5, p5_quantities, loc='upper left')
 
         self.canvas.draw_idle()
