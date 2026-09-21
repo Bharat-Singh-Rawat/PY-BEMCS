@@ -924,7 +924,7 @@ class DigitalTwinSimulator:
         min_it     = int(min_iters if min_iters is not None else params.get('poisson_min_iters', 3))
         # Default max allowed is now high (60 in simulation steps, 100 in build_domain)
         # to allow difficult evaluations to converge, protected by stagnation/divergence checks.
-        default_max = 100 if getattr(self, 'iteration', 0) == 0 else 60
+        default_max = 100 if getattr(self, 'iteration', 0) == 0 else 100
         if iterations is not None and iterations > default_max:
             max_it = iterations
         elif iterations is not None and not params.get('poisson_adaptive', True):
