@@ -13,6 +13,12 @@
     "m_e_ratio": 1000.0
   },
 
+  "mesh_zones": {
+    "presheath_factor": 1.0,
+    "optics_factor": 2.0,
+    "plume_factor": 4.0
+  },
+
   "simulation": {
     "n0_plasma": 7.72926180e17,
     "Te_up": 8.5,
