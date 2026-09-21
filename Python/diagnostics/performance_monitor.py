@@ -76,6 +76,8 @@ class StepDiagnostics:
     poisson_rms: float = 0.0
     poisson_converged: bool = True
     poisson_status: str = 'converged'
+    poisson_anderson_steps: int = 0
+    poisson_backtracks: int = 0
 
 
 class PerformanceMonitor:
@@ -189,6 +191,8 @@ class PerformanceMonitor:
         d.poisson_rms = float(getattr(sim, 'last_poisson_rms', 0.0))
         d.poisson_converged = bool(getattr(sim, 'last_poisson_converged', True))
         d.poisson_status = str(getattr(sim, 'last_poisson_status', 'converged'))
+        d.poisson_anderson_steps = int(getattr(sim, 'last_poisson_anderson_steps', 0))
+        d.poisson_backtracks = int(getattr(sim, 'last_poisson_backtracks', 0))
 
         # Memory
         if self._process is not None:
