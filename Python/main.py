@@ -1216,6 +1216,12 @@ class DigitalTwinApp(QMainWindow):
             "entire_bulk_plasma": bool(adv.get("entire_bulk_plasma", False)),
         }
 
+        self.mesh_zones = config.get("mesh_zones", {
+            "presheath_factor": 1.0,
+            "optics_factor": 1.0,
+            "plume_factor": 4.0
+        })
+
         sim = config.get("simulation", {})
         # Block signals while loading to avoid premature _update_debye_gap firings
         self.inputs["n0_plasma"].blockSignals(True)
@@ -1464,6 +1470,11 @@ class DigitalTwinApp(QMainWindow):
             params["inj_time"] = 0.0
 
         params['macro_weight'] = self.sim.macro_weight   # <- ADD THIS
+        params['mesh_zones'] = getattr(self, 'mesh_zones', {
+            "presheath_factor": 1.0,
+            "optics_factor": 1.0,
+            "plume_factor": 4.0
+        })
         return params
 
     def toggle_sim(self):
@@ -1611,8 +1622,14 @@ class DigitalTwinApp(QMainWindow):
         self.draw_static_domain()
 
         cfg_name = getattr(self, "current_config_name", "config.json")
+        dx_min = getattr(self.sim, 'dx_min', self.sim.dx)
+        dx_max = getattr(self.sim, 'dx_max', self.sim.dx)
+        if abs(dx_max - dx_min) > 1e-6:
+            dx_str = f"dx=[{dx_min:.4f}..{dx_max:.4f}], dy={self.sim.dy:.4f} mm"
+        else:
+            dx_str = f"dx=dy={self.sim.dx:.4f} mm"
         self.lbl_status.setText(
-            f"Domain Ready [{cfg_name}] | dx=dy={self.sim.dx:.4f} mm"
+            f"Domain Ready [{cfg_name}] | {dx_str}"
         )
         self.lbl_temp.setText(
             "Grid Temps: " + " | ".join([f"G{i+1}: 26°C" for i in range(len(self.grid_widgets))])
@@ -1631,7 +1648,12 @@ class DigitalTwinApp(QMainWindow):
         self.ax_live.contourf(self.sim.X, self.sim.Y, self.sim.V, 20, cmap="viridis", alpha=0.4)
 
         gy, gx = np.where(self.sim.isBound)
-        self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=4, c="k", alpha=0.8)
+        x_pts = getattr(self.sim, 'x_coords', getattr(self.sim, 'xpts', None))
+        y_pts = getattr(self.sim, 'y_coords', getattr(self.sim, 'ypts', None))
+        if x_pts is not None and y_pts is not None:
+            self.ax_live.scatter(x_pts[gx], y_pts[gy], s=4, c="k", alpha=0.8)
+        else:
+            self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=4, c="k", alpha=0.8)
 
         max_v = max(gw['V'].value() for gw in self.grid_widgets) if self.grid_widgets else 1000.0
         self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=max_v+300, alpha=0.8)
@@ -1911,7 +1933,12 @@ class DigitalTwinApp(QMainWindow):
                 cmap="hot", shading="nearest"
             )
             gy, gx = np.where(self.sim.isBound)
-            self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c="grey", alpha=0.5)
+            x_pts = getattr(self.sim, 'x_coords', getattr(self.sim, 'xpts', None))
+            y_pts = getattr(self.sim, 'y_coords', getattr(self.sim, 'ypts', None))
+            if x_pts is not None and y_pts is not None:
+                self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
+            else:
+                self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c="grey", alpha=0.5)
             self.ax_dmg.set_xlim(0, self.sim.Lx)
             self.ax_dmg.set_ylim(0, self.sim.Ly)
         else:
