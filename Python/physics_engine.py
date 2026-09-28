@@ -36,6 +36,7 @@ _GPU_POISSON = _GPU_POISSON_AVAILABLE and _USE_GPU_POISSON
 # TAICHI KERNELS
 # =============================================================================
 
+
 @ti.kernel
 def accumulate_rho_taichi(
     x: ti.types.ndarray(dtype=_TI_FP),
@@ -47,27 +48,20 @@ def accumulate_rho_taichi(
     nx: ti.i32,
     ny: ti.i32,
     charge_per_particle: ti.f32,
-    zb0: ti.f32,
-    zb1: ti.f32,
-    zdx0: ti.f32,
-    zdx1: ti.f32,
-    zdx2: ti.f32,
-    zoff0: ti.i32,
-    zoff1: ti.i32,
-    zoff2: ti.i32
+    zone_b: ti.types.ndarray(dtype=_TI_FP),
+    zone_dx: ti.types.ndarray(dtype=_TI_FP),
+    zone_off: ti.types.ndarray(dtype=ti.i32),
+    num_zones: ti.i32
 ):
-    """Parallel density accumulation with 3-zone O(1) cell lookup."""
+    """Parallel density accumulation with generic N-zone O(1) cell lookup."""
     for i in range(num_p):
         px = x[i]
         py = y[i]
-        ix = 0
-        if px < zb0:
-            ix = ti.cast(ti.round(px / zdx0), ti.i32) + zoff0
-        elif px < zb1:
-            ix = ti.cast(ti.round((px - zb0) / zdx1), ti.i32) + zoff1
-        else:
-            ix = ti.cast(ti.round((px - zb1) / zdx2), ti.i32) + zoff2
+        z = 0
+        while z < num_zones - 1 and px >= zone_b[z + 1]:
+            z += 1
 
+        ix = ti.cast(ti.round((px - zone_b[z]) / zone_dx[z]), ti.i32) + zone_off[z]
         iy = ti.cast(ti.round(py / dy), ti.i32)
 
         # Clamp to avoid out-of-bounds access
@@ -96,34 +90,23 @@ def push_particles_boris_taichi(
     ny: ti.i32,
     dt: ti.f32,
     q_m: ti.f32,
-    zb0: ti.f32,
-    zb1: ti.f32,
-    zdx0: ti.f32,
-    zdx1: ti.f32,
-    zdx2: ti.f32,
-    zoff0: ti.i32,
-    zoff1: ti.i32,
-    zoff2: ti.i32
+    zone_b: ti.types.ndarray(dtype=_TI_FP),
+    zone_dx: ti.types.ndarray(dtype=_TI_FP),
+    zone_off: ti.types.ndarray(dtype=ti.i32),
+    num_zones: ti.i32
 ):
-    """Parallel bilinear interpolation with 2D3V Boris Algorithm on 3-zone mesh"""
+    """Parallel bilinear interpolation with 2D3V Boris Algorithm on generic N-zone mesh"""
     for i in range(num_p):
         px = x[i]
         py = y[i]
 
-        ix0 = 0
-        fx = 0.0
-        if px < zb0:
-            local_i = ti.cast(ti.floor(px / zdx0), ti.i32)
-            ix0 = local_i + zoff0
-            fx = (px - ti.cast(local_i, ti.f32) * zdx0) / zdx0
-        elif px < zb1:
-            local_i = ti.cast(ti.floor((px - zb0) / zdx1), ti.i32)
-            ix0 = local_i + zoff1
-            fx = (px - (zb0 + ti.cast(local_i, ti.f32) * zdx1)) / zdx1
-        else:
-            local_i = ti.cast(ti.floor((px - zb1) / zdx2), ti.i32)
-            ix0 = local_i + zoff2
-            fx = (px - (zb1 + ti.cast(local_i, ti.f32) * zdx2)) / zdx2
+        z = 0
+        while z < num_zones - 1 and px >= zone_b[z + 1]:
+            z += 1
+
+        local_i = ti.cast(ti.floor((px - zone_b[z]) / zone_dx[z]), ti.i32)
+        ix0 = local_i + zone_off[z]
+        fx = (px - (zone_b[z] + ti.cast(local_i, ti.f32) * zone_dx[z])) / zone_dx[z]
 
         idx_y = py / dy
         iy0 = ti.cast(ti.floor(idx_y), ti.i32)
@@ -308,6 +291,10 @@ def _ti_arr(arr):
     """Return a C-contiguous float32 copy suitable for Taichi ndarray args."""
     return np.ascontiguousarray(arr, dtype=_NP_FP)
 
+def _ti_arr_i32(arr):
+    """Return a C-contiguous int32 copy suitable for Taichi ndarray args."""
+    return np.ascontiguousarray(arr, dtype=np.int32)
+
 
 # =============================================================================
 # STANDALONE HELPERS  (usable without instantiating the simulator)
@@ -346,6 +333,103 @@ def compute_debye_upstream_gap(n0: float, Te_up: float) -> float:
         n_debye = 30
 
     return n_debye * debye_mm
+
+
+def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0):
+    """
+    Automatically partition the domain into physical axial zones and estimate
+    physically-grounded coarsening factors based on Debye length, aperture
+    thickness, inter-grid gaps, and plume expansion.
+
+    Zones created:
+      1. Presheath: [0, upstream_gap], factor = 1.0 (dense plasma, resolves Debye length)
+      2. For each grid i:
+         - Grid barrel: [x_i, x_i + t_i], factor = min(1.5, max(1.0, round((t_i / 15.0) / dx0, 1)))
+           (ensures >= 15 cells across thickness for aperture resolution)
+         - Inter-grid gap: [x_i + t_i, x_{i+1}], factor = min(2.0, max(1.0, round((gap_i / 20.0) / dx0, 1)))
+           (resolves steep acceleration/deceleration electric fields)
+      3. Plume:
+         - Near Plume: [x_exit, x_exit + near_len], factor = 2.0 (neutralization & transition)
+         - Far Plume:  [x_exit + near_len, Lx], factor = 4.0 (dilute neutralized beam)
+    """
+    if not grids:
+        return [
+            {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Optics',    'x_start': min(Lx / 3.0, Lx), 'x_end': min(2.0 * Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': 4.0},
+        ]
+
+    zones = []
+    x_curr = 0.0
+    up_gap = min(float(upstream_gap_mm), Lx)
+
+    # 1. Presheath Zone
+    if up_gap > 1e-5:
+        zones.append({
+            'name': 'Presheath',
+            'x_start': round(x_curr, 5),
+            'x_end': round(up_gap, 5),
+            'factor': 1.0
+        })
+        x_curr = up_gap
+
+    # 2. Grid Barrels and Inter-Grid Gaps
+    num_grids = len(grids)
+    for i, g in enumerate(grids):
+        t_grid = float(g.get('t', 0.5))
+        gap = float(g.get('gap', 1.0))
+
+        # Grid barrel
+        if x_curr < Lx:
+            x_next = min(x_curr + t_grid, Lx)
+            if x_next - x_curr > 1e-5:
+                f_t = min(1.5, max(1.0, round((t_grid / 15.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Grid_{i+1}_barrel',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_t
+                })
+                x_curr = x_next
+
+        # Internal inter-grid gap
+        if i < num_grids - 1 and x_curr < Lx:
+            x_next = min(x_curr + gap, Lx)
+            if x_next - x_curr > 1e-5:
+                f_gap = min(2.0, max(1.0, round((gap / 20.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Gap_{i+1}_{i+2}',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_gap
+                })
+                x_curr = x_next
+
+    # 3. Plume Zones (Near Plume and Far Plume)
+    plume_remaining = Lx - x_curr
+    if plume_remaining > 1e-5:
+        near_plume_len = min(1.0, 0.3 * plume_remaining)
+        # Near Plume
+        if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
+            x_next = round(x_curr + near_plume_len, 5)
+            zones.append({
+                'name': 'Near_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': x_next,
+                'factor': 2.0
+            })
+            x_curr = x_next
+
+        # Far Plume
+        if Lx - x_curr > 1e-5:
+            zones.append({
+                'name': 'Far_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': round(Lx, 5),
+                'factor': 4.0
+            })
+
+    return zones
 
 
 # =============================================================================
@@ -409,6 +493,7 @@ class DigitalTwinSimulator:
         # Runtime performance monitor (opt-in)
         self._perf_monitor = None
         self._last_injection_area = 0.0  # logged for diagnostics
+        self._last_neut_injected = 0
         self.last_poisson_iters = 0
         self.last_poisson_delta_V = 0.0
         self.last_poisson_rms = 0.0
@@ -912,16 +997,30 @@ class DigitalTwinSimulator:
             x_screen_start = self.Lx / 3.0
             x_last_grid_end = 2.0 * self.Lx / 3.0
 
-        mesh_zones_cfg = params.get('mesh_zones', {})
-        presheath_factor = float(mesh_zones_cfg.get('presheath_factor', 1.0))
-        optics_factor    = float(mesh_zones_cfg.get('optics_factor', 1.0))
-        plume_factor     = float(mesh_zones_cfg.get('plume_factor', 4.0))
+        use_json_mesh_zones = bool(params.get('use_json_mesh_zones', False))
 
-        zone_configs = [
-            {'x_start': 0.0, 'x_end': min(x_screen_start, self.Lx), 'factor': presheath_factor},
-            {'x_start': min(x_screen_start, self.Lx), 'x_end': min(x_last_grid_end, self.Lx), 'factor': optics_factor},
-            {'x_start': min(x_last_grid_end, self.Lx), 'x_end': self.Lx, 'factor': plume_factor},
-        ]
+        if use_json_mesh_zones:
+            # Previous 3-zone configuration read from .json
+            mesh_zones_cfg = params.get('mesh_zones', {})
+            presheath_factor = float(mesh_zones_cfg.get('presheath_factor', 1.0))
+            optics_factor    = float(mesh_zones_cfg.get('optics_factor', 1.0))
+            plume_factor     = float(mesh_zones_cfg.get('plume_factor', 4.0))
+
+            zone_configs = [
+                {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(x_screen_start, self.Lx), 'factor': presheath_factor},
+                {'name': 'Optics',    'x_start': min(x_screen_start, self.Lx), 'x_end': min(x_last_grid_end, self.Lx), 'factor': optics_factor},
+                {'name': 'Plume',     'x_start': min(x_last_grid_end, self.Lx), 'x_end': self.Lx, 'factor': plume_factor},
+            ]
+        else:
+            # Automated multi-zone mesh estimator (default)
+            zone_configs = estimate_automatic_mesh_zones(
+                grids=grids,
+                upstream_gap_mm=self.upstream_gap_mm,
+                Lx=self.Lx,
+                dx0=self.dx
+            )
+
+        self.zone_configs = zone_configs
 
         # Generate non-uniform x_coords and lookup tables
         self.x_coords, self.zone_boundaries, self.zone_dx, self.zone_offsets = (
@@ -967,6 +1066,7 @@ class DigitalTwinSimulator:
             self.transmitted_ions_step = 0.0
             self.entered_optics = 0.0
             self.entered_optics_step = 0.0
+            self._last_neut_injected = 0
             self._domain_built = True
 
         inj_time = params.get("inj_time", 0.0)
@@ -985,7 +1085,7 @@ class DigitalTwinSimulator:
         bohm_factor = 1.0 if entire_bulk_plasma else 0.61
         # Flux-compensated macro_weight: Bohm injection flux carries bohm_factor * n0.
         # Calibrating with bohm_factor ensures steady-state upstream PPC matches target_ppc.
-        self.macro_weight = max(bohm_factor * n0 * cell_vol / self.target_ppc, 1e2)
+        self.macro_weight = max(bohm_factor * n0 * cell_vol / self.target_ppc, 1.0)
         self.mask_grids = []
         self.T_grids    = []
         self.isBound.fill(False)
@@ -1695,35 +1795,6 @@ class DigitalTwinSimulator:
                     new_evz = (np.random.randn(num_inj_e) * v_e_th_source).astype(_NP_FP)
                     self._add_electrons(new_ex, new_ey, new_evx, new_evy, new_evz)
 
-        # —- NEUTRALIZER —-
-        num_e_neut = int(params.get('neut_rate', 30))
-        Te_eV = params.get('Te', 5.0)
-        # Default neutralizer position: 9/10 of the downstream plume region
-        # (between last grid exit and domain end), unless the user has overridden it.
-        if hasattr(self, 'grid_x_ends') and self.grid_x_ends:
-            _x_exit = self.grid_x_ends[-1]
-            _neut_default = _x_exit + 0.9 * (self.Lx - _x_exit)
-        else:
-            _neut_default = self.Lx - 0.5
-        neut_x_param = params.get('neut_x', _neut_default)
-        neut_r_param = params.get('neut_r', self.Ly)
-        if neut_x_param > self.Lx or neut_x_param < 0.0:
-            if not getattr(self, '_warned_neut_oob', False):
-                print(f"[Warning] Neutralizer position x={neut_x_param:.3f} mm is outside x-domain [0, {self.Lx:.3f} mm]. Setting to x = Lx ({self.Lx:.3f} mm).")
-                self._warned_neut_oob = True
-            neut_x = float(self.Lx)
-        else:
-            self._warned_neut_oob = False
-            neut_x = float(neut_x_param)
-        neut_r = float(np.clip(neut_r_param, self.dy, self.Ly))
-        if num_e_neut > 0:
-            new_ey = np.random.uniform(0.0, neut_r, num_e_neut).astype(_NP_FP)
-            new_ex = np.full(num_e_neut, neut_x, dtype=_NP_FP)
-            v_e_th = np.sqrt(2.0 * self.q * Te_eV / self.m_e)
-            new_evx = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)
-            new_evy = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)
-            new_evz = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)
-            self._add_electrons(new_ex, new_ey, new_evx, new_evy, new_evz)
 
         # ————————————————————————————————
         # B. POISSON SOLVER
@@ -1731,14 +1802,10 @@ class DigitalTwinSimulator:
         self.rho.fill(0.0)
         charge_per_particle = self.q * self.macro_weight
 
-        zb0 = np.float32(self.zone_boundaries[1])
-        zb1 = np.float32(self.zone_boundaries[2])
-        zdx0 = np.float32(self.zone_dx[0])
-        zdx1 = np.float32(self.zone_dx[1])
-        zdx2 = np.float32(self.zone_dx[2])
-        zoff0 = int(self.zone_offsets[0])
-        zoff1 = int(self.zone_offsets[1])
-        zoff2 = int(self.zone_offsets[2])
+        zone_b_ti = _ti_arr(self.zone_boundaries.astype(_NP_FP))
+        zone_dx_ti = _ti_arr(self.zone_dx.astype(_NP_FP))
+        zone_off_ti = _ti_arr_i32(self.zone_offsets)
+        num_zones = int(len(self.zone_dx))
         _dy = np.float32(self.dy)
         cvol_ti = _ti_arr(self.cell_vol_1d.astype(_NP_FP))
 
@@ -1754,7 +1821,7 @@ class DigitalTwinSimulator:
                     self.nx,
                     self.ny,
                     np.float32(charge_per_particle),
-                    zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
+                    zone_b_ti, zone_dx_ti, zone_off_ti, num_zones
                 )
             else:
                 accumulate_rho_cpu(
@@ -1784,7 +1851,7 @@ class DigitalTwinSimulator:
                     self.nx,
                     self.ny,
                     np.float32(-charge_per_particle),
-                    zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
+                    zone_b_ti, zone_dx_ti, zone_off_ti, num_zones
                 )
             else:
                 accumulate_rho_cpu(
@@ -1866,7 +1933,7 @@ class DigitalTwinSimulator:
                         px_ti, py_ti, pvx_ti, pvy_ti, pvz_ti,
                         self.Ex, self.Ey, self.Bx, self.By, self.Bz,
                         num_p_step, _dy, self.nx, self.ny, dt_ion, _qm_ion,
-                        zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
+                        zone_b_ti, zone_dx_ti, zone_off_ti, num_zones
                     )
 
                 self.p_x[:num_p_step] = px_ti
@@ -1908,7 +1975,7 @@ class DigitalTwinSimulator:
                         ex_ti, ey_ti, evx_ti, evy_ti, evz_ti,
                         self.Ex, self.Ey, self.Bx, self.By, self.Bz,
                         num_e_step, _dy, self.nx, self.ny, dt_e, _qm_e,
-                        zb0, zb1, zdx0, zdx1, zdx2, zoff0, zoff1, zoff2
+                        zone_b_ti, zone_dx_ti, zone_off_ti, num_zones
                     )
 
                 self.e_x[:num_e_step] = ex_ti
@@ -2211,6 +2278,43 @@ class DigitalTwinSimulator:
                 self.e_vy[:n_alive_e] = e_vy[alive_e]
                 self.e_vz[:n_alive_e] = e_vz[alive_e]
                 self.num_e = n_alive_e
+
+        # —- NEUTRALIZER —-
+        neut_match_ion = params.get('neut_match_ion', False)
+        if neut_match_ion:
+            # Match electron emission to ion beam exiting the last grid
+            num_e_neut = int(round(self.transmitted_ions_step))
+        else:
+            num_e_neut = int(params.get('neut_rate', 30))
+        self._last_neut_injected = num_e_neut
+
+        Te_eV = params.get('Te', 5.0)
+        # Default neutralizer position: 9/10 of the downstream plume region
+        # (between last grid exit and domain end), unless the user has overridden it.
+        if hasattr(self, 'grid_x_ends') and self.grid_x_ends:
+            _x_exit = self.grid_x_ends[-1]
+            _neut_default = _x_exit + 0.9 * (self.Lx - _x_exit)
+        else:
+            _neut_default = self.Lx - 0.5
+        neut_x_param = params.get('neut_x', _neut_default)
+        neut_r_param = params.get('neut_r', self.Ly)
+        if neut_x_param > self.Lx or neut_x_param < 0.0:
+            if not getattr(self, '_warned_neut_oob', False):
+                print(f"[Warning] Neutralizer position x={neut_x_param:.3f} mm is outside x-domain [0, {self.Lx:.3f} mm]. Setting to x = Lx ({self.Lx:.3f} mm).")
+                self._warned_neut_oob = True
+            neut_x = float(self.Lx)
+        else:
+            self._warned_neut_oob = False
+            neut_x = float(neut_x_param)
+        neut_r = float(np.clip(neut_r_param, self.dy, self.Ly))
+        if num_e_neut > 0:
+            new_ey = np.random.uniform(0.0, neut_r, num_e_neut).astype(_NP_FP)
+            new_ex = np.full(num_e_neut, neut_x, dtype=_NP_FP)
+            v_e_th = np.sqrt(2.0 * self.q * Te_eV / self.m_e)
+            new_evx = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)
+            new_evy = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)
+            new_evz = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)
+            self._add_electrons(new_ex, new_ey, new_evx, new_evy, new_evz)
 
         # ————————————————————————————————
         # F. THERMAL
