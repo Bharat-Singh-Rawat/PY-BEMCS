@@ -194,16 +194,30 @@ class PPCWindow(QWidget):
 
         # Zone delimiter lines and labels
         if self.chk_zones.isChecked():
-            self.ax.axvline(x=x_up, color='white', linestyle='--', linewidth=1.2, alpha=0.8)
-            self.ax.axvline(x=x_last, color='cyan', linestyle='--', linewidth=1.2, alpha=0.8)
-            y_pos = sim.Ly * 0.90
-            for xc, label in [
-                (x_up * 0.5, "Presheath"),
-                ((x_up + x_last) * 0.5, "Optics"),
-                ((x_last + sim.Lx) * 0.5, "Plume"),
-            ]:
-                self.ax.text(xc, y_pos, label, color='white', fontsize=8, ha='center',
-                             bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.6))
+            if hasattr(sim, 'zone_configs') and len(sim.zone_configs) > 3:
+                # Multi-zone display
+                y_pos = sim.Ly * 0.90
+                for z in sim.zone_configs:
+                    x_s = z['x_start']
+                    x_e = z['x_end']
+                    name = z.get('name', '')
+                    if x_s > 0:
+                        self.ax.axvline(x=x_s, color='cyan', linestyle=':', linewidth=0.9, alpha=0.7)
+                    xc = (x_s + x_e) * 0.5
+                    short_name = name.replace("Grid_", "G").replace("_barrel", "").replace("Gap_", "Gap ").replace("_Plume", " Plm")
+                    self.ax.text(xc, y_pos, short_name, color='white', fontsize=7, ha='center',
+                                 bbox=dict(boxstyle='round,pad=0.15', facecolor='black', alpha=0.6))
+            else:
+                self.ax.axvline(x=x_up, color='white', linestyle='--', linewidth=1.2, alpha=0.8)
+                self.ax.axvline(x=x_last, color='cyan', linestyle='--', linewidth=1.2, alpha=0.8)
+                y_pos = sim.Ly * 0.90
+                for xc, label in [
+                    (x_up * 0.5, "Presheath"),
+                    ((x_up + x_last) * 0.5, "Optics"),
+                    ((x_last + sim.Lx) * 0.5, "Plume"),
+                ]:
+                    self.ax.text(xc, y_pos, label, color='white', fontsize=8, ha='center',
+                                 bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.6))
 
         self.ax.set_xlim(0, sim.Lx)
         self.ax.set_ylim(0, sim.Ly)
