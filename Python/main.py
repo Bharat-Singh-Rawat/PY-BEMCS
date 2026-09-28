@@ -529,6 +529,17 @@ class AdvancedSettingsDialog(QDialog):
         )
         layout.addWidget(self.chk_bulk)
 
+        # —- Use .json Mesh Zones Configuration option —-
+        self.chk_json_zones = QCheckBox("Use .json Mesh Zones Configuration")
+        self.chk_json_zones.setChecked(bool(current_params.get("use_json_mesh_zones", False)))
+        self.chk_json_zones.setToolTip(
+            "When checked: uses the fixed 3-zone coarsening factors specified in the .json file\n"
+            "  (presheath_factor, optics_factor, plume_factor).\n"
+            "When unchecked (default): uses the automated multi-zone estimator that physically partitions\n"
+            "  the domain across apertures, gaps, and plume with adaptive coarsening factors."
+        )
+        layout.addWidget(self.chk_json_zones)
+
         layout.addLayout(self.form)
 
         btn_box = QHBoxLayout()
@@ -544,6 +555,7 @@ class AdvancedSettingsDialog(QDialog):
     def get_values(self):
         result = {k: v.value() for k, v in self.inputs.items()}
         result["entire_bulk_plasma"] = self.chk_bulk.isChecked()
+        result["use_json_mesh_zones"] = self.chk_json_zones.isChecked()
         return result
 
 
@@ -854,6 +866,8 @@ class DigitalTwinApp(QMainWindow):
         control_layout.addLayout(row)
         row, self.inputs["Thresh"] = self.create_input("Cell Fail Thresh:", 0.0, 1e12, 1.0, 4)
         control_layout.addLayout(row)
+        row, self.inputs["target_ppc"] = self.create_input("Target PPC:", 1.0, 100000.0, 40.0, 0)
+        control_layout.addLayout(row)
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel("4. SIMULATION MODE"))
@@ -881,6 +895,16 @@ class DigitalTwinApp(QMainWindow):
 
         control_layout.addSpacing(15)
         control_layout.addWidget(QLabel("5. NEUTRALIZER"))
+        self.chk_neut_match_ion = QCheckBox("el. rate = ion rate")
+        self.chk_neut_match_ion.setToolTip(
+            "When checked, the neutralizer automatically emits electron macroparticles\n"
+            "matching the ion beam current exiting the last grid each step.\n"
+            "The 'e- Inject Rate' input is ignored in this mode."
+        )
+        self.chk_neut_match_ion.setChecked(False)
+        self.chk_neut_match_ion.stateChanged.connect(self._on_neut_match_toggled)
+        control_layout.addWidget(self.chk_neut_match_ion)
+
         row, self.inputs["neut_rate"] = self.create_input("e- Inject Rate(macro):", 0.0, 1e9, 1.0, 4)
         control_layout.addLayout(row)
         row, self.inputs["Te"] = self.create_input("e- Temp (eV):", 0.0, 1000.0, 0.1, 4)
@@ -1024,6 +1048,7 @@ class DigitalTwinApp(QMainWindow):
         self.inputs["n0"].setValue(1e18)
         self.inputs["Accel"].setValue(1.0)
         self.inputs["Thresh"].setValue(1e6)
+        self.inputs["target_ppc"].setValue(40.0)
         self.inputs["inj_time_µs"].setValue(0.0)
         # Default (presheath) gap = 0.75 x default screen radius (0.80 mm)
         _default_screen_r = 0.80
@@ -1032,7 +1057,9 @@ class DigitalTwinApp(QMainWindow):
         self.inputs["upstream_gap_mm"].setValue(_auto_gap)
 
         # Neutralizer
+        self.chk_neut_match_ion.setChecked(False)
         self.inputs["neut_rate"].setValue(30.0)
+        self.inputs["neut_rate"].setEnabled(True)
         self.inputs["Te"].setValue(2.0)
         self.inputs["neut_r"].setValue(1.5)
 
@@ -1125,6 +1152,11 @@ class DigitalTwinApp(QMainWindow):
         auto_Ly = round(auto_Ly, 3)
         return auto_Lx, auto_Ly
 
+    def _on_neut_match_toggled(self, state):
+        """Enable or disable manual neutralizer injection rate when matched to ion rate."""
+        is_matched = bool(state)
+        self.inputs["neut_rate"].setEnabled(not is_matched)
+
     def _validate_neut_x(self):
         """Warn and clamp neutralizer x position to Lx if it is settled outside the domain."""
         if hasattr(self, 'sim') and hasattr(self.sim, 'Lx') and self.sim.Lx > 0:
@@ -1214,6 +1246,7 @@ class DigitalTwinApp(QMainWindow):
             "V_plasma_offset": adv.get("V_plasma_offset", 20.0),
             "m_e_ratio": adv.get("m_e_ratio", 1000.0),
             "entire_bulk_plasma": bool(adv.get("entire_bulk_plasma", False)),
+            "use_json_mesh_zones": bool(adv.get("use_json_mesh_zones", False)),
         }
 
         self.mesh_zones = config.get("mesh_zones", {
@@ -1236,6 +1269,7 @@ class DigitalTwinApp(QMainWindow):
         self.inputs["n0"].setValue(sim["n0"])
         self.inputs["Accel"].setValue(sim["Accel"])
         self.inputs["Thresh"].setValue(sim["Thresh"])
+        self.inputs["target_ppc"].setValue(float(sim.get("target_ppc", 40.0)))
 
         mode = sim["sim_mode"]
         idx = self.combo_mode.findText(mode)
@@ -1267,7 +1301,10 @@ class DigitalTwinApp(QMainWindow):
         self.spin_rf_amp.setValue(rf["rf_amp"])
 
         neut = config.get("neutralizer", {})
+        neut_matched = bool(neut.get("neut_match_ion", False))
+        self.chk_neut_match_ion.setChecked(neut_matched)
         self.inputs["neut_rate"].setValue(neut.get("neut_rate", 30.0))
+        self.inputs["neut_rate"].setEnabled(not neut_matched)
         self.inputs["Te"].setValue(neut.get("Te", 2.0))
         self.inputs["neut_r"].setValue(neut.get("neut_r", adv.get("neut_r", 1.5)))
 
@@ -1450,6 +1487,7 @@ class DigitalTwinApp(QMainWindow):
         params["rf_grid_idx"] = self.combo_rf_grid.currentIndex()
         params["rf_freq"] = self.spin_rf_freq.value()
         params["rf_amp"] = self.spin_rf_amp.value()
+        params["neut_match_ion"] = self.chk_neut_match_ion.isChecked()
         params["pitch_mm"] = getattr(self, "pitch_mm", 0.0)
 
         grids = []
@@ -1470,6 +1508,7 @@ class DigitalTwinApp(QMainWindow):
             params["inj_time"] = 0.0
 
         params['macro_weight'] = self.sim.macro_weight   # <- ADD THIS
+        params['use_json_mesh_zones'] = self.adv_params.get('use_json_mesh_zones', False)
         params['mesh_zones'] = getattr(self, 'mesh_zones', {
             "presheath_factor": 1.0,
             "optics_factor": 1.0,
@@ -1624,12 +1663,13 @@ class DigitalTwinApp(QMainWindow):
         cfg_name = getattr(self, "current_config_name", "config.json")
         dx_min = getattr(self.sim, 'dx_min', self.sim.dx)
         dx_max = getattr(self.sim, 'dx_max', self.sim.dx)
+        mesh_mode_tag = "JSON 3-Zone" if self.adv_params.get("use_json_mesh_zones", False) else f"Auto {len(getattr(self.sim, 'zone_configs', []))}-Zone"
         if abs(dx_max - dx_min) > 1e-6:
             dx_str = f"dx=[{dx_min:.4f}..{dx_max:.4f}], dy={self.sim.dy:.4f} mm"
         else:
             dx_str = f"dx=dy={self.sim.dx:.4f} mm"
         self.lbl_status.setText(
-            f"Domain Ready [{cfg_name}] | {dx_str}"
+            f"Domain Ready [{cfg_name}] | {mesh_mode_tag} | {dx_str}"
         )
         self.lbl_temp.setText(
             "Grid Temps: " + " | ".join([f"G{i+1}: 26°C" for i in range(len(self.grid_widgets))])
