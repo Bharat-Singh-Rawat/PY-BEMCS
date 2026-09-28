@@ -588,6 +588,9 @@ class DigitalTwinApp(QMainWindow):
         self.time_history = []   # simulated time [s]
         self.transparency_history  = []
         self.transparency3_history = []
+        self.ion_current_exit_history = []      # instantaneous exit ion current [A]
+        self.ion_current_exit_avg_history = []  # cumulative average exit ion current [A]
+        self.transmitted_ions_history = []      # macroparticles transmitted in step
         self.active_cells_history  = []
         self.low_ppc_cells_history = []
         self.T_histories = {}
@@ -1580,6 +1583,9 @@ class DigitalTwinApp(QMainWindow):
         self.time_history.clear()
         self.transparency_history.clear()
         self.transparency3_history.clear()
+        self.ion_current_exit_history.clear()
+        self.ion_current_exit_avg_history.clear()
+        self.transmitted_ions_history.clear()
         self.active_cells_history.clear()
         self.low_ppc_cells_history.clear()
         self.lblTime.setText("t_sim:        — us")
@@ -1779,7 +1785,8 @@ class DigitalTwinApp(QMainWindow):
             f"Exit vx mean: {self.sim.exit_vx_mean: .2e} m/s\n"
             f"Exit |v| mean: {self.sim.exit_v_mean: .2e} m/s\n"
             f"Exit E mean: {self.sim.exit_energy_mean_eV: .1f} eV\n"
-            f"Exit count step: {self.sim.exit_count_step}"
+            f"Exit count step: {self.sim.exit_count_step}\n"
+            f"Exit I_ion step: {self.sim.exit_ion_current_step * 1e3:.3f} mA"
         )
         if self.sim._perf_monitor and self.sim._perf_monitor.history:
             last_diag = self.sim._perf_monitor.history[-1]
@@ -1880,6 +1887,9 @@ class DigitalTwinApp(QMainWindow):
         self.time_history.append(t_sim)
         self.transparency_history.append(transparency)
         self.transparency3_history.append(trans_last_frame)
+        self.ion_current_exit_history.append(self.sim.exit_ion_current_step)
+        self.ion_current_exit_avg_history.append(self.sim.exit_ion_current_avg)
+        self.transmitted_ions_history.append(int(round(self.sim.transmitted_ions_step)))
         self.active_cells_history.append(self.sim.total_active_cells)
         self.low_ppc_cells_history.append(self.sim.low_ppc_cells)
 
@@ -2041,6 +2051,9 @@ class DigitalTwinApp(QMainWindow):
                     'minpotential',
                     'beamdivergence°',
                     'transparency',
+                    'ion_current_exit_A',
+                    'ion_current_exit_avg_A',
+                    'transmitted_ions_step',
                     'total_active_cells',
                     'cells_less_than_3_macroparticles'
                 ]
@@ -2060,6 +2073,9 @@ class DigitalTwinApp(QMainWindow):
                         self.ebs_history[j],
                         self.div_history[j],
                         self.transparency_history[j] if j < len(self.transparency_history) else '',
+                        self.ion_current_exit_history[j] if j < len(self.ion_current_exit_history) else '',
+                        self.ion_current_exit_avg_history[j] if j < len(self.ion_current_exit_avg_history) else '',
+                        self.transmitted_ions_history[j] if j < len(self.transmitted_ions_history) else '',
                         self.active_cells_history[j] if j < len(self.active_cells_history) else '',
                         self.low_ppc_cells_history[j] if j < len(self.low_ppc_cells_history) else ''
                     ]

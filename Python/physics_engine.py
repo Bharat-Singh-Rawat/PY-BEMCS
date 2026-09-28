@@ -486,6 +486,8 @@ class DigitalTwinSimulator:
         self.injected_ions_step  = 0.0
         self.transmitted_ions    = 0.0
         self.transmitted_ions_step = 0.0
+        self.exit_ion_current_step = 0.0
+        self.exit_ion_current_avg  = 0.0
         self.entered_optics      = 0.0
         self.entered_optics_step = 0.0
         self.lost_to_oob_step    = 0.0
@@ -1064,6 +1066,8 @@ class DigitalTwinSimulator:
             self.injected_ions_step = 0.0
             self.transmitted_ions = 0.0
             self.transmitted_ions_step = 0.0
+            self.exit_ion_current_step = 0.0
+            self.exit_ion_current_avg  = 0.0
             self.entered_optics = 0.0
             self.entered_optics_step = 0.0
             self._last_neut_injected = 0
@@ -1656,6 +1660,7 @@ class DigitalTwinSimulator:
         self._step_t0 = _time_mod.perf_counter()
         self.transmitted_ions_step = 0.0
         self.transmitted3_step = 0.0
+        self.exit_ion_current_step = 0.0
         self.entered_optics_step = 0.0
         self.injected_ions_step = 0.0
         self.lost_to_grid_step = 0.0
@@ -2216,6 +2221,11 @@ class DigitalTwinSimulator:
             self.transmitted_ions += float(n_transmitted)
             self.transmitted3_step = float(n_transmitted)
 
+        # Compute ion beam current exiting the grids [A]
+        charge_per_macro = self.q_ion * self.macro_weight
+        self.exit_ion_current_step = (self.transmitted_ions_step * charge_per_macro) / self.dt if self.dt > 0 else 0.0
+        self.exit_ion_current_avg = (self.transmitted_ions * charge_per_macro) / t_current if t_current > 0 else 0.0
+
         grid_hit_mask = hit_grid & ~out_of_bounds
         self.lost_to_grid_step = float(np.count_nonzero(grid_hit_mask))
 
@@ -2624,6 +2634,10 @@ class DigitalTwinSimulator:
     def get_transparency(self):
         if self.entered_optics <= 0.0: return 0.0
         return self.transmitted_ions / self.entered_optics
+
+    def get_exit_ion_current(self):
+        """Return (instantaneous_step_A, cumulative_average_A) ion current exiting the grids."""
+        return self.exit_ion_current_step, self.exit_ion_current_avg
 
     def has_active_particles(self):
         return (self.num_p > 0) or (self.num_e > 0)

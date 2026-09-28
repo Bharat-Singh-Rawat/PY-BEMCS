@@ -49,6 +49,8 @@ class StepDiagnostics:
     lost_to_oob: int = 0
     transmitted: int = 0
     net_balance: int = 0               # injected - (grid + oob + transmitted)
+    exit_ion_current_A: float = 0.0    # instantaneous ion beam current exiting grids [A]
+    exit_ion_current_avg_A: float = 0.0 # cumulative average ion beam current exiting grids [A]
 
     # PPC statistics
     mean_ppc_all: float = 0.0          # mean over all active (non-zero) cells
@@ -146,6 +148,8 @@ class PerformanceMonitor:
         d.lost_to_oob = int(getattr(sim, 'lost_to_oob_step', 0))
         d.transmitted = int(getattr(sim, 'transmitted_ions_step', 0))
         d.net_balance = d.injected_this_step - (d.lost_to_grid + d.lost_to_oob + d.transmitted)
+        d.exit_ion_current_A = float(getattr(sim, 'exit_ion_current_step', 0.0))
+        d.exit_ion_current_avg_A = float(getattr(sim, 'exit_ion_current_avg', 0.0))
 
         # PPC statistics (use current_ppc_map if available)
         ppc_map = getattr(sim, 'current_ppc_map', None)
