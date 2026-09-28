@@ -1721,7 +1721,7 @@ class DigitalTwinSimulator:
             # Presheath mode: include Bohm factor 0.61 at the injection plane.
             # Entire Bulk Plasma mode: no 0.61 (full density assumed at boundary).
             entire_bulk_plasma = params.get('entire_bulk_plasma', False)
-            bohm_factor = 1.0 if entire_bulk_plasma else 0.61
+            bohm_factor = 1.0 if entire_bulk_plasma else 0.607
             I_ion = self.q_ion * bohm_factor * n0 * v_bohm * injection_area # 3.7-28 Goebbels
             charge_per_macro = self.q_ion * self.macro_weight
 
