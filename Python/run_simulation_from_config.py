@@ -88,8 +88,10 @@ def parse_config(config_path='config.json'):
         })
 
     # --- Advanced settings ---
+    adv = config.get('advanced', {})
     neut = config.get('neutralizer', {})
     params['neut_rate'] = neut.get('neut_rate', 30.0)
+    params['neut_match_ion'] = bool(neut.get('neut_match_ion', False))
     params['Te'] = neut.get('Te', 2.0)
     params['neut_x'] = neut.get('neut_x', adv.get('neut_x', None))
     params['neut_r'] = neut.get('neut_r', adv.get('neut_r', 1.5))
@@ -159,6 +161,7 @@ def parse_config(config_path='config.json'):
     params['Thresh'] = sim_cfg.get('Thresh', 10000.0)
     params['sim_mode'] = sim_cfg.get('sim_mode', 'Both')
     params['geometry'] = sim_cfg.get('geometry', 'half_hole')
+    params['target_ppc'] = sim_cfg.get('target_ppc', 40.0)
 
     # --- RF co-extraction ---
     rf_cfg = config.get('rf_co_extraction', {})
@@ -170,6 +173,7 @@ def parse_config(config_path='config.json'):
     # --- Neutralizer ---
     neut_cfg = config.get('neutralizer', {})
     params['neut_rate'] = neut_cfg.get('neut_rate', 0)
+    params['neut_match_ion'] = bool(neut_cfg.get('neut_match_ion', False))
     params['Te'] = neut_cfg.get('Te', 5.0)
 
     # --- Grids ---
