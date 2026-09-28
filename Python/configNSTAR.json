@@ -29,7 +29,7 @@
     "Thresh": 10000.0,
     "sim_mode": "Thermal",
     "geometry": "half_hole",
-    "target_ppc": 200
+    "target_ppc": 250
   },
 
   "rf_co_extraction": {
@@ -41,6 +41,7 @@
 
   "neutralizer": {
     "neut_rate": 0,
+    "neut_match_ion": false,
     "Te": 5.0,
     "neut_x": 10.0,
     "neut_r": 1.5

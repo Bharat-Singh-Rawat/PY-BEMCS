@@ -41,6 +41,7 @@
 
   "neutralizer": {
     "neut_rate": 30,
+    "neut_match_ion": false,
     "Te": 5.0,
     "neut_x": 10.0,
     "neut_r": 1.5
