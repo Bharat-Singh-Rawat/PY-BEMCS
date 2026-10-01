@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import csv
+import threading
 import time
 import numpy as np
 import matplotlib
@@ -145,6 +146,157 @@ class PyInstallerWorker(QThread):
                     _sh.rmtree(build_dir, ignore_errors=True)
             except Exception:
                 pass
+
+
+class SimulationWorker(QThread):
+    """Background worker that runs sim.step() off the GUI thread.
+
+    Emits *step_done* with a snapshot dict containing every piece of data the
+    GUI needs to update plots and labels.  The snapshot uses **copies** of
+    numpy arrays so the GUI can safely consume them while the worker is
+    already computing the next step.
+
+    Flow
+    ----
+    1. GUI calls ``worker.start_sim(params)`` → sets ``_running = True`` and
+       starts the thread (or resumes the loop).
+    2. Worker runs ``sim.step(params)`` in a loop, emitting ``step_done``
+       after each iteration.
+    3. GUI calls ``worker.pause()`` → sets ``_running = False``; the loop
+       finishes the current iteration and stops.
+    """
+
+    # Signal carries a dict with ALL snapshot data for the GUI update
+    step_done = pyqtSignal(dict)
+    # Emitted when the worker thread finishes its run loop
+    sim_finished = pyqtSignal()
+
+    def __init__(self, sim, parent=None):
+        super().__init__(parent)
+        self.sim = sim
+        self._params = {}
+        self._running = False
+        self._lock = threading.Lock()   # protects _params / _running
+
+    # ---- control interface (called from GUI thread) ----
+    def start_sim(self, params):
+        """Begin or resume the simulation loop with the given *params*."""
+        with self._lock:
+            self._params = params
+            self._running = True
+        if not self.isRunning():
+            self.start()            # QThread.start()
+
+    def update_params(self, params):
+        """Hot-swap parameters while the worker is running."""
+        with self._lock:
+            self._params = params
+
+    def pause(self):
+        """Ask the worker to stop after the current step."""
+        with self._lock:
+            self._running = False
+
+    @property
+    def running(self):
+        with self._lock:
+            return self._running
+
+    # ---- thread body ----
+    def run(self):
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+                params = self._params.copy()  # shallow copy is fine (values are immutable / lists)
+
+            # ----- Heavy computation (runs off the GUI thread) -----
+            try:
+                step_out = self.sim.step(params)
+            except Exception as exc:
+                print(f"[SimulationWorker] sim.step() raised: {exc}")
+                with self._lock:
+                    self._running = False
+                break
+
+            if len(step_out) == 5:
+                remeshed, min_pot, current_div, T_grids, trans_last_frame = step_out
+            else:
+                remeshed, min_pot, current_div, T_grids = step_out
+                trans_last_frame = 0.0
+
+            # Compute derived quantities while still on the worker thread
+            self.sim.get_total_energy()
+            self.sim.get_total_charge()
+            transparency = self.sim.get_transparency()
+
+            # Build a snapshot dict with copies of all arrays the GUI needs
+            snap = {
+                'remeshed':            remeshed,
+                'min_pot':             min_pot,
+                'current_div':         current_div,
+                'T_grids':             list(T_grids),
+                'trans_last_frame':    trans_last_frame,
+                'transparency':        transparency,
+                'iteration':           self.sim.iteration,
+                'dt':                  self.sim.dt,
+                'num_p':               self.sim.num_p,
+                'num_e':               self.sim.num_e,
+                'exit_vx_mean':        self.sim.exit_vx_mean,
+                'exit_v_mean':         self.sim.exit_v_mean,
+                'exit_energy_mean_eV': self.sim.exit_energy_mean_eV,
+                'exit_count_step':     self.sim.exit_count_step,
+                'exit_ion_current_step': self.sim.exit_ion_current_step,
+                'exit_ion_current_avg':  self.sim.exit_ion_current_avg,
+                'transmitted_ions_step': self.sim.transmitted_ions_step,
+                'total_active_cells':  self.sim.total_active_cells,
+                'low_ppc_cells':       self.sim.low_ppc_cells,
+                'injection_enabled':   self.sim.injection_enabled,
+                'has_active_particles': self.sim.has_active_particles(),
+                'm_ion':               self.sim.m_ion,
+                'm_e':                 self.sim.m_e,
+                'q':                   self.sim.q,
+                'Lx':                  self.sim.Lx,
+                'Ly':                  self.sim.Ly,
+                'dx':                  self.sim.dx,
+                'dy':                  self.sim.dy,
+                'nx':                  self.sim.nx,
+                'ny':                  self.sim.ny,
+                # Copy particle arrays so the GUI can scatter-plot safely
+                'p_x':        self.sim.p_x[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
+                'p_y':        self.sim.p_y[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
+                'p_vx':       self.sim.p_vx[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
+                'p_vy':       self.sim.p_vy[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
+                'p_vz':       self.sim.p_vz[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
+                'p_isCEX':    self.sim.p_isCEX[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0, dtype=bool),
+                'e_x':        self.sim.e_x[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
+                'e_y':        self.sim.e_y[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
+                'e_vx':       self.sim.e_vx[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
+                'e_vy':       self.sim.e_vy[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
+                # Maps (copy so GUI can display while worker mutates originals)
+                'Tmap':       self.sim.Tmap.copy() if self.sim.Tmap is not None else None,
+                'isBound':    self.sim.isBound,           # read-only, ok to share reference
+                'mask_grids': self.sim.mask_grids,         # read-only
+                'damage_map': self.sim.damage_map.copy(),
+                'X':          self.sim.X,
+                'Y':          self.sim.Y,
+                'V':          self.sim.V,
+                'x_coords':   getattr(self.sim, 'x_coords', None),
+                'y_coords':   getattr(self.sim, 'y_coords', None),
+                # Perf monitor
+                'perf_monitor': self.sim._perf_monitor,
+                # params echo-back
+                'params':     params,
+            }
+
+            self.step_done.emit(snap)
+
+            # Tiny sleep to let the GUI thread process the signal and repaint.
+            # Without this the event queue fills faster than the GUI can drain
+            # and the interface *looks* frozen even though events do queue up.
+            self.msleep(1)
+
+        self.sim_finished.emit()
 
 
 def _collect_extra_lib_paths():
@@ -637,9 +789,10 @@ class DigitalTwinApp(QMainWindow):
         self.duration_clock_timer.timeout.connect(self.update_simulation_timer)
         self.duration_clock_timer.start(100)
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.run_sim_step)
-        self.timer.start(33)
+        # --- Simulation worker (runs sim.step in a background thread) ---
+        self._sim_worker = SimulationWorker(self.sim, parent=self)
+        self._sim_worker.step_done.connect(self._on_step_result)
+        self._sim_worker.sim_finished.connect(self._on_worker_finished)
 
     def setup_menu_bar(self):
         menubar = self.menuBar()
@@ -1664,8 +1817,11 @@ class DigitalTwinApp(QMainWindow):
             self.sim_isRunning = True
             self._resume_simulation_timer()
             self.btn_toggle.setText("PAUSE BEAM")
+            # Launch (or resume) the background worker thread
+            self._sim_worker.start_sim(self.get_params())
         else:
             self.sim_isRunning = False
+            self._sim_worker.pause()
             self._pause_simulation_timer()
             self.btn_toggle.setText("RESUME BEAM")
         self.update_simulation_timer()
@@ -1712,6 +1868,10 @@ class DigitalTwinApp(QMainWindow):
             self.perf_window.update_plot(self.sim)
 
     def build_domain(self):
+        # Stop the worker thread before touching the sim object
+        self._sim_worker.pause()
+        if self._sim_worker.isRunning():
+            self._sim_worker.wait(5000)  # wait up to 5 s for the current step to finish
         self.sim_isRunning = False
         self.btn_toggle.setText("2. START BEAM")
         self.sim_wall_elapsed = 0.0
@@ -1941,22 +2101,44 @@ class DigitalTwinApp(QMainWindow):
 
         self.canvas.draw_idle()
 
-    def run_sim_step(self):
-        if not self.sim_isRunning:
-            return
+    # ------------------------------------------------------------------
+    # _on_worker_finished: called when the worker's run() loop ends
+    # ------------------------------------------------------------------
+    def _on_worker_finished(self):
+        """Called when the SimulationWorker thread exits its run loop."""
+        # If the GUI still thinks we're running, the worker died unexpectedly
+        if self.sim_isRunning:
+            self.sim_isRunning = False
+            self._pause_simulation_timer()
+            self.btn_toggle.setText("RESUME BEAM")
+            self.update_sim_status_badge("STOPPED")
+            self.lbl_status.setText("Status: Simulation worker stopped unexpectedly.")
+            self.update_simulation_timer()
 
-        params = self.get_params()
-        step_out = self.sim.step(params)
-        if len(step_out) == 5:
-            remeshed, min_pot, current_div, T_grids, trans_last_frame = step_out
-        else:
-            remeshed, min_pot, current_div, T_grids = step_out
-            trans_last_frame = 0.0
+    # ------------------------------------------------------------------
+    # _on_step_result: GUI-thread handler for SimulationWorker.step_done
+    # ------------------------------------------------------------------
+    def _on_step_result(self, snap):
+        """Process a single simulation step result on the GUI thread.
 
-        inj_time = params.get("inj_time", 0.0)
+        *snap* is a dict snapshot emitted by the SimulationWorker containing
+        copies of all data the GUI needs.  No direct ``self.sim`` access is
+        performed here for data that changes every step, keeping the GUI
+        decoupled from the physics thread.
+        """
+        params          = snap['params']
+        remeshed        = snap['remeshed']
+        min_pot         = snap['min_pot']
+        current_div     = snap['current_div']
+        T_grids         = snap['T_grids']
+        trans_last_frame = snap['trans_last_frame']
+        transparency    = snap['transparency']
+
+        inj_time    = params.get("inj_time", 0.0)
         inj_limited = inj_time > 0.0
 
-        if inj_limited and (not self.sim.injection_enabled) and (not self.sim.has_active_particles()):
+        if inj_limited and (not snap['injection_enabled']) and (not snap['has_active_particles']):
+            self._sim_worker.pause()
             self._pause_simulation_timer()
             self.sim_isRunning = False
             self.btn_toggle.setText("2. START BEAM")
@@ -1965,47 +2147,46 @@ class DigitalTwinApp(QMainWindow):
             self.update_simulation_timer()
             return
 
-        t_sim = self.sim.iteration * self.sim.dt
-        transparency = self.sim.get_transparency()
+        t_sim = snap['iteration'] * snap['dt']
 
         self.lblTime.setText(f"t_sim: {t_sim * 1e6:.2f} us")
         self.lblTransparency.setText(
             f"Transparency tot: {transparency:.3f}\n"
             f"Transparency frame: {trans_last_frame:.3f}\n"
-            f"Exit vx mean: {self.sim.exit_vx_mean: .2e} m/s\n"
-            f"Exit |v| mean: {self.sim.exit_v_mean: .2e} m/s\n"
-            f"Exit E mean: {self.sim.exit_energy_mean_eV: .1f} eV\n"
-            f"Exit count step: {self.sim.exit_count_step}\n"
-            f"Exit I_ion step: {self.sim.exit_ion_current_step * 1e3:.3f} mA"
+            f"Exit vx mean: {snap['exit_vx_mean']: .2e} m/s\n"
+            f"Exit |v| mean: {snap['exit_v_mean']: .2e} m/s\n"
+            f"Exit E mean: {snap['exit_energy_mean_eV']: .1f} eV\n"
+            f"Exit count step: {snap['exit_count_step']}\n"
+            f"Exit I_ion step: {snap['exit_ion_current_step'] * 1e3:.3f} mA"
         )
-        if self.sim._perf_monitor and self.sim._perf_monitor.history:
-            last_diag = self.sim._perf_monitor.history[-1]
+        pm = snap['perf_monitor']
+        if pm and pm.history:
+            last_diag = pm.history[-1]
             self.lblPerfPtcls.setText(f"Ptcls (i/e):  {last_diag.num_ions:,} / {last_diag.num_electrons:,}")
             self.lblPerfStep.setText(f"Step / RAM:   {last_diag.wall_time_ms:.0f} ms / {last_diag.memory_rss_mb:.0f} MB")
         else:
-            self.lblPerfPtcls.setText(f"Ptcls (i/e):  {self.sim.num_p:,} / {self.sim.num_e:,}")
+            self.lblPerfPtcls.setText(f"Ptcls (i/e):  {snap['num_p']:,} / {snap['num_e']:,}")
             self.lblPerfStep.setText("Step / RAM:   —")
-        QApplication.processEvents()
 
         if remeshed:
             self.lbl_status.setText("Domain Remeshed (Thermal or Erosion)!")
             self.draw_static_domain()
 
-        if self.sim.iteration % 1 == 0 and self.scat_prim is not None and self.scat_cex is not None:
-            p_x = self.sim.p_x[:self.sim.num_p]
-            p_y = self.sim.p_y[:self.sim.num_p]
-            p_vx = self.sim.p_vx[:self.sim.num_p]
-            p_vy = self.sim.p_vy[:self.sim.num_p]
-            p_vz = self.sim.p_vz[:self.sim.num_p]
-            p_is_cex = self.sim.p_isCEX[:self.sim.num_p]
+        if self.scat_prim is not None and self.scat_cex is not None:
+            p_x      = snap['p_x']
+            p_y      = snap['p_y']
+            p_vx     = snap['p_vx']
+            p_vy     = snap['p_vy']
+            p_vz     = snap['p_vz']
+            p_is_cex = snap['p_isCEX']
 
-            e_x = self.sim.e_x[:self.sim.num_e]
-            e_y = self.sim.e_y[:self.sim.num_e]
-            e_vx = self.sim.e_vx[:self.sim.num_e]
-            e_vy = self.sim.e_vy[:self.sim.num_e]
+            e_x  = snap['e_x']
+            e_y  = snap['e_y']
+            e_vx = snap['e_vx']
+            e_vy = snap['e_vy']
 
-            prim_mask = ~p_is_cex
-            cex_mask = p_is_cex
+            prim_mask = ~p_is_cex if len(p_is_cex) > 0 else np.empty(0, dtype=bool)
+            cex_mask  = p_is_cex  if len(p_is_cex) > 0 else np.empty(0, dtype=bool)
 
             self.scat_prim.set_offsets(
                 np.column_stack((p_x[prim_mask], p_y[prim_mask]))
@@ -2023,20 +2204,23 @@ class DigitalTwinApp(QMainWindow):
             energy_min = float('inf')
             energy_max = float('-inf')
 
+            m_ion = snap['m_ion']
+            q_val = snap['q']
+
             if np.any(prim_mask):
                 v_sq_prim = p_vx[prim_mask]**2 + p_vy[prim_mask]**2 + p_vz[prim_mask]**2
-                e_prim = (0.5 * self.sim.m_ion * v_sq_prim) / self.sim.q
+                e_prim = (0.5 * m_ion * v_sq_prim) / q_val
                 self.scat_prim.set_array(e_prim)
                 energy_min = min(energy_min, np.min(e_prim))
                 energy_max = max(energy_max, np.max(e_prim))
 
             if np.any(cex_mask):
                 v_sq_cex = p_vx[cex_mask]**2 + p_vy[cex_mask]**2 + p_vz[cex_mask]**2
-                e_cex = (0.5 * self.sim.m_ion * v_sq_cex) / self.sim.q
+                e_cex = (0.5 * m_ion * v_sq_cex) / q_val
                 self.scat_cex.set_array(e_cex)
                 energy_min = min(energy_min, np.min(e_cex))
                 energy_max = max(energy_max, np.max(e_cex))
-            
+
             if energy_min != float('inf'):
                 if energy_max <= energy_min:
                     energy_max = energy_min + 1.0
@@ -2048,15 +2232,13 @@ class DigitalTwinApp(QMainWindow):
                 self.iedf_window.update_histogram(
                     p_vx, p_vy, p_is_cex,
                     e_x, e_vx, e_vy,
-                    self.sim.m_ion, self.sim.m_e, self.sim.q, max_v
+                    m_ion, snap['m_e'], q_val, max_v
                 )
 
             if self.ppc_window and self.ppc_window.isVisible():
                 self.ppc_window.update_plot(self.sim)
 
-        # --- Energy & Charge conservation: always computed (for history & warnings) ---
-        self.sim.get_total_energy()
-        self.sim.get_total_charge()
+        # --- Diagnostics windows ---
         if self.phys_window and self.phys_window.isVisible():
             self.phys_window.update_plot(self.sim)
 
@@ -2071,17 +2253,17 @@ class DigitalTwinApp(QMainWindow):
             if ptcl_data.size > 0:
                 self.tracking_buffer.append(ptcl_data)
 
-        self.iter_history.append(self.sim.iteration)
+        self.iter_history.append(snap['iteration'])
         self.ebs_history.append(min_pot)
         self.div_history.append(current_div)
         self.time_history.append(t_sim)
         self.transparency_history.append(transparency)
         self.transparency3_history.append(trans_last_frame)
-        self.ion_current_exit_history.append(self.sim.exit_ion_current_step)
-        self.ion_current_exit_avg_history.append(self.sim.exit_ion_current_avg)
-        self.transmitted_ions_history.append(int(round(self.sim.transmitted_ions_step)))
-        self.active_cells_history.append(self.sim.total_active_cells)
-        self.low_ppc_cells_history.append(self.sim.low_ppc_cells)
+        self.ion_current_exit_history.append(snap['exit_ion_current_step'])
+        self.ion_current_exit_avg_history.append(snap['exit_ion_current_avg'])
+        self.transmitted_ions_history.append(int(round(snap['transmitted_ions_step'])))
+        self.active_cells_history.append(snap['total_active_cells'])
+        self.low_ppc_cells_history.append(snap['low_ppc_cells'])
 
         for i, T in enumerate(T_grids):
             self.T_histories[i].append(T)
@@ -2089,8 +2271,8 @@ class DigitalTwinApp(QMainWindow):
         self.line_ebs.set_data(self.iter_history, self.ebs_history)
         self.line_div.set_data(self.iter_history, self.div_history)
 
-        self.ax_ebs.set_xlim(max(0, self.sim.iteration - 400), max(100, self.sim.iteration))
-        self.ax_div.set_xlim(max(0, self.sim.iteration - 400), max(100, self.sim.iteration))
+        self.ax_ebs.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
+        self.ax_div.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
 
         if len(self.ebs_history) > 0:
             y_min = min(self.ebs_history)
@@ -2107,7 +2289,7 @@ class DigitalTwinApp(QMainWindow):
         else:
             self.ax_div.set_ylim(0, 45)
 
-        groove_idx = 1 if len(self.sim.mask_grids) > 1 else 0
+        groove_idx = 1 if len(snap['mask_grids']) > 1 else 0
         groove_face = "downstream"
         y_mm, depth_um = self.sim.get_groove_profile(
             groove_idx,
@@ -2123,13 +2305,15 @@ class DigitalTwinApp(QMainWindow):
                 f"Accel Grid Erosion Profile — {groove_face} face (Grid {groove_idx + 1})"
             )
 
-        if self.sim.Tmap is not None and len(self.sim.mask_grids) > 0:
-            grid_mask = np.zeros_like(self.sim.isBound, dtype=bool)
-            for mg in self.sim.mask_grids:
+        Tmap = snap['Tmap']
+        mask_grids = snap['mask_grids']
+        if Tmap is not None and len(mask_grids) > 0:
+            grid_mask = np.zeros_like(snap['isBound'], dtype=bool)
+            for mg in mask_grids:
                 if mg.shape == grid_mask.shape:
                     grid_mask |= mg
 
-            T_display_C = np.where(grid_mask, self.sim.Tmap - 273.15, np.nan)
+            T_display_C = np.where(grid_mask, Tmap - 273.15, np.nan)
 
             if getattr(self, "tempmesh", None) is None or self.tempmesh.get_array().size != T_display_C.size:
                 self.ax_temp.clear()
@@ -2137,7 +2321,7 @@ class DigitalTwinApp(QMainWindow):
                 self.ax_temp.set_facecolor("black")
 
                 self.tempmesh = self.ax_temp.pcolormesh(
-                    self.sim.X, self.sim.Y, T_display_C,
+                    snap['X'], snap['Y'], T_display_C,
                     cmap="inferno", shading="nearest"
                 )
 
@@ -2160,35 +2344,36 @@ class DigitalTwinApp(QMainWindow):
                         vmax = vmin + 1.0
                     self.tempmesh.set_clim(vmin, vmax)
 
-            self.ax_temp.set_xlim(0, self.sim.Lx)
-            self.ax_temp.set_ylim(0, self.sim.Ly)
+            self.ax_temp.set_xlim(0, snap['Lx'])
+            self.ax_temp.set_ylim(0, snap['Ly'])
 
-        if getattr(self, "dmg_mesh", None) is None or self.dmg_mesh.get_array().size != self.sim.damage_map.size:
+        damage_map = snap['damage_map']
+        if getattr(self, "dmg_mesh", None) is None or self.dmg_mesh.get_array().size != damage_map.size:
             self.ax_dmg.clear()
             self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
             self.ax_dmg.set_xlabel("Axial Position [mm]", fontsize=8)
             self.ax_dmg.set_ylabel("r [mm]", fontsize=8)
             self.dmg_mesh = self.ax_dmg.pcolormesh(
-                self.sim.X, self.sim.Y, self.sim.damage_map,
+                snap['X'], snap['Y'], damage_map,
                 cmap="hot", shading="nearest"
             )
-            gy, gx = np.where(self.sim.isBound)
-            x_pts = getattr(self.sim, 'x_coords', getattr(self.sim, 'xpts', None))
-            y_pts = getattr(self.sim, 'y_coords', getattr(self.sim, 'ypts', None))
+            gy, gx = np.where(snap['isBound'])
+            x_pts = snap['x_coords']
+            y_pts = snap['y_coords']
             if x_pts is not None and y_pts is not None:
                 self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
             else:
-                self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c="grey", alpha=0.5)
-            self.ax_dmg.set_xlim(0, self.sim.Lx)
-            self.ax_dmg.set_ylim(0, self.sim.Ly)
+                self.ax_dmg.scatter(gx * snap['dx'], gy * snap['dy'], s=2, c="grey", alpha=0.5)
+            self.ax_dmg.set_xlim(0, snap['Lx'])
+            self.ax_dmg.set_ylim(0, snap['Ly'])
         else:
-            self.dmg_mesh.set_array(self.sim.damage_map.ravel())
-            dmg_max = float(np.max(self.sim.damage_map))
+            self.dmg_mesh.set_array(damage_map.ravel())
+            dmg_max = float(np.max(damage_map))
             if dmg_max > 0:
                 self.dmg_mesh.set_clim(0, dmg_max)
 
         self.lbl_status.setText(
-            f"Ions {self.sim.num_p} e- {self.sim.num_e} Iter {self.sim.iteration}"
+            f"Ions {snap['num_p']} e- {snap['num_e']} Iter {snap['iteration']}"
         )
 
         t_str = " | ".join([f"G{i+1}: {T - 273.15:.1f}°C" for i, T in enumerate(T_grids)])
@@ -2199,6 +2384,10 @@ class DigitalTwinApp(QMainWindow):
         if self.chk_record.isChecked():
             self.recorded_frames.append(self.canvas.grab())
             self.chk_record.setText(f"Record Frames ({len(self.recorded_frames)})")
+
+        # Hot-swap parameters to worker so GUI spinbox changes are picked up
+        if self.sim_isRunning:
+            self._sim_worker.update_params(self.get_params())
 
     def _create_progress_dialog(self, title, label, total):
         progress = QProgressDialog(label, "Cancel", 0, max(1, total), self)
