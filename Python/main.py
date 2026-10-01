@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QFileDialog, QApplication, QComboBox,
     QScrollArea, QGroupBox, QAction, QDialog, QFormLayout,
     QSpinBox, QTableWidget, QTableWidgetItem, QMenuBar,
-    QHeaderView, QSplitter, QProgressDialog
+    QHeaderView, QSplitter, QProgressDialog, QFrame
 )
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtCore import Qt as QtCore_Qt
@@ -41,7 +41,7 @@ from diagnostics import (
 
 
 class PyInstallerWorker(QThread):
-    """Runs PyInstaller in a background thread and reports progress via signals."""
+    """Background worker thread that executes PyInstaller builds and streams progress to the GUI."""
     progress_line = pyqtSignal(str)   # each new stdout/stderr line
     progress_pct  = pyqtSignal(int)   # 0-100 estimated percentage
     finished      = pyqtSignal(bool, str)  # (success, message)
@@ -294,6 +294,7 @@ def load_cross_sections_from_config(config):
     return cs_store
 
 class ScientificSpinBox(QDoubleSpinBox):
+    """Custom QDoubleSpinBox supporting scientific notation (e.g., 1.000e+17) for input, display, and validation."""
     def textFromValue(self, value):
         return f"{value:.3e}"
 
@@ -314,6 +315,7 @@ class ScientificSpinBox(QDoubleSpinBox):
             return (QValidator.Invalid, text, pos)
         
 class BeamSpeciesDialog(QDialog):
+    """Dialog for selecting preset ion beam species (Xe, Kr, Ar, etc.) or defining custom mass and charge state."""
     PRESETS = [
         ("Custom", 0, 1),
         ("Xenon (Xe)", 131.293, 1),
@@ -391,6 +393,7 @@ class BeamSpeciesDialog(QDialog):
 
 # Grid material properties dialog with presets and custom input fields
 class GridMaterialDialog(QDialog):
+    """Dialog for configuring grid material properties (thermal, mechanical, and sputtering) from presets or custom values."""
     PRESETS = {
         "Molybdenum": {
             "k": 138.0, "rho": 10280.0, "cp": 250.0,
@@ -480,6 +483,7 @@ class GridMaterialDialog(QDialog):
 
 # —- ADVANCED SETTINGS DIALOG —-
 class AdvancedSettingsDialog(QDialog):
+    """Dialog for tuning advanced physical and numerical parameters (plasma offset, mass ratio, mesh domains)."""
     def __init__(self, current_params, parent=None, default_Lx=None, default_Ly=None):
         super().__init__(parent)
         self.setWindowTitle("Advanced Simulation Parameters")
@@ -560,6 +564,7 @@ class AdvancedSettingsDialog(QDialog):
 
 
 class DigitalTwinApp(QMainWindow):
+    """Main window for PY-BEMCS, orchestrating the interactive GUI, simulation loop, real-time plotting, and diagnostic windows."""
 
     def update_config_title(self, config_name=None):
         if config_name:
@@ -625,6 +630,12 @@ class DigitalTwinApp(QMainWindow):
         else:
             # No config.json found — load hardcoded defaults directly into the UI
             self._apply_defaults()
+
+        self.sim_wall_elapsed = 0.0
+        self.sim_wall_start_time = None
+        self.duration_clock_timer = QTimer(self)
+        self.duration_clock_timer.timeout.connect(self.update_simulation_timer)
+        self.duration_clock_timer.start(100)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.run_sim_step)
@@ -788,9 +799,54 @@ class DigitalTwinApp(QMainWindow):
     def setup_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
-        main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout = QVBoxLayout(main_widget)
+        root_layout.setSpacing(0)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Top Bar: Simulation Duration Timer & Status
+        top_bar = QFrame()
+        top_bar.setObjectName("topBar")
+        top_bar.setStyleSheet("""
+            QFrame#topBar {
+                background-color: #f8fafc;
+                border-bottom: 1px solid #cbd5e1;
+            }
+        """)
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(14, 5, 14, 5)
+        top_bar_layout.setSpacing(12)
+
+        self.lbl_sim_status_badge = QLabel("IDLE")
+        self.lbl_sim_status_badge.setStyleSheet(
+            "background-color: #e2e8f0; color: #475569; font-weight: bold; "
+            "border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        top_bar_layout.addWidget(self.lbl_sim_status_badge)
+
+        self.lbl_sim_timer = QLabel("⏱ Simulation Duration: 00:00:00.0")
+        self.lbl_sim_timer.setStyleSheet(
+            "font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; font-weight: bold; "
+            "color: #0f172a; padding: 3px 10px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;"
+        )
+        top_bar_layout.addWidget(self.lbl_sim_timer)
+
+        self.btn_reset_timer = QPushButton("Reset Timer")
+        self.btn_reset_timer.setToolTip("Reset the simulation duration timer to 00:00:00.0")
+        self.btn_reset_timer.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        self.btn_reset_timer.clicked.connect(self.reset_simulation_timer)
+        top_bar_layout.addWidget(self.btn_reset_timer)
+
+        top_bar_layout.addStretch()
+
+        self.lbl_top_sim_time = QLabel("Plasma Time: 0.00 µs | Iter: 0")
+        self.lbl_top_sim_time.setStyleSheet("font-family: monospace; font-size: 11px; color: #64748b;")
+        top_bar_layout.addWidget(self.lbl_top_sim_time)
+
+        root_layout.addWidget(top_bar)
+
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(0)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
         # SCROLLABLE CONTROL PANEL
         scroll_area = QScrollArea()
@@ -969,11 +1025,13 @@ class DigitalTwinApp(QMainWindow):
         control_layout.addWidget(perfbox)
 
         scroll_area.setWidget(control_panel)
-        main_layout.addWidget(scroll_area)
+        content_layout.addWidget(scroll_area)
 
         self.fig = plt.figure(figsize=(12, 8))
         self.canvas = FigureCanvas(self.fig)
-        main_layout.addWidget(self.canvas)
+        content_layout.addWidget(self.canvas)
+
+        root_layout.addLayout(content_layout)
 
         grid = plt.GridSpec(3, 3, height_ratios=[1.2, 1, 0.9])
 
@@ -1519,6 +1577,76 @@ class DigitalTwinApp(QMainWindow):
         })
         return params
 
+    def get_simulation_duration(self):
+        """Returns the total elapsed wall-clock duration of the simulation in seconds."""
+        elapsed = getattr(self, 'sim_wall_elapsed', 0.0)
+        if getattr(self, 'sim_isRunning', False) and getattr(self, 'sim_wall_start_time', None) is not None:
+            elapsed += time.perf_counter() - self.sim_wall_start_time
+        return elapsed
+
+    def update_simulation_timer(self):
+        """Refreshes the top simulation duration stopwatch and plasma timestamp."""
+        if not hasattr(self, 'lbl_sim_timer'):
+            return
+        elapsed = self.get_simulation_duration()
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        seconds = int(elapsed % 60)
+        tenths = int((elapsed - int(elapsed)) * 10)
+        self.lbl_sim_timer.setText(f"⏱ Simulation Duration: {hours:02d}:{minutes:02d}:{seconds:02d}.{tenths:01d}")
+
+        if hasattr(self, 'sim') and hasattr(self, 'lbl_top_sim_time'):
+            t_sim_us = getattr(self.sim, 'iteration', 0) * getattr(self.sim, 'dt', 0.0) * 1e6
+            it_count = getattr(self.sim, 'iteration', 0)
+            self.lbl_top_sim_time.setText(f"Plasma Time: {t_sim_us:.2f} µs | Iter: {it_count}")
+
+    def reset_simulation_timer(self):
+        """Resets the simulation duration timer back to zero."""
+        self.sim_wall_elapsed = 0.0
+        if getattr(self, 'sim_isRunning', False):
+            self.sim_wall_start_time = time.perf_counter()
+        else:
+            self.sim_wall_start_time = None
+        self.update_simulation_timer()
+
+    def update_sim_status_badge(self, status):
+        """Updates the visual status indicator in the top header."""
+        if not hasattr(self, 'lbl_sim_status_badge'):
+            return
+        st = status.upper()
+        self.lbl_sim_status_badge.setText(st)
+        if st == "RUNNING":
+            self.lbl_sim_status_badge.setStyleSheet(
+                "background-color: #dcfce7; color: #15803d; font-weight: bold; "
+                "border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+        elif st == "PAUSED":
+            self.lbl_sim_status_badge.setStyleSheet(
+                "background-color: #fef3c7; color: #b45309; font-weight: bold; "
+                "border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+        elif st == "READY":
+            self.lbl_sim_status_badge.setStyleSheet(
+                "background-color: #e0f2fe; color: #0369a1; font-weight: bold; "
+                "border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+        else:
+            self.lbl_sim_status_badge.setStyleSheet(
+                "background-color: #e2e8f0; color: #475569; font-weight: bold; "
+                "border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+
+    def _resume_simulation_timer(self):
+        if getattr(self, 'sim_wall_start_time', None) is None:
+            self.sim_wall_start_time = time.perf_counter()
+        self.update_sim_status_badge("RUNNING")
+
+    def _pause_simulation_timer(self):
+        if getattr(self, 'sim_wall_start_time', None) is not None:
+            self.sim_wall_elapsed = getattr(self, 'sim_wall_elapsed', 0.0) + (time.perf_counter() - self.sim_wall_start_time)
+            self.sim_wall_start_time = None
+        self.update_sim_status_badge("PAUSED")
+
     def toggle_sim(self):
         if not np.any(self.sim.Ex):
             QMessageBox.warning(self, "Warning", "Build Domain first!")
@@ -1529,9 +1657,14 @@ class DigitalTwinApp(QMainWindow):
         # If we are starting (not pausing), ensure injection is enabled again
         if not self.sim_isRunning:
             self.sim.injection_enabled = True
-
-        self.sim_isRunning = not self.sim_isRunning
-        self.btn_toggle.setText("PAUSE BEAM" if self.sim_isRunning else "RESUME BEAM")
+            self.sim_isRunning = True
+            self._resume_simulation_timer()
+            self.btn_toggle.setText("PAUSE BEAM")
+        else:
+            self.sim_isRunning = False
+            self._pause_simulation_timer()
+            self.btn_toggle.setText("RESUME BEAM")
+        self.update_simulation_timer()
 
     def open_iedf_window(self):
         if self.iedf_window is None:
@@ -1577,6 +1710,10 @@ class DigitalTwinApp(QMainWindow):
     def build_domain(self):
         self.sim_isRunning = False
         self.btn_toggle.setText("2. START BEAM")
+        self.sim_wall_elapsed = 0.0
+        self.sim_wall_start_time = None
+        self.update_sim_status_badge("READY")
+        self.update_simulation_timer()
         self.iter_history.clear()
         self.ebs_history.clear()
         self.div_history.clear()
@@ -1770,9 +1907,12 @@ class DigitalTwinApp(QMainWindow):
         inj_limited = inj_time > 0.0
 
         if inj_limited and (not self.sim.injection_enabled) and (not self.sim.has_active_particles()):
+            self._pause_simulation_timer()
             self.sim_isRunning = False
             self.btn_toggle.setText("2. START BEAM")
+            self.update_sim_status_badge("STOPPED")
             self.lbl_status.setText("Status: Injection completed and all particles removed. Simulation stopped.")
+            self.update_simulation_timer()
             return
 
         t_sim = self.sim.iteration * self.sim.dt
