@@ -969,3 +969,45 @@ To verify the effectiveness of On-Demand Anderson Acceleration, synthetic crawli
 In standard thruster operating regimes (`configRF.json`, `configNSTAR.json`):
 * Standard Picard converges within $13\text{--}24$ iterations without triggering Anderson Acceleration (AA steps = 0), incurring **zero computational overhead**.
 * In cases where space charge accumulation creates a stiff meniscus oscillation, Anderson Acceleration automatically intervenes, breaking the limit cycle within 1–2 extrapolation steps and guiding the potential field smoothly to the $50\text{ mV}$ convergence tolerance.
+
+
+---
+
+## 14. High-Density Resolution Limits & The Newton-Raphson Fallback
+
+### 14.1 The Physical vs. Computational Hard Wall ($\Delta x > \lambda_D$)
+
+While the solver uses an automated mesh estimator to divide the domain and set coarsening factors based on the physical Debye length ($\lambda_D$), there is a strict lower bound on how small the base resolution $\Delta x$ can computationally be. 
+
+At extreme densities, such as  \approx 2 \times 10^{18}\text{ m}^{-3}$ (as seen in high-power configurations like NSTAR.json), the Debye length shrinks down to roughly $\approx 9\text{ }\mu\text{m}$.
+To strictly resolve the Debye sheath, the estimator would need to enforce $\Delta x \approx 5\text{ }\mu\text{m}$. However, doing so would easily inflate a standard 2D thruster domain to hundreds of thousands of cells. The time taken to factorize the sparse Laplacian matrix scales as (N^{1.5})$, meaning the simulation would freeze.
+
+Thus, to remain computationally feasible, the simulation must impose a minimum $\Delta x$ (e.g., \text{--}20\text{ }\mu\text{m}$). Consequently, in these extreme cases, the simulation is forced into a regime where:
+\Delta x > \lambda_D
+
+### 14.2 The Breakdown of Picard Iteration
+
+When $\Delta x > \lambda_D$, the non-linear Boltzmann electron response attempts to shield an electric field across a distance that is thinner than a single mesh cell. The error amplification factor $|G|$ of the Picard solver crosses the stability boundary. Even with Trust-Region Clamping and Anderson Acceleration, the iteration enters a chaotic flip-flop resonance (period-2 bifurcation), leading to stagnation or divergence.
+
+### 14.3 The Fail-Safe Newton-Raphson Fallback Solver
+
+To overcome this without penalizing the overall simulation speed, a **Fail-Safe Newton-Raphson Solver** is implemented. 
+
+The non-linear Poisson equation is defined as finding the root of:
+F(V) = \nabla^2 V + \frac{\rho_{\text{ion}} + \rho_e(V)}{\varepsilon_0} = 0
+
+While the Picard solver treats $\rho_e(V)$ as a simple source term, the Newton method evaluates the full Jacobian:
+J(V) = \nabla^2 + \text{diag}\left( \frac{\partial \rho_e(V)}{\partial V} \cdot \frac{1}{\varepsilon_0} \right)
+where $\frac{\partial \rho_e}{\partial V} = -\frac{q n_0}{T_e} \exp\left( \frac{\min(V, V_p) - V_p}{T_e} \right)$.
+
+Because the diagonal derivative term is mathematically exact, the Newton method provides **unconditional stability and quadratic convergence**, cleanly bypassing the $\Delta x > \lambda_D$ instability.
+
+#### Implementation Architecture
+1. **Primary Solver First**: The engine always runs the existing pre-factorized _recalc_poisson_cpu (Picard) first because it is ultra-fast (\text{--}5\text{ ms}$).
+2. **Fallback Trigger**: If Picard returns status == 'diverged' or status == 'stagnated' (with unacceptably high $\Delta V$), the fallback solver is triggered *for that specific timestep*.
+3. **Newton Iteration (_solve_poisson_newton_cpu)**:
+   - Computes the diagonal Jacobian array and forms the un-factorized sparse matrix $.
+   - Solves the linear system  \Delta V = -F(V)$ using a sparse iterative solver (scipy.sparse.linalg.bicgstab), falling back to a direct solve (spsolve) if it fails.
+   - Updates  \leftarrow V + \Delta V$ and limits the step to \text{ V}$ to prevent overshoots.
+   
+By strictly using Newton-Raphson as a fallback, it only activates during extreme transients (e.g., initial beam turn-on at high densities), forcing physical convergence on a computationally feasible mesh while maintaining maximum speed during steady-state operations.

@@ -864,6 +864,7 @@ class DigitalTwinSimulator:
         data = np.concatenate(data)
 
         A = sp.coo_matrix((data,(row,col)), shape=(N,N)).tocsc()
+        self.laplacian_matrix = A
         self.laplacian_lu = factorized(A)
 
         self.laplacian_lu_gpu    = None
@@ -877,6 +878,7 @@ class DigitalTwinSimulator:
                      cp.asarray(A_csc.indices),
                      cp.asarray(A_csc.indptr)),
                     shape=A_csc.shape)
+                self.laplacian_matrix_gpu = A_gpu
                 self.laplacian_lu_gpu     = cp_splu(A_gpu)
                 self.is_bound_mask_gpu    = cp.asarray(self.is_bound_mask)
                 self.is_interior_mask_gpu = cp.asarray(self.is_interior_mask)
@@ -1240,7 +1242,7 @@ class DigitalTwinSimulator:
         self.last_poisson_delta_V = delta_V
         self.last_poisson_rms = rms_V
         self.last_poisson_status = status
-        self.last_poisson_converged = (status in ['converged', 'stagnated_noise_floor'])
+        self.last_poisson_converged = (status in ['converged', 'stagnated_noise_floor', 'converged_newton'])
         self.last_poisson_anderson_steps = getattr(self, '_last_anderson_count', 0)
         self.last_poisson_backtracks = getattr(self, '_last_backtrack_count', 0)
 
@@ -1260,6 +1262,16 @@ class DigitalTwinSimulator:
             print(
                 f"[Poisson Warning] Iter {self.iteration}: Stagnation detected in Poisson solver "
                 f"(stuck at delta_V = {delta_V:.2f} V, rms {rms_V*1000:.1f} mV, progress < 2% over 5 iters{extra_info}). Terminated at Picard iter {n_done}."
+            )
+        elif status == 'converged_newton':
+            print(
+                f"[Poisson Info] Iter {self.iteration}: Successfully converged via Newton-Raphson fallback "
+                f"(final delta_V = {delta_V:.4f} V across {n_done} total iters)."
+            )
+        elif status == 'diverged_newton':
+            print(
+                f"[Poisson Warning] Iter {self.iteration}: Newton-Raphson fallback failed to reach tolerance "
+                f"(final delta_V = {delta_V:.4f} V)."
             )
 
         self.Ey, self.Ex = np.gradient(-self.V, self.y_coords*1e-3, self.x_coords*1e-3)
@@ -1439,9 +1451,69 @@ class DigitalTwinSimulator:
                     status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
                     break
 
+        if status in ['diverged', 'stagnated']:
+            print(f"[Poisson Warning] Picard {status} at iter {iters_done} (diff={last_diff:.3f}V). Triggering Newton-Raphson fallback...")
+            V_NR, iters_NR, diff_NR, status_NR = self._solve_poisson_newton_cpu(coeff, V_plasma, Te_up, n0, tol_V=tol_V, max_iters=15)
+            self.V = V_NR
+            self._last_anderson_count = anderson_count
+            self._last_backtrack_count = backtrack_count
+            return iters_done + iters_NR, diff_NR, diff_NR, status_NR
+
         self._last_anderson_count = anderson_count
         self._last_backtrack_count = backtrack_count
         return iters_done, last_diff, last_rms, status
+
+    def _solve_poisson_newton_cpu(self, coeff, V_plasma, Te_up, n0, tol_V=0.05, max_iters=15):
+        import scipy.sparse.linalg as spla
+        V_current = self.V.copy()
+        V_fixed_flat = self.V_fixed.flatten()
+        rhs_rho_mask = getattr(self, 'is_rhs_rho_mask', self.is_interior_mask)
+        last_diff = 0.0
+
+        for it in range(max_iters):
+            boltzmann_factor = np.exp((np.minimum(V_current, V_plasma) - V_plasma) / Te_up)
+            rho_e = -self.q * n0 * boltzmann_factor
+            rho_total = self.rho + rho_e
+            rho_flat = rho_total.flatten()
+
+            b = np.zeros(self.nx * self.ny, dtype=np.float64)
+            b[self.is_bound_mask] = V_fixed_flat[self.is_bound_mask]
+            b[rhs_rho_mask] = -coeff * rho_flat[rhs_rho_mask]
+
+            # F(V) = A * V - b
+            F = self.laplacian_matrix.dot(V_current.flatten()) - b
+
+            # Jacobian J = A - d(b)/dV
+            drho_e_dV = np.zeros_like(rho_e)
+            mask_less = V_current < V_plasma
+            drho_e_dV[mask_less] = -(self.q * n0 / Te_up) * boltzmann_factor[mask_less]
+
+            db_dV = np.zeros(self.nx * self.ny, dtype=np.float64)
+            db_dV[rhs_rho_mask] = -coeff * drho_e_dV.flatten()[rhs_rho_mask]
+
+            J = self.laplacian_matrix - sp.diags(db_dV)
+
+            # Solve J * delta_V = -F
+            try:
+                delta_V_flat, exitCode = spla.bicgstab(J, -F, tol=1e-5, maxiter=200)
+                if exitCode != 0:
+                    delta_V_flat = spla.spsolve(J, -F)
+            except Exception:
+                delta_V_flat = spla.spsolve(J, -F)
+
+            delta_V = delta_V_flat.reshape((self.ny, self.nx))
+            
+            # Limit the Newton step size to prevent overshoot
+            max_step = 25.0
+            delta_V = np.clip(delta_V, -max_step, max_step)
+            
+            V_current += delta_V
+            last_diff = float(np.max(np.abs(delta_V)))
+
+            if last_diff <= tol_V:
+                return V_current, it + 1, last_diff, 'converged_newton'
+
+        return V_current, max_iters, last_diff, 'diverged_newton'
 
     def _recalc_poisson_gpu(self, max_iters, coeff, V_plasma, Te_up, n0, omega_min=0.2, omega_max=0.35, tol_V=0.05, min_iters=3, tol_rms=0.01, peak_guard=0.25):
         V_gpu            = cp.asarray(self.V, dtype=cp.float64)
@@ -1598,10 +1670,102 @@ class DigitalTwinSimulator:
                     status = 'stagnated_noise_floor' if last_diff <= 0.30 else 'stagnated'
                     break
 
+        if status in ['diverged', 'stagnated']:
+            print(f"[Poisson Warning] GPU Picard {status} at iter {iters_done} (diff={last_diff:.3f}V). Triggering Newton-Raphson fallback...")
+            self.V = cp.asnumpy(V_best_gpu)
+            V_NR, iters_NR, diff_NR, status_NR = self._solve_poisson_newton_gpu(coeff, V_plasma, Te_up, n0, tol_V=tol_V, max_iters=15)
+            self.V = V_NR
+            self._last_anderson_count = anderson_count
+            self._last_backtrack_count = backtrack_count
+            return iters_done + iters_NR, diff_NR, diff_NR, status_NR
+
         self._last_anderson_count = anderson_count
         self._last_backtrack_count = backtrack_count
         self.V = cp.asnumpy(V_gpu)
         return iters_done, last_diff, last_rms, status
+
+    def _solve_poisson_newton_gpu(self, coeff, V_plasma, Te_up, n0, tol_V=0.05, max_iters=15):
+        if cp is None or getattr(self, 'laplacian_matrix_gpu', None) is None:
+            # Fall back to CPU Newton-Raphson if GPU/CuPy is unavailable
+            return self._solve_poisson_newton_cpu(coeff, V_plasma, Te_up, n0, tol_V=tol_V, max_iters=max_iters)
+
+        try:
+            import cupyx.scipy.sparse.linalg as cp_spla
+        except ImportError:
+            cp_spla = None
+
+        V_current = cp.asarray(self.V, dtype=cp.float64)
+        V_fixed_flat = cp.asarray(self.V_fixed.flatten(), dtype=cp.float64)
+        
+        rhs_rho_mask = getattr(self, 'is_rhs_rho_mask', self.is_interior_mask)
+        rhs_rho_mask_gpu = getattr(self, 'is_rhs_rho_mask_gpu', None)
+        if rhs_rho_mask_gpu is None:
+            rhs_rho_mask_gpu = cp.asarray(rhs_rho_mask)
+            
+        bound_mask_gpu = getattr(self, 'is_bound_mask_gpu', None)
+        if bound_mask_gpu is None:
+            bound_mask_gpu = cp.asarray(self.is_bound_mask)
+            
+        rho_gpu = cp.asarray(self.rho, dtype=cp.float64)
+        last_diff = 0.0
+
+        for it in range(max_iters):
+            boltzmann_factor = cp.exp((cp.minimum(V_current, V_plasma) - V_plasma) / Te_up)
+            rho_e = -self.q * n0 * boltzmann_factor
+            rho_total = rho_gpu + rho_e
+            rho_flat = rho_total.flatten()
+
+            b = cp.zeros(self.nx * self.ny, dtype=cp.float64)
+            b[bound_mask_gpu] = V_fixed_flat[bound_mask_gpu]
+            b[rhs_rho_mask_gpu] = -coeff * rho_flat[rhs_rho_mask_gpu]
+
+            # F(V) = A * V - b
+            F = self.laplacian_matrix_gpu.dot(V_current.flatten()) - b
+
+            # Jacobian J = A - d(b)/dV
+            drho_e_dV = cp.zeros_like(rho_e)
+            mask_less = V_current < V_plasma
+            drho_e_dV[mask_less] = -(self.q * n0 / Te_up) * boltzmann_factor[mask_less]
+
+            db_dV = cp.zeros(self.nx * self.ny, dtype=cp.float64)
+            db_dV[rhs_rho_mask_gpu] = -coeff * drho_e_dV.flatten()[rhs_rho_mask_gpu]
+
+            J = self.laplacian_matrix_gpu - cp_sp.diags(db_dV)
+
+            # Solve J * delta_V = -F
+            delta_V_flat = None
+            if cp_spla is not None:
+                try:
+                    delta_V_flat, exitCode = cp_spla.gmres(J, -F, tol=1e-5, maxiter=200)
+                    if exitCode != 0:
+                        delta_V_flat = None
+                except Exception:
+                    delta_V_flat = None
+
+            if delta_V_flat is None:
+                # Direct solve fallback via SciPy SuperLU
+                try:
+                    import scipy.sparse.linalg as spla
+                    J_cpu = J.get()
+                    F_cpu = F.get()
+                    delta_V_flat_cpu = spla.spsolve(J_cpu, -F_cpu)
+                    delta_V_flat = cp.asarray(delta_V_flat_cpu)
+                except Exception as e:
+                    print(f"[Newton GPU] Linear solver fallback failed: {e}")
+                    break
+
+            delta_V = delta_V_flat.reshape((self.ny, self.nx))
+            
+            max_step = 25.0
+            delta_V = cp.clip(delta_V, -max_step, max_step)
+            
+            V_current += delta_V
+            last_diff = float(cp.max(cp.abs(delta_V)))
+
+            if last_diff <= tol_V:
+                return cp.asnumpy(V_current), it + 1, last_diff, 'converged_newton'
+
+        return cp.asnumpy(V_current), max_iters, last_diff, 'diverged_newton'
 
 
     # —————————————————————————————————

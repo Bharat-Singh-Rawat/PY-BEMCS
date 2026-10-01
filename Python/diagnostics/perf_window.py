@@ -109,6 +109,7 @@ class PerformanceMonitorWindow(QWidget):
             'p5_tol': True,
             'p5_stag': True,
             'p5_div': True,
+            'p5_nr': True,
         }
         self._legend_pick_map = {}
         self._last_sim = None
@@ -454,7 +455,7 @@ class PerformanceMonitorWindow(QWidget):
             has_any_5 = True
 
         # 4. Stagnation events (points)
-        stag_mask = np.array([s in ['stagnated', 'stagnated_noise_floor'] for s in statuses])
+        stag_mask = np.array([s == 'stagnated' for s in statuses])
         if np.any(stag_mask) and self.curve_visibility.get('p5_stag', True):
             ax5.scatter(
                 iters[stag_mask], delta_V[stag_mask],
@@ -470,6 +471,16 @@ class PerformanceMonitorWindow(QWidget):
                 iters[div_mask], delta_V[div_mask],
                 color='#d62728', edgecolor='#600000', s=70, marker='X',
                 label='Divergence', zorder=6
+            )
+            has_any_5 = True
+
+        # 6. Newton-Raphson events (points)
+        nr_mask = np.array([s in ['converged_newton', 'diverged_newton'] for s in statuses])
+        if np.any(nr_mask) and self.curve_visibility.get('p5_nr', True):
+            ax5.scatter(
+                iters[nr_mask], delta_V[nr_mask],
+                color='#9b59b6', edgecolor='#4b0082', s=60, marker='^',
+                label='Newton-Raphson', zorder=7
             )
             has_any_5 = True
 
@@ -491,6 +502,7 @@ class PerformanceMonitorWindow(QWidget):
             ('p5_tol', "Tol (50 mV)", '#888888', ':', 1.2),
             ('p5_stag', "Stagnation", '#f39c12', 'none', 0, 'o'),
             ('p5_div', "Divergence", '#d62728', 'none', 0, 'X'),
+            ('p5_nr', "Newton-Raphson", '#9b59b6', 'none', 0, '^'),
         ]
         self._build_interactive_legend(ax5, p5_quantities, loc='upper left')
 
