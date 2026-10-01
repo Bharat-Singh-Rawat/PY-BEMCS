@@ -1195,6 +1195,19 @@ class DigitalTwinSimulator:
         self.build_sparse_matrix()
         self.recalc_poisson(iterations=30 if not preserve_state else 10, params=params)
 
+        self.grids = grids
+        if hasattr(self, 'grid_x_starts') and len(self.grid_x_starts) > 1:
+            x_accel_center = 0.5 * (self.grid_x_starts[1] + self.grid_x_ends[1])
+            x_idx = self._x_to_ix(x_accel_center)
+        else:
+            x_idx = self._x_to_ix(self.Lx * 0.5)
+
+        hole_centers = getattr(self, 'hole_centers', [0.0])
+        y_c_first = hole_centers[0] if hole_centers else 0.0
+        y_idx = int(np.clip(round(y_c_first / self.dy), 0, self.ny - 1))
+        self.min_pot = float(self.V[y_idx, x_idx])
+        self.saddle_point_potential = self.min_pot
+
     # —————————————————————————————————
     def recalc_poisson(self, iterations=None, params=None, tol_V=None, min_iters=3):
         if self.laplacian_lu is None:

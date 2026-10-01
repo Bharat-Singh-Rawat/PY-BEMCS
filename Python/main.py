@@ -852,6 +852,7 @@ class DigitalTwinApp(QMainWindow):
         scroll_area = QScrollArea()
         scroll_area.setFixedWidth(330)
         scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         control_panel  = QWidget()
         control_layout = QVBoxLayout(control_panel)
@@ -997,6 +998,9 @@ class DigitalTwinApp(QMainWindow):
         self.lbl_status   = QLabel("Status: Ready.")
         self.lbl_temp     = QLabel("Grid Temps: Ready")
         self.lbl_material = QLabel(f"Grid Material: {self.mat_name or 'Molybdenum'}")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_temp.setWordWrap(True)
+        self.lbl_material.setWordWrap(True)
 
         for w in [
             self.btn_build, self.btn_toggle, self.btn_csv, self.chk_track_ptcls,
@@ -1812,7 +1816,7 @@ class DigitalTwinApp(QMainWindow):
         else:
             dx_str = f"dx=dy={self.sim.dx:.4f} mm"
         self.lbl_status.setText(
-            f"Domain Ready [{cfg_name}] | {mesh_mode_tag} | {dx_str}"
+            f"Domain Ready [{cfg_name}]\n{mesh_mode_tag} | {dx_str}"
         )
         self.lbl_temp.setText(
             "Grid Temps: " + " | ".join([f"G{i+1}: 26°C" for i in range(len(self.grid_widgets))])
@@ -1890,6 +1894,52 @@ class DigitalTwinApp(QMainWindow):
             self.charge_window.update_plot(self.sim)
         if self.perf_window and self.perf_window.isVisible():
             self.perf_window.update_plot(self.sim)
+
+        # Refresh saddle-point / midline potential plot & beam divergence
+        v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
+        if v_init_saddle is not None:
+            self.iter_history = [0]
+            self.ebs_history = [v_init_saddle]
+            self.div_history = [0.0]
+            self.line_ebs.set_data(self.iter_history, self.ebs_history)
+            self.line_div.set_data(self.iter_history, self.div_history)
+            pad = max(20.0, abs(v_init_saddle) * 0.1)
+            self.ax_ebs.set_xlim(0, 100)
+            self.ax_ebs.set_ylim(v_init_saddle - pad, v_init_saddle + pad)
+            self.ax_div.set_xlim(0, 100)
+            self.ax_div.set_ylim(0, 45)
+        else:
+            self.iter_history = []
+            self.ebs_history = []
+            self.div_history = []
+            self.line_ebs.set_data([], [])
+            self.line_div.set_data([], [])
+            self.ax_ebs.set_xlim(0, 100)
+            self.ax_div.set_xlim(0, 100)
+            self.ax_div.set_ylim(0, 45)
+
+        # Refresh Accel Grid Erosion Profile
+        self.line_groove.set_data([], [])
+        self.ax_groove.set_xlim(0, max(1.0, float(getattr(self.sim, 'Ly', 1.0))))
+        self.ax_groove.set_ylim(1.0, 0.0)
+        self.ax_groove.set_title("Accel Grid Erosion Profile — Ready")
+
+        # Refresh Sputter Damage Map to initial zero-damage state
+        self.ax_dmg.clear()
+        self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
+        self.ax_dmg.set_xlabel("Axial Position [mm]", fontsize=8)
+        self.ax_dmg.set_ylabel("Radial Position [mm]", fontsize=8)
+        gy, gx = np.where(self.sim.isBound)
+        x_pts = getattr(self.sim, 'x_coords', getattr(self.sim, 'xpts', None))
+        y_pts = getattr(self.sim, 'y_coords', getattr(self.sim, 'ypts', None))
+        if x_pts is not None and y_pts is not None:
+            self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
+        else:
+            self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c="grey", alpha=0.5)
+        self.ax_dmg.set_xlim(0, self.sim.Lx)
+        self.ax_dmg.set_ylim(0, self.sim.Ly)
+
+        self.canvas.draw_idle()
 
     def run_sim_step(self):
         if not self.sim_isRunning:
