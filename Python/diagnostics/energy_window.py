@@ -211,11 +211,18 @@ class PhysicalConstraintsWindow(QWidget):
         fe = np.asarray(sim.energy_history_fe, dtype=float)
         tot = np.asarray(sim.energy_history_tot, dtype=float)
 
-        if len(t) == 0:
+        min_n = min(len(t), len(ke_i), len(ke_e), len(fe), len(tot))
+        if min_n == 0:
             self.ax.clear()
             self.ax.set_title("No energy data yet — start simulation")
             self.canvas.draw_idle()
             return
+
+        t = t[:min_n]
+        ke_i = ke_i[:min_n]
+        ke_e = ke_e[:min_n]
+        fe = fe[:min_n]
+        tot = tot[:min_n]
 
         t_us = t * 1e6   # convert s -> us for display
 

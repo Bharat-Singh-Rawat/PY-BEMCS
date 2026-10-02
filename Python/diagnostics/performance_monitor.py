@@ -159,8 +159,9 @@ class PerformanceMonitor:
             if d.total_active_cells > 0:
                 d.mean_ppc_all = float(np.mean(ppc_map[active_mask]))
                 d.min_ppc_nonzero = int(np.min(ppc_map[active_mask]))
+                thresh = getattr(sim, 'min_ppc_threshold', 3)
                 d.low_ppc_cell_count = int(np.count_nonzero(
-                    (ppc_map > 0) & (ppc_map < 3)
+                    (ppc_map > 0) & (ppc_map < thresh)
                 ))
 
             # Regional PPC: upstream (before first grid) and plume (after last grid)

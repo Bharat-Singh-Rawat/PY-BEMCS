@@ -565,6 +565,7 @@ class DigitalTwinSimulator:
         self.exit_count_step     = 0
         self.total_active_cells  = 0
         self.low_ppc_cells       = 0
+        self.min_ppc_threshold   = 3
 
         self.reset_arrays()
 
@@ -2708,25 +2709,11 @@ class DigitalTwinSimulator:
 
         # 5. Evaluate the threshold
         # We ignore cells with 0 particles (vacuum/solid grids) to avoid false positives
-        low_ppc_mask = (ppc_map > 0) & (ppc_map < 3)
+        thresh = getattr(self, 'min_ppc_threshold', 3)
+        low_ppc_mask = (ppc_map > 0) & (ppc_map < thresh)
         self.total_active_cells = int(np.count_nonzero(ppc_map > 0))
         self.low_ppc_cells = int(np.count_nonzero(low_ppc_mask))
 
-        # 6. Check if any cells violate your condition
-        if self.low_ppc_cells > 0:
-            num_violating_cells = self.low_ppc_cells
-            total_active_cells = self.total_active_cells
-            pct_low = (num_violating_cells / total_active_cells * 100.0) if total_active_cells > 0 else 0.0
-            min_ppc_found = np.min(ppc_map[ppc_map > 0]) # Lowest non-zero count
-            
-            print(f"Warning: {num_violating_cells} active cells have fewer than 3 macroparticles.")
-            print(f"Total active cells: {total_active_cells}")
-            print(f"Percentage of low PPC cells (< 3): {pct_low:.2f}%")
-            print(f"Lowest non-zero PPC found: {min_ppc_found}")
-            
-            # Optional: Find exact coordinates of violating cells
-            # bad_iy, bad_ix = np.where(low_ppc_mask)
-            # print(f"First violating cell at x={bad_ix[0]*self.dx:.2f}mm, y={bad_iy[0]*self.dy:.2f}mm")
         # ---- Performance monitor ----
         if self._perf_monitor is not None:
             step_wall = _time_mod.perf_counter() - self._step_t0

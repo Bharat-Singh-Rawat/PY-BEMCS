@@ -17,11 +17,13 @@ from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog, QScrollArea
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog, QScrollArea,
+        QDialog, QSpinBox
     )
 except ImportError:
     from PyQt6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog, QScrollArea
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QFileDialog, QScrollArea,
+        QDialog, QSpinBox
     )
 
 
@@ -60,6 +62,11 @@ class PerformanceMonitorWindow(QWidget):
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self._refresh)
         ctrl.addWidget(btn_refresh)
+
+        btn_settings = QPushButton("Settings")
+        btn_settings.setToolTip("Configure PPC evaluation threshold (minimum particles per cell)")
+        btn_settings.clicked.connect(self._open_settings)
+        ctrl.addWidget(btn_settings)
 
         ctrl.addStretch()
         layout.addLayout(ctrl)
@@ -204,6 +211,62 @@ class PerformanceMonitorWindow(QWidget):
             mon.export_csv(file_name)
             QMessageBox.information(self, "Export Successful", f"Performance log saved to:\n{file_name}")
 
+    def _get_threshold(self):
+        sim = self._last_sim if self._last_sim is not None else getattr(self.parent_app, 'sim', None)
+        if sim is not None:
+            return int(getattr(sim, 'min_ppc_threshold', 3))
+        return 3
+
+    def _set_threshold(self, val):
+        val = max(1, int(val))
+        sim = self._last_sim if self._last_sim is not None else getattr(self.parent_app, 'sim', None)
+        if sim is not None:
+            sim.min_ppc_threshold = val
+            # Sync with PPC distribution window if open
+            ppc_win = getattr(self.parent_app, 'ppc_window', None)
+            if ppc_win is not None:
+                ppc_win._sync_mode_labels()
+                if ppc_win.isVisible():
+                    ppc_win.update_plot(sim)
+
+            self.update_plot(sim)
+
+    def _open_settings(self, *args):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("PPC Diagnostic Settings")
+        dialog.setFixedWidth(360)
+        d_lay = QVBoxLayout(dialog)
+
+        desc = QLabel(
+            "<b>Minimum Particles Per Cell (PPC):</b><br>"
+            "Set the evaluation threshold for PPC quality monitoring. "
+            "This adjusts the target reference line and cell quality criteria."
+        )
+        desc.setWordWrap(True)
+        d_lay.addWidget(desc)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Minimum PPC Threshold:"))
+        spin = QSpinBox()
+        spin.setRange(1, 1000)
+        spin.setValue(self._get_threshold())
+        row.addWidget(spin)
+        d_lay.addLayout(row)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        btn_cancel = QPushButton("Cancel")
+        btn_ok = QPushButton("OK")
+        btn_ok.clicked.connect(dialog.accept)
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_ok)
+        d_lay.addLayout(btn_box)
+
+        res = dialog.exec_() if hasattr(dialog, 'exec_') else dialog.exec()
+        if res == QDialog.Accepted:
+            self._set_threshold(spin.value())
+
     def update_plot(self, sim):
         self._last_sim = sim
         mon = getattr(sim, '_perf_monitor', None) if sim is not None else None
@@ -215,7 +278,9 @@ class PerformanceMonitorWindow(QWidget):
             return
 
         self._legend_pick_map.clear()
-        history = mon.history
+        history = list(mon.history)
+        if not history:
+            return
         # Subsample if history is very large to keep GUI responsive
         n = len(history)
         if n > 800:
@@ -224,7 +289,7 @@ class PerformanceMonitorWindow(QWidget):
             if data[-1] is not history[-1]:
                 data.append(history[-1])
         else:
-            data = history
+            data = list(history)
 
         iters = np.array([d.iteration for d in data])
         t_us = np.array([d.sim_time_s * 1e6 for d in data])
@@ -242,6 +307,9 @@ class PerformanceMonitorWindow(QWidget):
         ppc_pl = np.array([d.mean_ppc_plume for d in data])
         dt_ms = np.array([d.wall_time_ms for d in data])
         rss_mb = np.array([d.memory_rss_mb for d in data])
+        delta_V = np.array([d.poisson_delta_V for d in data])
+        rms_V = np.array([getattr(d, 'poisson_rms', 0.0) for d in data])
+        statuses = [getattr(d, 'poisson_status', 'converged') for d in data]
 
         last = history[-1]
         warn_text = ""
@@ -369,6 +437,9 @@ class PerformanceMonitorWindow(QWidget):
         ax3.clear()
         has_any_3 = False
 
+        thresh = float(self._get_threshold())
+        thresh_label = int(thresh) if thresh == int(thresh) else thresh
+
         if self.curve_visibility.get('p3_ppc_up', True):
             ax3.plot(x_axis, ppc_up, color='#1f77b4', lw=1.6, zorder=3)
             has_any_3 = True
@@ -376,7 +447,7 @@ class PerformanceMonitorWindow(QWidget):
             ax3.plot(x_axis, ppc_pl, color='#2ca02c', lw=1.4, zorder=3)
             has_any_3 = True
         if self.curve_visibility.get('p3_target', True):
-            ax3.axhline(3.0, color='red', linestyle='--', alpha=0.6, lw=1.2, zorder=2)
+            ax3.axhline(thresh, color='red', linestyle='--', alpha=0.6, lw=1.2, zorder=2)
             has_any_3 = True
 
         if not has_any_3:
@@ -394,7 +465,7 @@ class PerformanceMonitorWindow(QWidget):
         p3_quantities = [
             ('p3_ppc_up', "Upstream PPC", '#1f77b4', '-', 1.6),
             ('p3_ppc_pl', "Plume PPC", '#2ca02c', '-', 1.4),
-            ('p3_target', "PPC Target (3)", 'red', '--', 1.2),
+            ('p3_target', f"PPC Target ({thresh_label})", 'red', '--', 1.2),
         ]
         self._build_interactive_legend(ax3, p3_quantities, loc='upper left')
 
@@ -435,18 +506,21 @@ class PerformanceMonitorWindow(QWidget):
         ax5.clear()
         has_any_5 = False
 
-        delta_V = np.array([d.poisson_delta_V for d in data])
-        rms_V = np.array([getattr(d, 'poisson_rms', 0.0) for d in data])
-        statuses = [getattr(d, 'poisson_status', 'converged') for d in data]
+        # Ensure exact matching lengths for Plot 5
+        n_p5 = min(len(iters), len(delta_V), len(rms_V), len(statuses))
+        p5_iters = iters[:n_p5]
+        p5_delta_V = delta_V[:n_p5]
+        p5_rms_V = rms_V[:n_p5]
+        p5_statuses = statuses[:n_p5]
 
         # 1. Max Error curve
         if self.curve_visibility.get('p5_max_err', True):
-            ax5.plot(iters, delta_V, color='#1f77b4', lw=1.5, zorder=3)
+            ax5.plot(p5_iters, p5_delta_V, color='#1f77b4', lw=1.5, zorder=3)
             has_any_5 = True
 
         # 2. RMS Error curve
         if self.curve_visibility.get('p5_rms_err', True):
-            ax5.plot(iters, rms_V, color='#16a085', lw=1.3, linestyle='--', zorder=3)
+            ax5.plot(p5_iters, p5_rms_V, color='#16a085', lw=1.3, linestyle='--', zorder=3)
             has_any_5 = True
 
         # 3. Tolerance Target (50 mV reference line)
@@ -455,30 +529,30 @@ class PerformanceMonitorWindow(QWidget):
             has_any_5 = True
 
         # 4. Stagnation events (points)
-        stag_mask = np.array([s == 'stagnated' for s in statuses])
+        stag_mask = np.array([s == 'stagnated' for s in p5_statuses])
         if np.any(stag_mask) and self.curve_visibility.get('p5_stag', True):
             ax5.scatter(
-                iters[stag_mask], delta_V[stag_mask],
+                p5_iters[stag_mask], p5_delta_V[stag_mask],
                 color='#f39c12', edgecolor='#7e4100', s=55, marker='o',
                 label='Stagnation', zorder=5
             )
             has_any_5 = True
 
         # 5. Divergence events (points)
-        div_mask = np.array([s == 'diverged' for s in statuses])
+        div_mask = np.array([s == 'diverged' for s in p5_statuses])
         if np.any(div_mask) and self.curve_visibility.get('p5_div', True):
             ax5.scatter(
-                iters[div_mask], delta_V[div_mask],
+                p5_iters[div_mask], p5_delta_V[div_mask],
                 color='#d62728', edgecolor='#600000', s=70, marker='X',
                 label='Divergence', zorder=6
             )
             has_any_5 = True
 
         # 6. Newton-Raphson events (points)
-        nr_mask = np.array([s in ['converged_newton', 'diverged_newton'] for s in statuses])
+        nr_mask = np.array([s in ['converged_newton', 'diverged_newton'] for s in p5_statuses])
         if np.any(nr_mask) and self.curve_visibility.get('p5_nr', True):
             ax5.scatter(
-                iters[nr_mask], delta_V[nr_mask],
+                p5_iters[nr_mask], p5_delta_V[nr_mask],
                 color='#9b59b6', edgecolor='#4b0082', s=60, marker='^',
                 label='Newton-Raphson', zorder=7
             )

@@ -12,11 +12,13 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import ListedColormap, BoundaryNorm
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton,
+        QDialog, QSpinBox
     )
 except ImportError:
     from PyQt6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton,
+        QDialog, QSpinBox
     )
 
 
@@ -24,7 +26,7 @@ class PPCWindow(QWidget):
     """
     Window displaying the 2D spatial distribution of Particles Per Cell (PPC).
     Supports Time-Averaged Accumulator, Instantaneous PPC,
-    and Low PPC Warning (< 3 ptcls/cell) mask across Presheath, Optics, and Plume zones.
+    and Low PPC Warning (< threshold ptcls/cell) mask across Presheath, Optics, and Plume zones.
 
     Uses GridSpec (not make_axes_locatable) so that ax.clear() / cax.clear() never
     corrupts matplotlib's _shared_axes siblings graph, which would trigger a RecursionError.
@@ -32,8 +34,9 @@ class PPCWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__()
         self.parent_app = parent
+        self._min_ppc_thresh = 3
         self.setWindowTitle("Macroparticle Distribution per Cell (PPC)")
-        self.setGeometry(120, 120, 780, 540)
+        self.setGeometry(120, 120, 800, 540)
 
         layout = QVBoxLayout(self)
 
@@ -44,11 +47,16 @@ class PPCWindow(QWidget):
         self.combo_mode.addItems([
             "Time-Averaged PPC (Accumulator)",
             "Instantaneous PPC (Current Step)",
-            "Low PPC Warning Mask (< 3 ptcls/cell)"
+            f"Low PPC Warning Mask (< {self._get_threshold()} ptcls/cell)"
         ])
         self.combo_mode.currentIndexChanged.connect(self._on_mode_change)
         ctrl_layout.addWidget(QLabel("<b>PPC Mode:</b>"))
         ctrl_layout.addWidget(self.combo_mode)
+
+        self.btn_settings = QPushButton("Settings")
+        self.btn_settings.setToolTip("Configure the minimum particle evaluation threshold per cell")
+        self.btn_settings.clicked.connect(self._open_settings)
+        ctrl_layout.addWidget(self.btn_settings)
 
         self.chk_zones = QCheckBox("Show Physical Zones")
         self.chk_zones.setChecked(True)
@@ -62,7 +70,7 @@ class PPCWindow(QWidget):
         layout.addLayout(ctrl_layout)
 
         # Statistics Summary Panel
-        self.lbl_stats = QLabel("Active Cells: — | Low PPC (< 3): — (—%) | Mean Active PPC: —")
+        self.lbl_stats = QLabel(f"Active Cells: — | Low PPC (< {self._get_threshold()}): — (—%) | Mean Active PPC: —")
         self.lbl_stats.setStyleSheet(
             "font-family: monospace; font-size: 11px; background-color: #f4f6f9; "
             "padding: 6px; border: 1px solid #d0d7de; border-radius: 4px;"
@@ -78,6 +86,71 @@ class PPCWindow(QWidget):
         self.canvas = FigureCanvas(self.fig)
         layout.addWidget(self.canvas)
 
+    def _get_threshold(self):
+        sim = getattr(self.parent_app, 'sim', None)
+        if sim is not None:
+            return int(getattr(sim, 'min_ppc_threshold', 3))
+        return getattr(self, '_min_ppc_thresh', 3)
+
+    def _set_threshold(self, val):
+        val = max(1, int(val))
+        self._min_ppc_thresh = val
+        sim = getattr(self.parent_app, 'sim', None)
+        if sim is not None:
+            sim.min_ppc_threshold = val
+            # Sync with performance monitor window if open
+            perf_win = getattr(self.parent_app, 'perf_window', None)
+            if perf_win is not None and perf_win.isVisible():
+                perf_win.update_plot(sim)
+
+        self._sync_mode_labels()
+        if sim is not None:
+            self.update_plot(sim)
+
+    def _sync_mode_labels(self):
+        thresh = self._get_threshold()
+        self.combo_mode.blockSignals(True)
+        cur_idx = self.combo_mode.currentIndex()
+        self.combo_mode.setItemText(2, f"Low PPC Warning Mask (< {thresh} ptcls/cell)")
+        self.combo_mode.setCurrentIndex(cur_idx)
+        self.combo_mode.blockSignals(False)
+
+    def _open_settings(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("PPC Evaluation Settings")
+        dialog.setFixedWidth(360)
+        d_lay = QVBoxLayout(dialog)
+
+        desc = QLabel(
+            "<b>Minimum Particles Per Cell (PPC):</b><br>"
+            "Set the evaluation threshold. Cells with active particles fewer "
+            "than this number are classified as <i>Low PPC</i> and highlighted in red."
+        )
+        desc.setWordWrap(True)
+        d_lay.addWidget(desc)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Minimum PPC Threshold:"))
+        spin = QSpinBox()
+        spin.setRange(1, 1000)
+        spin.setValue(self._get_threshold())
+        row.addWidget(spin)
+        d_lay.addLayout(row)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        btn_cancel = QPushButton("Cancel")
+        btn_ok = QPushButton("OK")
+        btn_ok.clicked.connect(dialog.accept)
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_ok)
+        d_lay.addLayout(btn_box)
+
+        res = dialog.exec_() if hasattr(dialog, 'exec_') else dialog.exec()
+        if res == QDialog.Accepted:
+            self._set_threshold(spin.value())
+
     def _reset_accum(self):
         if self.parent_app and hasattr(self.parent_app, 'sim'):
             self.parent_app.sim.reset_ppc_accumulator()
@@ -91,6 +164,9 @@ class PPCWindow(QWidget):
         if sim is None or not hasattr(sim, 'nx') or sim.nx <= 0 or sim.ny <= 0:
             return
 
+        thresh = self._get_threshold()
+        self._sync_mode_labels()
+
         mode = self.combo_mode.currentText()
         if "Time-Averaged" in mode:
             raw_ppc = sim.get_avg_ppc_map()
@@ -100,11 +176,11 @@ class PPCWindow(QWidget):
             title = f"Instantaneous PPC — Step {sim.iteration}"
         else:
             raw_ppc = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx))).astype(float)
-            title = f"Low PPC Warning Mask (< 3 particles/cell) — Step {sim.iteration}"
+            title = f"Low PPC Warning Mask (< {thresh} particles/cell) — Step {sim.iteration}"
 
         # True active and low PPC masks based on actual particle numbers
         active_mask = (raw_ppc > 0)
-        low_mask = (raw_ppc > 0) & (raw_ppc < 3)
+        low_mask = (raw_ppc > 0) & (raw_ppc < thresh)
         total_active = int(np.count_nonzero(active_mask))
         low_count = int(np.count_nonzero(low_mask))
         pct_low = (low_count / total_active * 100.0) if total_active > 0 else 0.0
@@ -127,7 +203,7 @@ class PPCWindow(QWidget):
         act_plm, low_plm, pct_plm = _zone_stats(slice(ix_last, None))
 
         self.lbl_stats.setText(
-            f"Active Cells: {total_active} | Low PPC (< 3): {low_count} ({pct_low:.1f}%) | Mean PPC: {mean_active:.1f}\n"
+            f"Active Cells: {total_active} | Low PPC (< {thresh}): {low_count} ({pct_low:.1f}%) | Mean PPC: {mean_active:.1f}\n"
             f"Zones Low%:  Presheath {pct_up:.1f}% ({low_up}/{act_up})  |  "
             f"Optics {pct_opt:.1f}% ({low_opt}/{act_opt})  |  "
             f"Plume {pct_plm:.1f}% ({low_plm}/{act_plm})"
@@ -157,9 +233,9 @@ class PPCWindow(QWidget):
         Y = getattr(sim, 'Y', None)
 
         if "Low PPC" in mode:
-            # 3 categories: 0 = Empty / Vacuum, 1 = OK (>= 3), 2 = LOW (< 3)
+            # 3 categories: 0 = Empty / Vacuum, 1 = OK (>= thresh), 2 = LOW (< thresh)
             cat_map = np.zeros((sim.ny, sim.nx), dtype=float)
-            cat_map[raw_ppc >= 3] = 1.0
+            cat_map[raw_ppc >= thresh] = 1.0
             cat_map[low_mask] = 2.0
 
             cmap = ListedColormap(['#eef1f6', '#2ca02c', '#d62728'])
@@ -226,7 +302,7 @@ class PPCWindow(QWidget):
         self.cbar = self.fig.colorbar(im, cax=self.cax)
         if "Low PPC" in mode:
             self.cbar.set_ticks([0, 1, 2])
-            self.cbar.set_ticklabels(["Empty", "OK (>= 3)", "LOW (< 3)"])
+            self.cbar.set_ticklabels(["Empty", f"OK (>= {thresh})", f"LOW (< {thresh})"])
         else:
             self.cbar.set_label("Particles / Cell (PPC)", fontsize=8)
 

@@ -2444,7 +2444,7 @@ class DigitalTwinApp(QMainWindow):
                     'ion_current_exit_avg_A',
                     'transmitted_ions_step',
                     'total_active_cells',
-                    'cells_less_than_3_macroparticles'
+                    f'cells_less_than_{getattr(self.sim, "min_ppc_threshold", 3)}_macroparticles'
                 ]
                 for i in range(len(self.T_histories)):
                     header.append(f"grid_{i+1}_temp_K")

@@ -242,11 +242,19 @@ class TotalChargeMonitorWindow(QWidget):
         q_free = np.asarray(sim.charge_history_q_free, dtype=float)
         q_net = np.asarray(sim.charge_history_q_net, dtype=float)
 
-        if len(t) == 0:
+        min_n = min(len(t), len(q_i), len(q_e), len(q_b), len(q_free), len(q_net))
+        if min_n == 0:
             self.ax.clear()
             self.ax.set_title("No charge data yet — start simulation")
             self.canvas.draw_idle()
             return
+
+        t = t[:min_n]
+        q_i = q_i[:min_n]
+        q_e = q_e[:min_n]
+        q_b = q_b[:min_n]
+        q_free = q_free[:min_n]
+        q_net = q_net[:min_n]
 
         t_us = t * 1e6   # convert s -> us for display
 
