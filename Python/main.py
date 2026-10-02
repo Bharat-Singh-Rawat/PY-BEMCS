@@ -2231,6 +2231,10 @@ class DigitalTwinApp(QMainWindow):
         self.lblTime.setText("t_sim:        — us")
         self.T_histories = {i: [] for i in range(len(self.grid_widgets))}
         self.tracking_buffer.clear()
+        self.recorded_frames.clear()
+        if hasattr(self, 'chk_record'):
+            self.chk_record.setChecked(False)
+            self.chk_record.setText("Record Frames (0)")
 
         self.lbl_status.setText("Building Multi-Grid Domain...")
         QApplication.processEvents()
