@@ -23,7 +23,8 @@ from PyQt5.QtWidgets import (
     QMessageBox, QFileDialog, QApplication, QComboBox,
     QScrollArea, QGroupBox, QAction, QDialog, QFormLayout,
     QSpinBox, QTableWidget, QTableWidgetItem, QMenuBar,
-    QHeaderView, QSplitter, QProgressDialog, QFrame
+    QHeaderView, QSplitter, QProgressDialog, QFrame,
+    QSizePolicy
 )
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtCore import Qt as QtCore_Qt
@@ -997,15 +998,19 @@ class DigitalTwinApp(QMainWindow):
 
         root_layout.addWidget(top_bar)
 
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(0)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        # Use a QSplitter instead of QHBoxLayout so the panel and canvas
+        # maintain stable sizes when dialogs open/close or processEvents()
+        # triggers layout recalculations.
+        content_splitter = QSplitter(Qt.Horizontal)
+        content_splitter.setHandleWidth(0)       # no visible drag handle
+        content_splitter.setChildrenCollapsible(False)
 
         # SCROLLABLE CONTROL PANEL
         scroll_area = QScrollArea()
         scroll_area.setFixedWidth(330)
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         control_panel  = QWidget()
         control_layout = QVBoxLayout(control_panel)
@@ -1182,13 +1187,18 @@ class DigitalTwinApp(QMainWindow):
         control_layout.addWidget(perfbox)
 
         scroll_area.setWidget(control_panel)
-        content_layout.addWidget(scroll_area)
+        content_splitter.addWidget(scroll_area)
 
         self.fig = plt.figure(figsize=(12, 8))
         self.canvas = FigureCanvas(self.fig)
-        content_layout.addWidget(self.canvas)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        content_splitter.addWidget(self.canvas)
 
-        root_layout.addLayout(content_layout)
+        # Lock the splitter so the control panel cannot be resized by the user
+        content_splitter.setStretchFactor(0, 0)   # scroll_area: no stretch
+        content_splitter.setStretchFactor(1, 1)   # canvas: takes all extra space
+
+        root_layout.addWidget(content_splitter)
 
         grid = plt.GridSpec(3, 3, height_ratios=[1.2, 1, 0.9])
 
