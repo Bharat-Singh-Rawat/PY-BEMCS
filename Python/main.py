@@ -157,6 +157,19 @@ class SimulationWorker(QThread):
     numpy arrays so the GUI can safely consume them while the worker is
     already computing the next step.
 
+    Improvements
+    ------------
+    - Particle XY columns and energy-per-particle are pre-computed here on
+      the worker thread so the GUI thread only needs ``set_offsets`` /
+      ``set_array`` calls.
+    - Scatter arrays are randomly subsampled to ``MAX_SCATTER`` points when
+      the particle count exceeds that threshold, bounding render cost.
+    - ``damage_map`` is only copied when it changed (version counter).
+    - ``Tmap`` is only copied when thermal is active in the current step.
+    - Adaptive ``msleep``: sleeps for at least as long as the GUI took to
+      process the last snapshot, preventing queue overflow at low particle
+      counts.
+
     Flow
     ----
     1. GUI calls ``worker.start_sim(params)`` → sets ``_running = True`` and
@@ -166,6 +179,16 @@ class SimulationWorker(QThread):
     3. GUI calls ``worker.pause()`` → sets ``_running = False``; the loop
        finishes the current iteration and stops.
     """
+
+    # Maximum particles sent to scatter plots when no runtime override is active
+    MAX_SCATTER = 100_000
+
+    # Runtime scatter limit — set by the GUI Settings dialog:
+    #   None  → hide all particles (display nothing)
+    #   0     → no limit (show every particle)
+    #   N > 0 → show at most N particles (randomly subsampled)
+    # When _scatter_limit is not set it falls back to MAX_SCATTER.
+    _scatter_limit: "int | None | 'all'" = MAX_SCATTER
 
     # Signal carries a dict with ALL snapshot data for the GUI update
     step_done = pyqtSignal(dict)
@@ -178,6 +201,8 @@ class SimulationWorker(QThread):
         self._params = {}
         self._running = False
         self._lock = threading.Lock()   # protects _params / _running
+        self._last_damage_version = -1   # tracks when damage_map changed
+        self._last_damage_copy = None    # last copied damage_map
 
     # ---- control interface (called from GUI thread) ----
     def start_sim(self, params):
@@ -202,6 +227,11 @@ class SimulationWorker(QThread):
     def running(self):
         with self._lock:
             return self._running
+
+    # ---- internal helpers ----
+    def _subsample(self, arr, idx):
+        """Return arr[idx] if arr is non-empty, else arr."""
+        return arr[idx] if len(arr) > 0 else arr
 
     # ---- thread body ----
     def run(self):
@@ -231,7 +261,112 @@ class SimulationWorker(QThread):
             self.sim.get_total_charge()
             transparency = self.sim.get_transparency()
 
-            # Build a snapshot dict with copies of all arrays the GUI needs
+            # ---- Strategy 2: pre-compute particle data on worker thread ----
+            num_p = self.sim.num_p
+            num_e = self.sim.num_e
+            m_ion = self.sim.m_ion
+            m_e   = self.sim.m_e
+            q     = self.sim.q
+
+            # -- Ion arrays (raw slices, before subsampling) --
+            if num_p > 0:
+                p_isCEX_raw = self.sim.p_isCEX[:num_p].copy()
+                p_x_raw  = self.sim.p_x[:num_p].copy()
+                p_y_raw  = self.sim.p_y[:num_p].copy()
+                p_vx_raw = self.sim.p_vx[:num_p].copy()
+                p_vy_raw = self.sim.p_vy[:num_p].copy()
+                p_vz_raw = self.sim.p_vz[:num_p].copy()
+            else:
+                p_isCEX_raw = np.empty(0, dtype=bool)
+                p_x_raw = p_y_raw = p_vx_raw = p_vy_raw = p_vz_raw = np.empty(0)
+
+            # -- Subsample ions based on runtime scatter limit --
+            # _scatter_limit semantics:
+            #   None  → show nothing (empty arrays)
+            #   0     → show everything
+            #   N > 0 → subsample to N
+            scatter_limit = getattr(self, '_scatter_limit', self.MAX_SCATTER)
+
+            if scatter_limit is None:
+                # Hide all particles
+                p_isCEX = np.empty(0, dtype=bool)
+                p_x = p_y = p_vx = p_vy = p_vz = np.empty(0)
+                ions_subsampled = False
+                ions_subsample_ratio = 0.0
+            elif scatter_limit == 0 or num_p <= scatter_limit:
+                # No limit or already below threshold — use full arrays
+                p_isCEX = p_isCEX_raw
+                p_x = p_x_raw; p_y = p_y_raw
+                p_vx = p_vx_raw; p_vy = p_vy_raw; p_vz = p_vz_raw
+                ions_subsampled = False
+                ions_subsample_ratio = 1.0
+            else:
+                # Subsample to scatter_limit
+                ion_idx = np.random.choice(num_p, scatter_limit, replace=False)
+                ion_idx.sort()  # keep spatial ordering for visual coherence
+                p_isCEX = p_isCEX_raw[ion_idx]
+                p_x  = p_x_raw[ion_idx];  p_y  = p_y_raw[ion_idx]
+                p_vx = p_vx_raw[ion_idx]; p_vy = p_vy_raw[ion_idx]; p_vz = p_vz_raw[ion_idx]
+                ions_subsampled = True
+                ions_subsample_ratio = num_p / scatter_limit
+
+            # -- Pre-compute scatter XY and per-particle energy (worker thread) --
+            prim_mask = ~p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
+            cex_mask  =  p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
+
+            prim_xy = (np.column_stack((p_x[prim_mask], p_y[prim_mask]))
+                       if np.any(prim_mask) else np.empty((0, 2)))
+            cex_xy  = (np.column_stack((p_x[cex_mask],  p_y[cex_mask]))
+                       if np.any(cex_mask)  else np.empty((0, 2)))
+
+            if np.any(prim_mask):
+                vsq = p_vx[prim_mask]**2 + p_vy[prim_mask]**2 + p_vz[prim_mask]**2
+                e_prim_eV = (0.5 * m_ion * vsq) / q
+            else:
+                e_prim_eV = np.empty(0)
+
+            if np.any(cex_mask):
+                vsq = p_vx[cex_mask]**2 + p_vy[cex_mask]**2 + p_vz[cex_mask]**2
+                e_cex_eV = (0.5 * m_ion * vsq) / q
+            else:
+                e_cex_eV = np.empty(0)
+
+            # -- Electron arrays (subsample if needed) --
+            if num_e > 0:
+                e_x_raw  = self.sim.e_x[:num_e].copy()
+                e_y_raw  = self.sim.e_y[:num_e].copy()
+                e_vx_raw = self.sim.e_vx[:num_e].copy()
+                e_vy_raw = self.sim.e_vy[:num_e].copy()
+            else:
+                e_x_raw = e_y_raw = e_vx_raw = e_vy_raw = np.empty(0)
+
+            if scatter_limit is None:
+                e_x = e_y = e_vx = e_vy = np.empty(0)
+                elec_subsampled = False
+            elif scatter_limit == 0 or num_e <= scatter_limit:
+                e_x = e_x_raw; e_y = e_y_raw; e_vx = e_vx_raw; e_vy = e_vy_raw
+                elec_subsampled = False
+            else:
+                elec_idx = np.random.choice(num_e, scatter_limit, replace=False)
+                e_x  = e_x_raw[elec_idx];  e_y  = e_y_raw[elec_idx]
+                e_vx = e_vx_raw[elec_idx]; e_vy = e_vy_raw[elec_idx]
+                elec_subsampled = True
+
+            elec_xy = (np.column_stack((e_x, e_y)) if num_e > 0 else np.empty((0, 2)))
+
+            # -- Strategy 2: conditional Tmap copy (only if thermal is active) --
+            sim_mode = params.get('sim_mode', 'Both')
+            thermal_active = sim_mode in ('Thermal', 'Both')
+            Tmap_snap = self.sim.Tmap.copy() if (thermal_active and self.sim.Tmap is not None) else None
+
+            # -- Strategy 2: damage_map — only copy when it changed --
+            dmg_ver = getattr(self.sim, '_damage_version', 0)
+            if dmg_ver != self._last_damage_version:
+                self._last_damage_copy = self.sim.damage_map.copy()
+                self._last_damage_version = dmg_ver
+            damage_snap = self._last_damage_copy
+
+            # Build snapshot dict
             snap = {
                 'remeshed':            remeshed,
                 'min_pot':             min_pot,
@@ -241,8 +376,8 @@ class SimulationWorker(QThread):
                 'transparency':        transparency,
                 'iteration':           self.sim.iteration,
                 'dt':                  self.sim.dt,
-                'num_p':               self.sim.num_p,
-                'num_e':               self.sim.num_e,
+                'num_p':               num_p,
+                'num_e':               num_e,
                 'exit_vx_mean':        self.sim.exit_vx_mean,
                 'exit_v_mean':         self.sim.exit_v_mean,
                 'exit_energy_mean_eV': self.sim.exit_energy_mean_eV,
@@ -254,31 +389,39 @@ class SimulationWorker(QThread):
                 'low_ppc_cells':       self.sim.low_ppc_cells,
                 'injection_enabled':   self.sim.injection_enabled,
                 'has_active_particles': self.sim.has_active_particles(),
-                'm_ion':               self.sim.m_ion,
-                'm_e':                 self.sim.m_e,
-                'q':                   self.sim.q,
+                'm_ion':               m_ion,
+                'm_e':                 m_e,
+                'q':                   q,
                 'Lx':                  self.sim.Lx,
                 'Ly':                  self.sim.Ly,
                 'dx':                  self.sim.dx,
                 'dy':                  self.sim.dy,
                 'nx':                  self.sim.nx,
                 'ny':                  self.sim.ny,
-                # Copy particle arrays so the GUI can scatter-plot safely
-                'p_x':        self.sim.p_x[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
-                'p_y':        self.sim.p_y[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
-                'p_vx':       self.sim.p_vx[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
-                'p_vy':       self.sim.p_vy[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
-                'p_vz':       self.sim.p_vz[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0),
-                'p_isCEX':    self.sim.p_isCEX[:self.sim.num_p].copy() if self.sim.num_p > 0 else np.empty(0, dtype=bool),
-                'e_x':        self.sim.e_x[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
-                'e_y':        self.sim.e_y[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
-                'e_vx':       self.sim.e_vx[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
-                'e_vy':       self.sim.e_vy[:self.sim.num_e].copy() if self.sim.num_e > 0 else np.empty(0),
-                # Maps (copy so GUI can display while worker mutates originals)
-                'Tmap':       self.sim.Tmap.copy() if self.sim.Tmap is not None else None,
-                'isBound':    self.sim.isBound,           # read-only, ok to share reference
-                'mask_grids': self.sim.mask_grids,         # read-only
-                'damage_map': self.sim.damage_map.copy(),
+                # Pre-computed scatter data (Strategy 3)
+                'prim_xy':             prim_xy,
+                'cex_xy':              cex_xy,
+                'elec_xy':             elec_xy,
+                'e_prim_eV':           e_prim_eV,
+                'e_cex_eV':            e_cex_eV,
+                'prim_mask':           prim_mask,
+                'cex_mask':            cex_mask,
+                # Raw particle arrays (needed for IEDF window)
+                'p_isCEX':    p_isCEX_raw,
+                'p_vx':       p_vx_raw,
+                'p_vy':       p_vy_raw,
+                'e_x':        e_x_raw,
+                'e_vx':       e_vx_raw,
+                'e_vy':       e_vy_raw,
+                # Subsampling metadata
+                'ions_subsampled':      ions_subsampled,
+                'ions_subsample_ratio': ions_subsample_ratio,
+                'elec_subsampled':      elec_subsampled,
+                # Maps
+                'Tmap':       Tmap_snap,
+                'isBound':    self.sim.isBound,    # read-only, safe to share
+                'mask_grids': self.sim.mask_grids,  # read-only
+                'damage_map': damage_snap,
                 'X':          self.sim.X,
                 'Y':          self.sim.Y,
                 'V':          self.sim.V,
@@ -292,10 +435,11 @@ class SimulationWorker(QThread):
 
             self.step_done.emit(snap)
 
-            # Tiny sleep to let the GUI thread process the signal and repaint.
-            # Without this the event queue fills faster than the GUI can drain
-            # and the interface *looks* frozen even though events do queue up.
-            self.msleep(1)
+            # Strategy 1 (adaptive sleep): wait at least as long as the GUI
+            # took to process the previous snapshot so the event queue never
+            # fills up faster than it can be drained.
+            gui_ms = max(1, int(params.get('_last_gui_ms', 1)))
+            self.msleep(gui_ms)
 
         self.sim_finished.emit()
 
@@ -716,8 +860,144 @@ class AdvancedSettingsDialog(QDialog):
         return result
 
 
+# ── GUI SETTINGS DIALOG ──────────────────────────────────────────────────────
+class GUISettingsDialog(QDialog):
+    """Dialog for configuring GUI rendering and performance parameters.
+
+    Scatter Particle Limit
+    ----------------------
+    Controls how many ion / electron positions are sent to the matplotlib
+    scatter plots every step.  Three modes:
+
+    * **None**  — particles are hidden entirely (fastest; useful when you care
+                  only about field plots and diagnostics).
+    * **All**   — every particle is rendered (slowest; may freeze GUI at high N).
+    * **Custom** — a user-defined cap N; particles are randomly subsampled to N
+                   when the actual count exceeds this value.
+
+    Diagnostic Update Rate
+    ----------------------
+    Controls how often the PPC / energy / charge / performance pop-up windows
+    are redrawn, independent of the simulation step rate.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("GUI Settings")
+        self.setMinimumWidth(420)
+        self._app = parent  # DigitalTwinApp reference
+
+        layout = QVBoxLayout(self)
+
+        # ── Scatter Particle Limit ────────────────────────────────────────────
+        grp_scatter = QGroupBox("Scatter Plot — Particle Visualisation Limit")
+        grp_scatter.setToolTip(
+            "Limits how many ion/electron positions are drawn on the main canvas "
+            "each simulation step.  Reducing this number can significantly improve "
+            "GUI responsiveness when particle counts are high."
+        )
+        scatter_layout = QVBoxLayout(grp_scatter)
+
+        from PyQt5.QtWidgets import QButtonGroup, QRadioButton
+        self._scatter_group = QButtonGroup(self)
+
+        self._rb_none   = QRadioButton("None  — hide all particles (best performance)")
+        self._rb_all    = QRadioButton("All   — show every particle (may freeze GUI at high N)")
+        self._rb_custom = QRadioButton("Custom limit:")
+
+        for rb in (self._rb_none, self._rb_all, self._rb_custom):
+            scatter_layout.addWidget(rb)
+            self._scatter_group.addButton(rb)
+
+        # Custom spinner row
+        custom_row = QHBoxLayout()
+        custom_row.setContentsMargins(22, 0, 0, 0)
+        self._spin_custom = QSpinBox()
+        self._spin_custom.setRange(1, 10_000_000)
+        self._spin_custom.setSingleStep(10_000)
+        self._spin_custom.setValue(100_000)
+        self._spin_custom.setSuffix("  particles")
+        self._spin_custom.setToolTip("Maximum particles shown per species (ions / electrons)")
+        custom_row.addWidget(self._spin_custom)
+        custom_row.addStretch()
+        scatter_layout.addLayout(custom_row)
+
+        # Enable / disable spinner based on selection
+        self._rb_custom.toggled.connect(self._spin_custom.setEnabled)
+        self._spin_custom.setEnabled(False)
+
+        layout.addWidget(grp_scatter)
+
+        # ── Diagnostic Window Refresh Rate ───────────────────────────────────
+        grp_diag = QGroupBox("Diagnostic Windows — Refresh Interval")
+        diag_layout = QFormLayout(grp_diag)
+
+        self._spin_diag_ms = QSpinBox()
+        self._spin_diag_ms.setRange(100, 10_000)
+        self._spin_diag_ms.setSingleStep(100)
+        self._spin_diag_ms.setSuffix(" ms")
+        self._spin_diag_ms.setToolTip(
+            "Minimum time between redraws of the PPC, Energy, Charge and Performance "
+            "diagnostic windows.  Lower values give smoother updates but cost more CPU "
+            "on the GUI thread.  Default: 500 ms (~2 fps)."
+        )
+        diag_layout.addRow("Minimum interval:", self._spin_diag_ms)
+        layout.addWidget(grp_diag)
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("Apply")
+        btn_ok.setDefault(True)
+        btn_ok.clicked.connect(self.accept)
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_ok)
+        layout.addLayout(btn_row)
+
+        # ── Populate current values ───────────────────────────────────────────
+        self._load_current()
+
+    def _load_current(self):
+        """Read current values from the app and pre-fill the dialog."""
+        app = self._app
+        if app is None:
+            self._rb_custom.setChecked(True)
+            self._spin_diag_ms.setValue(500)
+            return
+
+        # Scatter limit
+        lim = getattr(app._sim_worker, '_scatter_limit', SimulationWorker.MAX_SCATTER)
+        if lim is None:
+            self._rb_none.setChecked(True)
+        elif lim == 0:
+            self._rb_all.setChecked(True)
+        else:
+            self._rb_custom.setChecked(True)
+            self._spin_custom.setValue(int(lim))
+        self._spin_custom.setEnabled(self._rb_custom.isChecked())
+
+        # Diagnostic interval
+        diag_ms = int(getattr(app, '_DIAG_MIN_INTERVAL_MS', 500))
+        self._spin_diag_ms.setValue(diag_ms)
+
+    def get_scatter_limit(self):
+        """Return the chosen scatter limit: None, 0 (all), or a positive int."""
+        if self._rb_none.isChecked():
+            return None
+        if self._rb_all.isChecked():
+            return 0
+        return int(self._spin_custom.value())
+
+    def get_diag_interval_ms(self):
+        """Return the chosen diagnostic refresh interval in milliseconds."""
+        return int(self._spin_diag_ms.value())
+
+
 class DigitalTwinApp(QMainWindow):
     """Main window for PY-BEMCS, orchestrating the interactive GUI, simulation loop, real-time plotting, and diagnostic windows."""
+
 
     def update_config_title(self, config_name=None):
         if config_name:
@@ -790,10 +1070,23 @@ class DigitalTwinApp(QMainWindow):
         self.duration_clock_timer.timeout.connect(self.update_simulation_timer)
         self.duration_clock_timer.start(100)
 
+        # --- Strategy 1: drop-on-busy guard and adaptive GUI timing ---
+        # Prevents the GUI thread from being overwhelmed by signals from the worker.
+        self._gui_busy = False                  # True while _on_step_result is executing
+        self._pending_snap = None               # latest unprocessed snap (replaces older ones)
+        self._last_gui_ms = 1.0                 # wall-time of last _on_step_result (ms)
+
+        # --- Strategy 3: diagnostic window throttle ---
+        # Diagnostic windows (PPC, energy, charge, performance) are redrawn at most
+        # once per _DIAG_MIN_INTERVAL_MS milliseconds, regardless of step rate.
+        self._DIAG_MIN_INTERVAL_MS = 500        # ~2 fps for diagnostics
+        self._last_diag_t = 0.0                 # time.perf_counter() of last diag redraw
+
         # --- Simulation worker (runs sim.step in a background thread) ---
         self._sim_worker = SimulationWorker(self.sim, parent=self)
         self._sim_worker.step_done.connect(self._on_step_result)
         self._sim_worker.sim_finished.connect(self._on_worker_finished)
+
 
     def setup_menu_bar(self):
         menubar = self.menuBar()
@@ -808,6 +1101,10 @@ class DigitalTwinApp(QMainWindow):
         adv_action = QAction("Advanced Parameters...", self)
         adv_action.triggered.connect(self.open_advanced_settings)
         settings_menu.addAction(adv_action)
+
+        gui_action = QAction("GUI Settings...", self)
+        gui_action.triggered.connect(self.open_gui_settings)
+        settings_menu.addAction(gui_action)
 
         self.reload_action = QAction(f"Reload {self.current_config_name}", self)
         self.reload_action.triggered.connect(self.reload_config)
@@ -1605,7 +1902,39 @@ class DigitalTwinApp(QMainWindow):
                                     f"{cfg_name} was reloaded successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Config Error", f"Failed to reload config:\n{e}")
+
+    def open_gui_settings(self):
+        """Open the GUI Settings dialog.
+
+        Changes take effect immediately — the scatter limit is written directly
+        to the worker's ``_scatter_limit`` attribute and is read every step.
+        The diagnostic interval is updated on ``self`` and takes effect on the
+        next step callback.
+        """
+        dialog = GUISettingsDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Apply scatter limit to the worker (takes effect next step)
+            new_limit = dialog.get_scatter_limit()
+            self._sim_worker._scatter_limit = new_limit
+
+            # Apply diagnostic refresh interval
+            new_diag_ms = dialog.get_diag_interval_ms()
+            self._DIAG_MIN_INTERVAL_MS = new_diag_ms
+
+            # Build a human-readable description for the status bar
+            if new_limit is None:
+                lim_str = "particles hidden"
+            elif new_limit == 0:
+                lim_str = "all particles shown"
+            else:
+                lim_str = f"≤ {new_limit:,} particles shown"
+            self.lbl_status.setText(
+                f"GUI Settings applied — scatter: {lim_str}; "
+                f"diag interval: {new_diag_ms} ms"
+            )
+
     def open_advanced_settings(self):
+
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         if not getattr(self, '_user_overrode_Lx', False):
             self.adv_params["Lx"] = auto_Lx
@@ -2132,17 +2461,57 @@ class DigitalTwinApp(QMainWindow):
         """Process a single simulation step result on the GUI thread.
 
         *snap* is a dict snapshot emitted by the SimulationWorker containing
-        copies of all data the GUI needs.  No direct ``self.sim`` access is
-        performed here for data that changes every step, keeping the GUI
-        decoupled from the physics thread.
+        copies / pre-computed data the GUI needs.  No heavy numpy computation
+        is performed here — all O(N) work was moved to the worker thread.
+
+        Strategy 1 — Drop-on-busy guard
+        --------------------------------
+        If a previous call to this function has not finished yet (should not
+        normally happen on the GUI thread, but can occur under heavy load), we
+        store the new snap and schedule a retry via QTimer.singleShot so the
+        event loop can breathe.  This also ensures the GUI always shows the
+        *latest* data, not a stale queued one.
+
+        Strategy 3 — Diagnostic window throttle
+        ----------------------------------------
+        Diagnostic pop-ups (PPC, energy, charge, performance) are expensive to
+        redraw.  They are updated at most once every ``_DIAG_MIN_INTERVAL_MS``
+        ms regardless of simulation step rate.
         """
-        params          = snap['params']
-        remeshed        = snap['remeshed']
-        min_pot         = snap['min_pot']
-        current_div     = snap['current_div']
-        T_grids         = snap['T_grids']
+        # ---- Strategy 1: drop-on-busy guard ----
+        if self._gui_busy:
+            # Store latest snap and discard older pending ones; retry after event loop drains
+            self._pending_snap = snap
+            return
+
+        # Check if there is a pending snap (from a previous busy-drop)
+        if self._pending_snap is not None and snap is not self._pending_snap:
+            # Already have a newer snap waiting; process that one instead
+            snap = self._pending_snap
+        self._pending_snap = None
+        self._gui_busy = True
+
+        _t0 = time.perf_counter()
+        try:
+            self._process_snap(snap)
+        finally:
+            # Record how long the GUI took and feed it back to the worker
+            self._last_gui_ms = (time.perf_counter() - _t0) * 1000.0
+            self._gui_busy = False
+
+            # If a new snap arrived while we were busy, schedule processing it
+            if self._pending_snap is not None:
+                QTimer.singleShot(0, lambda: self._on_step_result(self._pending_snap))
+
+    def _process_snap(self, snap):
+        """Inner body of _on_step_result, separated for clarity."""
+        params           = snap['params']
+        remeshed         = snap['remeshed']
+        min_pot          = snap['min_pot']
+        current_div      = snap['current_div']
+        T_grids          = snap['T_grids']
         trans_last_frame = snap['trans_last_frame']
-        transparency    = snap['transparency']
+        transparency     = snap['transparency']
 
         inj_time    = params.get("inj_time", 0.0)
         inj_limited = inj_time > 0.0
@@ -2182,54 +2551,29 @@ class DigitalTwinApp(QMainWindow):
             self.lbl_status.setText("Domain Remeshed (Thermal or Erosion)!")
             self.draw_static_domain()
 
+        # ---- Strategy 2: use pre-computed scatter data from the worker ----
         if self.scat_prim is not None and self.scat_cex is not None:
-            p_x      = snap['p_x']
-            p_y      = snap['p_y']
-            p_vx     = snap['p_vx']
-            p_vy     = snap['p_vy']
-            p_vz     = snap['p_vz']
-            p_is_cex = snap['p_isCEX']
+            # XY positions were already column-stacked by the worker thread
+            self.scat_prim.set_offsets(snap['prim_xy'])
+            self.scat_cex.set_offsets(snap['cex_xy'])
+            self.scat_elec.set_offsets(snap['elec_xy'])
 
-            e_x  = snap['e_x']
-            e_y  = snap['e_y']
-            e_vx = snap['e_vx']
-            e_vy = snap['e_vy']
-
-            prim_mask = ~p_is_cex if len(p_is_cex) > 0 else np.empty(0, dtype=bool)
-            cex_mask  = p_is_cex  if len(p_is_cex) > 0 else np.empty(0, dtype=bool)
-
-            self.scat_prim.set_offsets(
-                np.column_stack((p_x[prim_mask], p_y[prim_mask]))
-                if np.any(prim_mask) else np.empty((0, 2))
-            )
-            self.scat_cex.set_offsets(
-                np.column_stack((p_x[cex_mask], p_y[cex_mask]))
-                if np.any(cex_mask) else np.empty((0, 2))
-            )
-            self.scat_elec.set_offsets(
-                np.column_stack((e_x, e_y))
-                if len(e_x) > 0 else np.empty((0, 2))
-            )
+            # Energy coloring was also computed by the worker thread
+            e_prim_eV = snap['e_prim_eV']
+            e_cex_eV  = snap['e_cex_eV']
 
             energy_min = float('inf')
             energy_max = float('-inf')
 
-            m_ion = snap['m_ion']
-            q_val = snap['q']
+            if len(e_prim_eV) > 0:
+                self.scat_prim.set_array(e_prim_eV)
+                energy_min = min(energy_min, float(np.min(e_prim_eV)))
+                energy_max = max(energy_max, float(np.max(e_prim_eV)))
 
-            if np.any(prim_mask):
-                v_sq_prim = p_vx[prim_mask]**2 + p_vy[prim_mask]**2 + p_vz[prim_mask]**2
-                e_prim = (0.5 * m_ion * v_sq_prim) / q_val
-                self.scat_prim.set_array(e_prim)
-                energy_min = min(energy_min, np.min(e_prim))
-                energy_max = max(energy_max, np.max(e_prim))
-
-            if np.any(cex_mask):
-                v_sq_cex = p_vx[cex_mask]**2 + p_vy[cex_mask]**2 + p_vz[cex_mask]**2
-                e_cex = (0.5 * m_ion * v_sq_cex) / q_val
-                self.scat_cex.set_array(e_cex)
-                energy_min = min(energy_min, np.min(e_cex))
-                energy_max = max(energy_max, np.max(e_cex))
+            if len(e_cex_eV) > 0:
+                self.scat_cex.set_array(e_cex_eV)
+                energy_min = min(energy_min, float(np.min(e_cex_eV)))
+                energy_max = max(energy_max, float(np.max(e_cex_eV)))
 
             if energy_min != float('inf'):
                 if energy_max <= energy_min:
@@ -2237,26 +2581,28 @@ class DigitalTwinApp(QMainWindow):
                 self.scat_prim.set_clim(energy_min, energy_max)
                 self.scat_cex.set_clim(energy_min, energy_max)
 
+            # IEDF uses raw (un-subsampled) arrays for accuracy
             if self.iedf_window and self.iedf_window.isVisible():
                 max_v = max([g["V"].value() for g in self.grid_widgets]) if self.grid_widgets else 1000.0
                 self.iedf_window.update_histogram(
-                    p_vx, p_vy, p_is_cex,
-                    e_x, e_vx, e_vy,
-                    m_ion, snap['m_e'], q_val, max_v
+                    snap['p_vx'], snap['p_vy'], snap['p_isCEX'],
+                    snap['e_x'],  snap['e_vx'], snap['e_vy'],
+                    snap['m_ion'], snap['m_e'], snap['q'], max_v
                 )
 
+        # ---- Strategy 3: throttled diagnostic window updates ----
+        now = time.perf_counter()
+        diag_due = (now - self._last_diag_t) * 1000.0 >= self._DIAG_MIN_INTERVAL_MS
+        if diag_due:
+            self._last_diag_t = now
             if self.ppc_window and self.ppc_window.isVisible():
                 self.ppc_window.update_plot(self.sim)
-
-        # --- Diagnostics windows ---
-        if self.phys_window and self.phys_window.isVisible():
-            self.phys_window.update_plot(self.sim)
-
-        if self.charge_window and self.charge_window.isVisible():
-            self.charge_window.update_plot(self.sim)
-
-        if self.perf_window and self.perf_window.isVisible():
-            self.perf_window.update_plot(self.sim)
+            if self.phys_window and self.phys_window.isVisible():
+                self.phys_window.update_plot(self.sim)
+            if self.charge_window and self.charge_window.isVisible():
+                self.charge_window.update_plot(self.sim)
+            if self.perf_window and self.perf_window.isVisible():
+                self.perf_window.update_plot(self.sim)
 
         if self.chk_track_ptcls.isChecked():
             ptcl_data = self.sim.get_particle_kinematics()
@@ -2358,29 +2704,30 @@ class DigitalTwinApp(QMainWindow):
             self.ax_temp.set_ylim(0, snap['Ly'])
 
         damage_map = snap['damage_map']
-        if getattr(self, "dmg_mesh", None) is None or self.dmg_mesh.get_array().size != damage_map.size:
-            self.ax_dmg.clear()
-            self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
-            self.ax_dmg.set_xlabel("Axial Position [mm]", fontsize=8)
-            self.ax_dmg.set_ylabel("r [mm]", fontsize=8)
-            self.dmg_mesh = self.ax_dmg.pcolormesh(
-                snap['X'], snap['Y'], damage_map,
-                cmap="hot", shading="nearest"
-            )
-            gy, gx = np.where(snap['isBound'])
-            x_pts = snap['x_coords']
-            y_pts = snap['y_coords']
-            if x_pts is not None and y_pts is not None:
-                self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
+        if damage_map is not None:
+            if getattr(self, "dmg_mesh", None) is None or self.dmg_mesh.get_array().size != damage_map.size:
+                self.ax_dmg.clear()
+                self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
+                self.ax_dmg.set_xlabel("Axial Position [mm]", fontsize=8)
+                self.ax_dmg.set_ylabel("r [mm]", fontsize=8)
+                self.dmg_mesh = self.ax_dmg.pcolormesh(
+                    snap['X'], snap['Y'], damage_map,
+                    cmap="hot", shading="nearest"
+                )
+                gy, gx = np.where(snap['isBound'])
+                x_pts = snap['x_coords']
+                y_pts = snap['y_coords']
+                if x_pts is not None and y_pts is not None:
+                    self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
+                else:
+                    self.ax_dmg.scatter(gx * snap['dx'], gy * snap['dy'], s=2, c="grey", alpha=0.5)
+                self.ax_dmg.set_xlim(0, snap['Lx'])
+                self.ax_dmg.set_ylim(0, snap['Ly'])
             else:
-                self.ax_dmg.scatter(gx * snap['dx'], gy * snap['dy'], s=2, c="grey", alpha=0.5)
-            self.ax_dmg.set_xlim(0, snap['Lx'])
-            self.ax_dmg.set_ylim(0, snap['Ly'])
-        else:
-            self.dmg_mesh.set_array(damage_map.ravel())
-            dmg_max = float(np.max(damage_map))
-            if dmg_max > 0:
-                self.dmg_mesh.set_clim(0, dmg_max)
+                self.dmg_mesh.set_array(damage_map.ravel())
+                dmg_max = float(np.max(damage_map))
+                if dmg_max > 0:
+                    self.dmg_mesh.set_clim(0, dmg_max)
 
         self.lbl_status.setText(
             f"Ions {snap['num_p']} e- {snap['num_e']} Iter {snap['iteration']}"
@@ -2395,9 +2742,13 @@ class DigitalTwinApp(QMainWindow):
             self.recorded_frames.append(self.canvas.grab())
             self.chk_record.setText(f"Record Frames ({len(self.recorded_frames)})")
 
-        # Hot-swap parameters to worker so GUI spinbox changes are picked up
+        # Hot-swap parameters to worker so GUI spinbox changes are picked up,
+        # and feed back GUI processing time for adaptive sleep.
         if self.sim_isRunning:
-            self._sim_worker.update_params(self.get_params())
+            p = self.get_params()
+            p['_last_gui_ms'] = self._last_gui_ms
+            self._sim_worker.update_params(p)
+
 
     def _create_progress_dialog(self, title, label, total):
         progress = QProgressDialog(label, "Cancel", 0, max(1, total), self)

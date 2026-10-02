@@ -595,6 +595,7 @@ class DigitalTwinSimulator:
         self.isBound  = np.zeros((self.ny, self.nx), dtype=bool)
         self.V_fixed  = np.zeros((self.ny, self.nx), dtype=np.float64)
         self.damage_map  = np.zeros((self.ny, self.nx), dtype=np.float64)
+        self._damage_version = 0      # incremented whenever damage_map changes
         self.eroded_depth= np.zeros((self.ny, self.nx), dtype=np.float64)
         self.Ex = np.zeros((self.ny, self.nx), dtype=_NP_FP)
         self.Ey = np.zeros((self.ny, self.nx), dtype=_NP_FP)
@@ -2345,6 +2346,7 @@ class DigitalTwinSimulator:
                     (iy_hit, ix_hit),
                     damage
                 )
+                self._damage_version += 1  # mark map as changed
 
             broken_cells = (self.damage_map > params.get('Thresh', 1e5)) & self.isBound
             if np.any(broken_cells):
