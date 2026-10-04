@@ -1439,11 +1439,11 @@ class DigitalTwinApp(QMainWindow):
         self.btn_toggle = QPushButton("2. START BEAM")
         self.btn_toggle.clicked.connect(self.toggle_sim)
 
-        self.btn_csv = QPushButton("Export Data (.csv)")
+        self.btn_csv = QPushButton("Export Data (.csv / .txt)")
         self.btn_csv.clicked.connect(self.export_csv)
 
         self.chk_track_ptcls = QCheckBox("Record Kinematics")
-        self.btn_export_trk  = QPushButton("Export Particle Data (.csv)")
+        self.btn_export_trk  = QPushButton("Export Particle Data (.csv / .txt)")
         self.btn_export_trk.clicked.connect(self.exporttrackingdata)
 
         self.chk_record = QCheckBox("Record Frames (0)")
@@ -2777,14 +2777,25 @@ class DigitalTwinApp(QMainWindow):
             startdir = os.path.expanduser("~")
         suggested = os.path.join(startdir, time.strftime("pybemcs_%Y%m%d%H%M%S.csv"))
 
-        file_name, _ = QFileDialog.getSaveFileName(self, "Export Data", suggested, "CSV Files (*.csv)")
+        file_name, selected_filter = QFileDialog.getSaveFileName(
+            self, "Export Data", suggested, "CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)"
+        )
         if not file_name:
             return
+
+        # Ensure correct extension based on user selection
+        if "(*.txt)" in selected_filter and file_name.lower().endswith(".csv"):
+            file_name = file_name[:-4] + ".txt"
+        elif not os.path.splitext(file_name)[1]:
+            if "(*.txt)" in selected_filter:
+                file_name += ".txt"
+            else:
+                file_name += ".csv"
 
         was_running = self.sim_isRunning
         self.sim_isRunning = False
 
-        progress = self._create_progress_dialog("Exporting CSV Data", "Preparing CSV export...", n)
+        progress = self._create_progress_dialog("Exporting Data", "Preparing export...", n)
         cancelled = False
 
         try:
@@ -2831,7 +2842,7 @@ class DigitalTwinApp(QMainWindow):
                         pct = int(((j + 1) / n) * 100)
                         progress.setValue(j + 1)
                         progress.setLabelText(f"Writing row {j+1} of {n} ({pct}%)...")
-                        self.lbl_status.setText(f"Exporting CSV: {j+1}/{n} ({pct}%)...")
+                        self.lbl_status.setText(f"Exporting data: {j+1}/{n} ({pct}%)...")
                         QApplication.processEvents()
 
             if cancelled:
@@ -2840,15 +2851,15 @@ class DigitalTwinApp(QMainWindow):
                         os.remove(file_name)
                     except Exception:
                         pass
-                self.lbl_status.setText("CSV export cancelled.")
-                QMessageBox.information(self, "Cancelled", "CSV export was cancelled.")
+                self.lbl_status.setText("Data export cancelled.")
+                QMessageBox.information(self, "Cancelled", "Data export was cancelled.")
             else:
                 progress.setValue(n)
-                self.lbl_status.setText(f"CSV saved: {file_name}")
-                QMessageBox.information(self, "Success", f"CSV exported:\n{file_name}")
+                self.lbl_status.setText(f"Data saved: {file_name}")
+                QMessageBox.information(self, "Success", f"Data exported:\n{file_name}")
         except Exception as e:
-            self.lbl_status.setText("CSV export failed.")
-            QMessageBox.critical(self, "Export Error", f"Failed to export CSV:\n{e}")
+            self.lbl_status.setText("Data export failed.")
+            QMessageBox.critical(self, "Export Error", f"Failed to export data:\n{e}")
         finally:
             progress.close()
             self.sim_isRunning = was_running
@@ -2863,11 +2874,20 @@ class DigitalTwinApp(QMainWindow):
             startdir = os.path.expanduser("~")
 
         suggested = os.path.join(startdir, time.strftime("pybemcs_particles_%Y%m%d%H%M%S.csv"))
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Export Particle Data", suggested, "CSV Files (*.csv)"
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self, "Export Particle Data", suggested, "CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)"
         )
         if not filename:
             return
+
+        # Ensure correct extension based on user selection
+        if "(*.txt)" in selected_filter and filename.lower().endswith(".csv"):
+            filename = filename[:-4] + ".txt"
+        elif not os.path.splitext(filename)[1]:
+            if "(*.txt)" in selected_filter:
+                filename += ".txt"
+            else:
+                filename += ".csv"
 
         was_running = self.sim_isRunning
         self.sim_isRunning = False
@@ -2884,7 +2904,7 @@ class DigitalTwinApp(QMainWindow):
             else:
                 header = [f"col_{c}" for c in range(ncols)]
 
-            progress = self._create_progress_dialog("Exporting Particle Data", "Writing particle tracking CSV...", n_rows)
+            progress = self._create_progress_dialog("Exporting Particle Data", "Writing particle tracking data...", n_rows)
             cancelled = False
 
             chunk_size = max(500, n_rows // 100)
