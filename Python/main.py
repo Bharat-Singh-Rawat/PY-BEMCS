@@ -10,6 +10,7 @@ import json
 import csv
 import threading
 import time
+import math
 import numpy as np
 import matplotlib
 matplotlib.use("Qt5Agg")
@@ -2378,20 +2379,36 @@ class DigitalTwinApp(QMainWindow):
             TdisplayC = np.where(grid_mask, self.sim.Tmap - 273.15, np.nan)
 
             self.ax_temp.clear()
-            self.ax_temp.set_title("Grid Temp Map °C")
+            self.ax_temp.set_title("Grid Temp Map (°C)")
             self.ax_temp.set_facecolor("black")
+
+            finite_vals = TdisplayC[np.isfinite(TdisplayC)]
+            if finite_vals.size > 0:
+                vmin = float(np.min(finite_vals))
+                vmax = float(np.max(finite_vals))
+                vmin_plot = float(math.floor(vmin))
+                vmax_plot = max(vmin_plot + 5.0, float(math.ceil(vmax)))
+            else:
+                vmin_plot, vmax_plot = 20.0, 35.0
+
             self.tempmesh = self.ax_temp.pcolormesh(
                 self.sim.X, self.sim.Y, TdisplayC,
                 cmap="inferno", shading="nearest"
             )
+            self.tempmesh.set_clim(vmin_plot, vmax_plot)
+
             # Always destroy and recreate cax_temp for same reason as cax_live.
             if hasattr(self, 'cax_temp') and self.cax_temp in self.fig.axes:
                 self.cax_temp.set_axes_locator(None)
                 self.fig.delaxes(self.cax_temp)
             dividert = make_axes_locatable(self.ax_temp)
             self.cax_temp = dividert.append_axes("right", size="5%", pad=0.1)
-            self.cbartemp = self.fig.colorbar(self.tempmesh, cax=self.cax_temp)
-            self.cbartemp.set_label("Temperature °C")
+            self.cbar_temp = self.fig.colorbar(self.tempmesh, cax=self.cax_temp)
+            self.cbartemp = self.cbar_temp
+            self.cbar_temp.set_label("Temperature (°C)")
+            self.cbar_temp.formatter.set_useOffset(False)
+            self.cbar_temp.formatter.set_scientific(False)
+            self.cbar_temp.update_ticks()
             self.ax_temp.set_xlim(0, self.sim.Lx)
             self.ax_temp.set_ylim(0, self.sim.Ly)
 
@@ -2689,24 +2706,33 @@ class DigitalTwinApp(QMainWindow):
                     cmap="inferno", shading="nearest"
                 )
 
-                if not hasattr(self, "cax_temp"):
-                    divider_t = make_axes_locatable(self.ax_temp)
-                    self.cax_temp = divider_t.append_axes("right", size="5%", pad=0.1)
-                else:
+                if hasattr(self, 'cax_temp') and self.cax_temp in self.fig.axes:
                     self.cax_temp.set_axes_locator(None)
-                    self.cax_temp.clear()
+                    self.fig.delaxes(self.cax_temp)
+
+                divider_t = make_axes_locatable(self.ax_temp)
+                self.cax_temp = divider_t.append_axes("right", size="5%", pad=0.1)
 
                 self.cbar_temp = self.fig.colorbar(self.tempmesh, cax=self.cax_temp)
+                self.cbartemp = self.cbar_temp
                 self.cbar_temp.set_label("Temperature (°C)")
+                self.cbar_temp.formatter.set_useOffset(False)
+                self.cbar_temp.formatter.set_scientific(False)
+                self.cbar_temp.update_ticks()
             else:
                 self.tempmesh.set_array(T_display_C.ravel())
-                finite_vals = T_display_C[np.isfinite(T_display_C)]
-                if finite_vals.size > 0:
-                    vmin = float(np.min(finite_vals))
-                    vmax = float(np.max(finite_vals))
-                    if vmax <= vmin:
-                        vmax = vmin + 1.0
-                    self.tempmesh.set_clim(vmin, vmax)
+
+            finite_vals = T_display_C[np.isfinite(T_display_C)]
+            if finite_vals.size > 0:
+                vmin = float(np.min(finite_vals))
+                vmax = float(np.max(finite_vals))
+                vmin_plot = float(math.floor(vmin))
+                vmax_plot = max(vmin_plot + 5.0, float(math.ceil(vmax)))
+                self.tempmesh.set_clim(vmin_plot, vmax_plot)
+                if hasattr(self, "cbar_temp") and self.cbar_temp is not None:
+                    self.cbar_temp.formatter.set_useOffset(False)
+                    self.cbar_temp.formatter.set_scientific(False)
+                    self.cbar_temp.update_ticks()
 
             self.ax_temp.set_xlim(0, snap['Lx'])
             self.ax_temp.set_ylim(0, snap['Ly'])
