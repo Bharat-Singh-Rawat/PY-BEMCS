@@ -359,9 +359,11 @@ class SimulationWorker(QThread):
             thermal_active = sim_mode in ('Thermal', 'Both')
             Tmap_snap = self.sim.Tmap.copy() if (thermal_active and self.sim.Tmap is not None) else None
 
-            # -- Strategy 2: damage_map — only copy when it changed --
+            # -- Strategy 2: damage_map — only copy when it changed or shape resized --
             dmg_ver = getattr(self.sim, '_damage_version', 0)
-            if dmg_ver != self._last_damage_version:
+            if (dmg_ver != self._last_damage_version
+                    or self._last_damage_copy is None
+                    or self._last_damage_copy.shape != self.sim.damage_map.shape):
                 self._last_damage_copy = self.sim.damage_map.copy()
                 self._last_damage_version = dmg_ver
             damage_snap = self._last_damage_copy
@@ -2211,6 +2213,8 @@ class DigitalTwinApp(QMainWindow):
         self._sim_worker.pause()
         if self._sim_worker.isRunning():
             self._sim_worker.wait(5000)  # wait up to 5 s for the current step to finish
+        self._sim_worker._last_damage_version = -1
+        self._sim_worker._last_damage_copy = None
         self.sim_isRunning = False
         self.btn_toggle.setText("2. START BEAM")
         self.sim_wall_elapsed = 0.0
@@ -2667,7 +2671,7 @@ class DigitalTwinApp(QMainWindow):
 
         Tmap = snap['Tmap']
         mask_grids = snap['mask_grids']
-        if Tmap is not None and len(mask_grids) > 0:
+        if Tmap is not None and len(mask_grids) > 0 and Tmap.shape == snap['X'].shape:
             grid_mask = np.zeros_like(snap['isBound'], dtype=bool)
             for mg in mask_grids:
                 if mg.shape == grid_mask.shape:
@@ -2708,7 +2712,7 @@ class DigitalTwinApp(QMainWindow):
             self.ax_temp.set_ylim(0, snap['Ly'])
 
         damage_map = snap['damage_map']
-        if damage_map is not None:
+        if damage_map is not None and damage_map.shape == snap['X'].shape:
             if getattr(self, "dmg_mesh", None) is None or self.dmg_mesh.get_array().size != damage_map.size:
                 self.ax_dmg.clear()
                 self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
