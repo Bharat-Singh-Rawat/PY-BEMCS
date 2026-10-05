@@ -7,7 +7,10 @@ import sys
 import time as _time_mod
 
 # Taichi-on when running from Python, off when running from a frozen .exe
-USE_TAICHI = not getattr(sys, "frozen", False)
+# Set PYBEMCS_FORCE_CPU=1 to force the NumPy CPU path (deterministic; used by
+# the golden regression test in tests/test_regression_golden.py).
+import os as _os
+USE_TAICHI = (not getattr(sys, "frozen", False)) and _os.environ.get("PYBEMCS_FORCE_CPU", "0") != "1"
 
 if USE_TAICHI:
     ti.init(arch=ti.vulkan, default_fp=ti.f32)
