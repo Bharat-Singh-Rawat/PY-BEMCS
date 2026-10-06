@@ -54,6 +54,8 @@ class DigitalTwinApp(
         self.div_mid_history = []
         self._div_curve_visible = {'grid': True, 'mid': True}
         self._div_legend_map = {}
+        self.div_method = "95%"
+        self.div_percentile = 95.0
         self.time_history = []
         self.transparency_history  = []
         self.transparency3_history = []

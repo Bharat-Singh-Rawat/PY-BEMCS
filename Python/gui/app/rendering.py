@@ -144,6 +144,7 @@ class RenderingMixin:
         self.ax_dmg.set_xlim(0, self.sim.Lx)
         self.ax_dmg.set_ylim(0, self.sim.Ly)
 
+        self._reposition_div_menu_btn()
         self.canvas.draw_idle()
 
     def _on_step_result(self, snap):
@@ -424,9 +425,11 @@ class RenderingMixin:
             self._div_curve_visible = {'grid': True, 'mid': True}
 
         self._div_legend_map.clear()
+        method_str = getattr(self, 'div_method', '95%')
+        tag = f"θ{method_str.replace('%', '')}"
         quantities = [
-            ('grid', "Grid Exit (θ95)", '#1f77b4', '-', 1.8),
-            ('mid', "Mid Plume (θ95)", '#e67e22', '--', 1.8),
+            ('grid', f"Grid Exit ({tag})", '#1f77b4', '-', 1.8),
+            ('mid', f"Mid Plume ({tag})", '#e67e22', '--', 1.8),
         ]
         legend_handles = []
         legend_labels = []
@@ -497,3 +500,62 @@ class RenderingMixin:
                 self.ax_div.set_ylim(0, 45)
 
             self._update_div_legend()
+
+    def set_divergence_method(self, method_name: str):
+        """Set the active divergence evaluation method (e.g. '95%', '90%')."""
+        self.div_method = method_name
+        methods = getattr(self, 'DIVERGENCE_METHODS', {"95%": 95.0, "90%": 90.0})
+        self.div_percentile = methods.get(method_name, 95.0)
+        self.sim.div_percentile = self.div_percentile
+
+        # Update action checkmarks in menu
+        if hasattr(self, '_div_method_actions'):
+            for name, act in self._div_method_actions.items():
+                act.setChecked(name == method_name)
+
+        # Notify active simulation worker if running
+        if getattr(self, 'sim_isRunning', False) and hasattr(self, '_sim_worker'):
+            p = self.get_params()
+            self._sim_worker.update_params(p)
+
+        # Re-render legend to update label tag (e.g. θ95 vs θ90)
+        self._update_div_legend()
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+    def _reposition_div_menu_btn(self):
+        """Position the dropdown arrow button immediately aside the 'Beam Divergence' title."""
+        if not hasattr(self, 'btn_div_menu') or not hasattr(self, 'ax_div'):
+            return
+
+        try:
+            renderer = self.canvas.get_renderer()
+            bbox = self.ax_div.title.get_window_extent(renderer)
+            if bbox.width > 0 and bbox.height > 0:
+                canvas_h = self.canvas.height()
+                btn_w = self.btn_div_menu.width()
+                btn_h = self.btn_div_menu.height()
+                x = int(bbox.x1 + 6)
+                y = int(canvas_h - bbox.y1 + (bbox.height - btn_h) / 2)
+                x = max(0, min(x, self.canvas.width() - btn_w - 2))
+                y = max(0, min(y, canvas_h - btn_h - 2))
+                self.btn_div_menu.move(x, y)
+                self.btn_div_menu.show()
+                self.btn_div_menu.raise_()
+                return
+        except Exception:
+            pass
+
+        # Fallback using normalized axes position
+        try:
+            pos = self.ax_div.get_position()
+            canvas_w = self.canvas.width()
+            canvas_h = self.canvas.height()
+            center_x = (pos.x0 + pos.x1) * 0.5 * canvas_w
+            x = int(center_x + 55)
+            y = int((1.0 - pos.y1) * canvas_h - 18)
+            self.btn_div_menu.move(x, y)
+            self.btn_div_menu.show()
+            self.btn_div_menu.raise_()
+        except Exception:
+            pass

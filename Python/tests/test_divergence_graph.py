@@ -129,6 +129,46 @@ def test_divergence_graph():
     assert ydata_grid[-1] == 12.5, f"line_div last y should be 12.5, got {ydata_grid[-1]}"
     assert ydata_mid[-1] == 8.3, f"line_div_mid last y should be 8.3, got {ydata_mid[-1]}"
 
+    # 6. Test divergence dropdown button and tent menus
+    assert hasattr(app, 'btn_div_menu'), "app missing btn_div_menu"
+    assert app.btn_div_menu.parent() == app.canvas, "btn_div_menu should be child of canvas"
+    assert app.btn_div_menu.text() == "▼", f"btn text should be ▼, got {app.btn_div_menu.text()}"
+    assert hasattr(app, 'menu_div'), "app missing menu_div"
+    assert hasattr(app, 'menu_div_eval'), "app missing menu_div_eval"
+
+    # Verify menu structure
+    main_action_texts = [a.text() for a in app.menu_div.actions()]
+    assert "Divergence evaluation" in main_action_texts, f"Expected 'Divergence evaluation' in {main_action_texts}"
+
+    eval_action_texts = [a.text() for a in app.menu_div_eval.actions()]
+    assert "95%" in eval_action_texts, f"Expected '95%' in {eval_action_texts}"
+    assert "90%" in eval_action_texts, f"Expected '90%' in {eval_action_texts}"
+
+    # Verify initial method
+    assert app.div_method == "95%"
+    assert app._div_method_actions["95%"].isChecked() is True
+    assert app._div_method_actions["90%"].isChecked() is False
+
+    # Switch to 90%
+    app.set_divergence_method("90%")
+    assert app.div_method == "90%"
+    assert app.div_percentile == 90.0
+    assert app.sim.div_percentile == 90.0
+    assert app._div_method_actions["90%"].isChecked() is True
+    assert app._div_method_actions["95%"].isChecked() is False
+
+    # Verify legend labels updated to θ90
+    leg_texts = [t.get_text() for t in app.ax_div.get_legend().get_texts()]
+    assert any("θ90" in t for t in leg_texts), f"Expected θ90 in legend texts, got {leg_texts}"
+
+    # Switch back to 95%
+    app.set_divergence_method("95%")
+    assert app.div_method == "95%"
+    assert app.div_percentile == 95.0
+    assert app.sim.div_percentile == 95.0
+    leg_texts = [t.get_text() for t in app.ax_div.get_legend().get_texts()]
+    assert any("θ95" in t for t in leg_texts), f"Expected θ95 in legend texts, got {leg_texts}"
+
     # Clean up
     app.close()
     print("ALL TESTS PASSED SUCCESSFULLY!")

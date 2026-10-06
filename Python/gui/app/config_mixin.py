@@ -395,4 +395,6 @@ class ConfigMixin:
             "optics_factor": 1.0,
             "plume_factor": 4.0
         })
+        params['div_percentile'] = getattr(self, 'div_percentile', 95.0)
+        params['div_method'] = getattr(self, 'div_method', '95%')
         return params

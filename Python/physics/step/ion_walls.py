@@ -170,10 +170,11 @@ def step_ion_interactions(sim, ctx: StepContext):
         sim.exit_v_mean_primary = np.nan
         sim.exit_v_mean_cex = np.nan
 
+    div_pct = getattr(sim, 'div_percentile', params.get('div_percentile', 95.0))
     ctx.current_div = (
         np.percentile(
             np.abs(np.arctan2(p_vy[crossed_mask], p_vx[crossed_mask])) * 180.0 / np.pi,
-            95
+            div_pct
         )
         if np.count_nonzero(crossed_mask) > 5 else np.nan
     )
@@ -183,7 +184,7 @@ def step_ion_interactions(sim, ctx: StepContext):
     ctx.current_div_mid = (
         np.percentile(
             np.abs(np.arctan2(p_vy[crossed_mid_mask], p_vx[crossed_mid_mask])) * 180.0 / np.pi,
-            95
+            div_pct
         )
         if np.count_nonzero(crossed_mid_mask) > 5 else np.nan
     )

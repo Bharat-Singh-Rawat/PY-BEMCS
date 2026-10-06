@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox,
     QPushButton, QCheckBox, QMessageBox, QFileDialog, QComboBox,
     QScrollArea, QGroupBox, QAction, QMenuBar, QSplitter,
-    QFrame, QSizePolicy
+    QFrame, QSizePolicy, QToolButton, QMenu, QActionGroup
 )
 from PyQt5.QtCore import Qt
 
@@ -422,3 +422,86 @@ class UIBuilderMixin:
         setup_figure_layout(self)
         self.canvas.mpl_connect('pick_event', self._on_legend_pick)
         self._update_div_legend()
+        self.setup_divergence_menu()
+
+    def setup_divergence_menu(self):
+        """Build the downstream arrow dropdown button and cascading tent menus for divergence options."""
+        self.DIVERGENCE_METHODS = {
+            "95%": 95.0,
+            "90%": 90.0,
+        }
+
+        # Small downstream arrow button overlaid directly on the canvas
+        self.btn_div_menu = QToolButton(self.canvas)
+        self.btn_div_menu.setText("▼")
+        self.btn_div_menu.setToolTip("Divergence Options")
+        self.btn_div_menu.setFixedSize(18, 16)
+        self.btn_div_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_div_menu.setFocusPolicy(Qt.NoFocus)
+        self.btn_div_menu.setStyleSheet("""
+            QToolButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 3px;
+                color: #495057;
+                font-size: 8px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QToolButton:hover {
+                background-color: #e2e6ea;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+            QToolButton:pressed {
+                background-color: #dae0e5;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """)
+
+        # Main tent menu
+        self.menu_div = QMenu(self)
+        self.menu_div.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #ced4da;
+                padding: 4px 0px;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 5px 22px 5px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #e7f1ff;
+                color: #0d6efd;
+            }
+        """)
+
+        # Submenu: "Divergence evaluation" (extensible for future submenus / buttons)
+        self.menu_div_eval = self.menu_div.addMenu("Divergence evaluation")
+        self.menu_div_eval.setStyleSheet(self.menu_div.styleSheet())
+
+        # Submenu items: 95% and 90% (extensible for future evaluation methods)
+        self._div_method_actions = {}
+        self._div_method_group = QActionGroup(self)
+        self._div_method_group.setExclusive(True)
+
+        current_method = getattr(self, 'div_method', '95%')
+        for method_name in self.DIVERGENCE_METHODS.keys():
+            act = self.menu_div_eval.addAction(method_name)
+            act.setCheckable(True)
+            act.setChecked(method_name == current_method)
+            act.triggered.connect(lambda checked, m=method_name: self.set_divergence_method(m))
+            self._div_method_group.addAction(act)
+            self._div_method_actions[method_name] = act
+
+        self.btn_div_menu.setMenu(self.menu_div)
+        self.btn_div_menu.setPopupMode(QToolButton.InstantPopup)
+
+        # Reposition button on canvas draw and resize
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_menu_btn())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_menu_btn())
+        self._reposition_div_menu_btn()
