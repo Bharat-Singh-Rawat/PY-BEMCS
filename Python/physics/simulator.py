@@ -147,6 +147,8 @@ class DigitalTwinSimulator(
         self.exit_v_std          = np.nan
         self.exit_energy_mean_eV = np.nan
         self.exit_count_step     = 0
+        self.current_div         = np.nan
+        self.current_div_mid     = np.nan
         self.total_active_cells  = 0
         self.low_ppc_cells       = 0
         self.min_ppc_threshold   = 3

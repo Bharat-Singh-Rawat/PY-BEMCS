@@ -420,3 +420,5 @@ class UIBuilderMixin:
         root_layout.addWidget(content_splitter)
 
         setup_figure_layout(self)
+        self.canvas.mpl_connect('pick_event', self._on_legend_pick)
+        self._update_div_legend()

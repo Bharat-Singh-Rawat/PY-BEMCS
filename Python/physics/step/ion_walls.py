@@ -178,6 +178,19 @@ def step_ion_interactions(sim, ctx: StepContext):
         if np.count_nonzero(crossed_mask) > 5 else np.nan
     )
 
+    x_mid = x_exit_last + 0.5 * (sim.Lx - x_exit_last)
+    crossed_mid_mask = (p_x_old <= x_mid) & (p_x > x_mid) & (p_vx > 0.0)
+    ctx.current_div_mid = (
+        np.percentile(
+            np.abs(np.arctan2(p_vy[crossed_mid_mask], p_vx[crossed_mid_mask])) * 180.0 / np.pi,
+            95
+        )
+        if np.count_nonzero(crossed_mid_mask) > 5 else np.nan
+    )
+
+    sim.current_div = ctx.current_div
+    sim.current_div_mid = ctx.current_div_mid
+
     if np.any(exited_mask):
         n_transmitted = int(np.count_nonzero(crossed_mask))
         sim.transmitted_ions_step = float(n_transmitted)

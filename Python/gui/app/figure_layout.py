@@ -46,7 +46,8 @@ def setup_figure_layout(app):
     app.ax_groove.invert_yaxis()
 
     app.line_ebs, = app.ax_ebs.plot([], [], "m-", lw=2)
-    app.line_div, = app.ax_div.plot([], [], "b-", lw=2)
+    app.line_div, = app.ax_div.plot([], [], color="#1f77b4", lw=1.8, label="Grid Exit (θ95)")
+    app.line_div_mid, = app.ax_div.plot([], [], color="#e67e22", lw=1.8, linestyle="--", label="Mid Plume (θ95)")
     app.line_groove, = app.ax_groove.plot([], [], "r-", lw=1.5)
 
     app.scat_prim = None

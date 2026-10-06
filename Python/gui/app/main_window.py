@@ -51,6 +51,9 @@ class DigitalTwinApp(
         self.iter_history = []
         self.ebs_history  = []
         self.div_history  = []
+        self.div_mid_history = []
+        self._div_curve_visible = {'grid': True, 'mid': True}
+        self._div_legend_map = {}
         self.time_history = []
         self.transparency_history  = []
         self.transparency3_history = []

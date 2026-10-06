@@ -114,6 +114,7 @@ class SimControlMixin:
         self.iter_history.clear()
         self.ebs_history.clear()
         self.div_history.clear()
+        self.div_mid_history.clear()
         self.time_history.clear()
         self.transparency_history.clear()
         self.transparency3_history.clear()

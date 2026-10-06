@@ -4,6 +4,7 @@ Canvas rendering, snapshot processing, and live plot update mixin.
 import time
 import math
 import numpy as np
+from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import QTimer
 
@@ -100,8 +101,11 @@ class RenderingMixin:
             self.iter_history = [0]
             self.ebs_history = [v_init_saddle]
             self.div_history = [0.0]
+            self.div_mid_history = [0.0]
             self.line_ebs.set_data(self.iter_history, self.ebs_history)
             self.line_div.set_data(self.iter_history, self.div_history)
+            if hasattr(self, 'line_div_mid'):
+                self.line_div_mid.set_data(self.iter_history, self.div_mid_history)
             pad = max(20.0, abs(v_init_saddle) * 0.1)
             self.ax_ebs.set_xlim(0, 100)
             self.ax_ebs.set_ylim(v_init_saddle - pad, v_init_saddle + pad)
@@ -111,11 +115,15 @@ class RenderingMixin:
             self.iter_history = []
             self.ebs_history = []
             self.div_history = []
+            self.div_mid_history = []
             self.line_ebs.set_data([], [])
             self.line_div.set_data([], [])
+            if hasattr(self, 'line_div_mid'):
+                self.line_div_mid.set_data([], [])
             self.ax_ebs.set_xlim(0, 100)
             self.ax_div.set_xlim(0, 100)
             self.ax_div.set_ylim(0, 45)
+        self._update_div_plot_visibility()
 
         self.line_groove.set_data([], [])
         self.ax_groove.set_xlim(0, max(1.0, float(getattr(self.sim, 'Ly', 1.0))))
@@ -165,6 +173,7 @@ class RenderingMixin:
         remeshed         = snap['remeshed']
         min_pot          = snap['min_pot']
         current_div      = snap['current_div']
+        current_div_mid  = snap.get('current_div_mid', np.nan)
         T_grids          = snap['T_grids']
         trans_last_frame = snap['trans_last_frame']
         transparency     = snap['transparency']
@@ -263,6 +272,7 @@ class RenderingMixin:
         self.iter_history.append(snap['iteration'])
         self.ebs_history.append(min_pot)
         self.div_history.append(current_div)
+        self.div_mid_history.append(current_div_mid)
         self.time_history.append(t_sim)
         self.transparency_history.append(transparency)
         self.transparency3_history.append(trans_last_frame)
@@ -277,6 +287,8 @@ class RenderingMixin:
 
         self.line_ebs.set_data(self.iter_history, self.ebs_history)
         self.line_div.set_data(self.iter_history, self.div_history)
+        if hasattr(self, 'line_div_mid'):
+            self.line_div_mid.set_data(self.iter_history, self.div_mid_history)
 
         self.ax_ebs.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
         self.ax_div.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
@@ -289,12 +301,7 @@ class RenderingMixin:
             pad = max(5.0, 0.1 * (y_max - y_min))
             self.ax_ebs.set_ylim(y_min - pad, y_max + pad)
 
-        finite_div = [d for d in self.div_history if np.isfinite(d)]
-        if len(finite_div) > 0:
-            div_max = max(finite_div)
-            self.ax_div.set_ylim(0, max(45, div_max * 1.1))
-        else:
-            self.ax_div.set_ylim(0, 45)
+        self._update_div_plot_visibility()
 
         groove_idx = 1 if len(snap['mask_grids']) > 1 else 0
         groove_face = "downstream"
@@ -406,3 +413,87 @@ class RenderingMixin:
             p = self.get_params()
             p['_last_gui_ms'] = self._last_gui_ms
             self._sim_worker.update_params(p)
+
+    def _update_div_legend(self):
+        """Build/update interactive clickable legend with [x] / [ ] checkmarks for ax_div."""
+        if not hasattr(self, 'ax_div'):
+            return
+        if not hasattr(self, '_div_legend_map'):
+            self._div_legend_map = {}
+        if not hasattr(self, '_div_curve_visible'):
+            self._div_curve_visible = {'grid': True, 'mid': True}
+
+        self._div_legend_map.clear()
+        quantities = [
+            ('grid', "Grid Exit (θ95)", '#1f77b4', '-', 1.8),
+            ('mid', "Mid Plume (θ95)", '#e67e22', '--', 1.8),
+        ]
+        legend_handles = []
+        legend_labels = []
+
+        for key, name, color, ls, lw in quantities:
+            active = self._div_curve_visible.get(key, True)
+            marker_str = "[x]" if active else "[ ]"
+            alpha = 1.0 if active else 0.3
+            label = f"{marker_str} {name}"
+
+            handle = Line2D(
+                [0], [0], color=color, linestyle=ls, lw=lw,
+                alpha=alpha
+            )
+            legend_handles.append(handle)
+            legend_labels.append(label)
+
+        leg = self.ax_div.legend(
+            legend_handles, legend_labels,
+            fontsize=7.5, loc='upper right', framealpha=0.85, labelspacing=0.25
+        )
+
+        if leg is not None:
+            for leg_line, leg_text, (key, _, _, _, _) in zip(leg.get_lines(), leg.get_texts(), quantities):
+                if not self._div_curve_visible.get(key, True):
+                    leg_text.set_alpha(0.35)
+                leg_line.set_picker(True)
+                leg_line.set_pickradius(6)
+                leg_text.set_picker(True)
+
+                self._div_legend_map[leg_line] = key
+                self._div_legend_map[leg_text] = key
+
+    def _on_legend_pick(self, event):
+        """Handle click on divergence graph legend items to toggle curve visibility."""
+        artist = event.artist
+        key = getattr(self, '_div_legend_map', {}).get(artist)
+        if key is not None and key in getattr(self, '_div_curve_visible', {}):
+            self._div_curve_visible[key] = not self._div_curve_visible[key]
+            self._update_div_plot_visibility()
+            if hasattr(self, 'canvas'):
+                self.canvas.draw_idle()
+
+    def _update_div_plot_visibility(self):
+        """Apply visibility states and recompute y-limits for ax_div."""
+        if not hasattr(self, '_div_curve_visible'):
+            self._div_curve_visible = {'grid': True, 'mid': True}
+
+        show_grid = self._div_curve_visible.get('grid', True)
+        show_mid = self._div_curve_visible.get('mid', True)
+
+        if hasattr(self, 'line_div'):
+            self.line_div.set_visible(show_grid)
+        if hasattr(self, 'line_div_mid'):
+            self.line_div_mid.set_visible(show_mid)
+
+        visible_divs = []
+        if show_grid and hasattr(self, 'div_history') and len(self.div_history) > 0:
+            visible_divs.extend([d for d in self.div_history if np.isfinite(d)])
+        if show_mid and hasattr(self, 'div_mid_history') and len(self.div_mid_history) > 0:
+            visible_divs.extend([d for d in self.div_mid_history if np.isfinite(d)])
+
+        if hasattr(self, 'ax_div'):
+            if len(visible_divs) > 0:
+                div_max = max(visible_divs)
+                self.ax_div.set_ylim(0, max(45, div_max * 1.1))
+            else:
+                self.ax_div.set_ylim(0, 45)
+
+            self._update_div_legend()

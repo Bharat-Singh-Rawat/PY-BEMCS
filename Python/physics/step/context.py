@@ -28,5 +28,6 @@ class StepContext:
     # Step outputs & diagnostics
     remeshed: bool = False
     current_div: float = np.nan
+    current_div_mid: float = np.nan
     min_pot: float = np.nan
     trans_last_frame: float = 0.0

@@ -226,6 +226,7 @@ class SimulationWorker(QThread):
                 'remeshed':            remeshed,
                 'min_pot':             min_pot,
                 'current_div':         current_div,
+                'current_div_mid':     getattr(self.sim, 'current_div_mid', np.nan),
                 'T_grids':             list(T_grids),
                 'trans_last_frame':    trans_last_frame,
                 'transparency':        transparency,
