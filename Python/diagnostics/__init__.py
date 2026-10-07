@@ -13,6 +13,7 @@ from .ppc_window import PPCWindow
 from .energy_window import PhysicalConstraintsWindow, TotalEnergyWindow
 from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
 from .perf_window import PerformanceMonitorWindow
+from .mesh_window import MeshWindow
 
 __all__ = [
     "PerformanceMonitor",
@@ -27,4 +28,5 @@ __all__ = [
     "TotalChargeMonitorWindow",
     "ChargeMonitorWindow",
     "PerformanceMonitorWindow",
+    "MeshWindow",
 ]

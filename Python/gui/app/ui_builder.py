@@ -69,6 +69,11 @@ class UIBuilderMixin:
 
         diag_menu = menubar.addMenu("Diagnostics")
         assert diag_menu is not None
+
+        mesh_action = QAction("Mesh", self)
+        mesh_action.triggered.connect(self.open_mesh_window)
+        diag_menu.addAction(mesh_action)
+
         perf_action = QAction("⚡ Performance Monitor...", self)
         perf_action.triggered.connect(self.open_perf_window)
         diag_menu.addAction(perf_action)

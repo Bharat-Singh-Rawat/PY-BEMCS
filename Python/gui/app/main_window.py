@@ -73,6 +73,7 @@ class DigitalTwinApp(
         self.charge_window = None
         self.perf_window = None
         self.cs_viewer_window = None
+        self.mesh_window = None
         self.sim.enable_perf_monitor(log_every=50)
 
         self.cbar_temp = None

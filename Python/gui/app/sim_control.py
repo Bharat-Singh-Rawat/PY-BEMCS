@@ -211,6 +211,9 @@ class SimControlMixin:
         if hasattr(self, 'lbl_material'):
             self.lbl_material.setText(f"Grid Material: {self.mat_name}")
 
+        if getattr(self, 'mesh_window', None) is not None and self.mesh_window.isVisible():
+            self.mesh_window.update_plot(self.sim, params=self.get_params())
+
     def _on_worker_finished(self):
         """Called when the SimulationWorker thread exits its run loop."""
         if self.sim_isRunning:

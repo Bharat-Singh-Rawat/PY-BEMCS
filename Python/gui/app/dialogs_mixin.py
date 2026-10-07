@@ -18,6 +18,7 @@ from diagnostics import (
     PhysicalConstraintsWindow,
     TotalChargeMonitorWindow,
     PerformanceMonitorWindow,
+    MeshWindow,
 )
 
 
@@ -167,3 +168,14 @@ class DialogsMixin:
         self.perf_window.activateWindow()
         if hasattr(self, 'sim'):
             self.perf_window.update_plot(self.sim)
+
+    def open_mesh_window(self):
+        """Open Computational Domain & Mesh Grid Inspector window."""
+        if getattr(self, 'mesh_window', None) is None:
+            self.mesh_window = MeshWindow(self)
+        self.mesh_window.show()
+        self.mesh_window.raise_()
+        self.mesh_window.activateWindow()
+        if hasattr(self, 'sim'):
+            params = self.get_params() if hasattr(self, 'get_params') else None
+            self.mesh_window.update_plot(self.sim, params=params)
