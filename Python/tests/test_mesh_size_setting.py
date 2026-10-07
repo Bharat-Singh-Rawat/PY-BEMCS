@@ -90,6 +90,24 @@ class TestMeshSizeSetting(unittest.TestCase):
         sim.build_domain(params_coarse)
         self.assertGreater(sim.dx, 0.0)
 
+    def test_cfl_adaptation_on_very_fine_mesh(self):
+        sim = DigitalTwinSimulator()
+        params_fine = {
+            "n0_plasma": 2e17,
+            "Te_up": 3.0,
+            "Lx": 0.25,
+            "Ly": 0.10,
+            r"\deltax/debye_length": 0.03,
+            "grids": [
+                {"V": 1100.0, "t": 0.04, "gap": 0.05, "r": 0.05, "cham": 0.0},
+            ]
+        }
+        # Verifies that fine mesh does NOT raise ValueError and automatically adapts dt
+        sim.build_domain(params_fine)
+        self.assertGreater(sim.dx, 0.0)
+        self.assertLess(sim.dt, 5e-10)
+
 
 if __name__ == "__main__":
     unittest.main()
+

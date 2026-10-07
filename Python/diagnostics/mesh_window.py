@@ -115,7 +115,8 @@ class MeshWindow(QDialog):
         self.lbl_dy_nominal = QLabel("Δy (base): —")
         self.lbl_dx_range   = QLabel("Δx min..max: —")
         self.lbl_ratio      = QLabel("Δx / λ_D: —")
-        for lbl in (self.lbl_dx_nominal, self.lbl_dy_nominal, self.lbl_dx_range, self.lbl_ratio):
+        self.lbl_dt         = QLabel("Time Step dt: —")
+        for lbl in (self.lbl_dx_nominal, self.lbl_dy_nominal, self.lbl_dx_range, self.lbl_ratio, self.lbl_dt):
             lbl.setStyleSheet("font-size: 11px; color: #1e293b;")
             lay_dx.addWidget(lbl)
         stats_layout.addWidget(grp_dx)
@@ -358,9 +359,10 @@ class MeshWindow(QDialog):
         self.lbl_dy_nominal.setText(f"Δy (base): <b>{dy_val:.4f} mm</b> ({dy_val * 1e3:.1f} µm)")
         if abs(dx_max - dx_min) > 1e-6:
             self.lbl_dx_range.setText(f"Δx min..max: <b>{dx_min:.4f}..{dx_max:.4f} mm</b>")
-        else:
-            self.lbl_dx_range.setText(f"Δx min..max: uniform ({dx:.4f} mm)")
         self.lbl_ratio.setText(f"Δx / λ_D ratio: <b>{ratio_dx_debye:.3f}</b>")
+        sim_dt = getattr(sim, 'dt', 5e-10)
+        cfl_v = (dx * 1e-3) / sim_dt if sim_dt > 0 else 0.0
+        self.lbl_dt.setText(f"Time Step dt: <b>{sim_dt * 1e9:.3f} ns</b> (CFL {cfl_v:.1e} m/s)")
 
         # Update Card 2: Debye length
         self.lbl_debye_std.setText(f"λ_D (unscreened): <b>{lambda_D_mm:.4f} mm</b> ({lambda_D_um:.1f} µm)")

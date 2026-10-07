@@ -197,6 +197,12 @@ class DomainMixin:
                     f"{warn_msg} Choose dx, dy <= lambda_D or configure \\deltax/debye_length in Advanced Settings."
                 )
 
+        user_dt = params.get('dt', None)
+        if user_dt is not None and float(user_dt) > 0:
+            self.dt = float(user_dt)
+        elif params.get('dt_ns') is not None and float(params.get('dt_ns')) > 0:
+            self.dt = float(params.get('dt_ns')) * 1e-9
+
         plasma_freq = np.sqrt(n0_n * self.q ** 2 / (self.m_ion * self.eps0))
         elet_freq = np.sqrt(n0_n * self.q ** 2 / (self.m_e * self.eps0))
         dt = 2 * 3.14159 / plasma_freq
@@ -212,11 +218,13 @@ class DomainMixin:
         vmax = v_bohm + 4 * v_spread
 
         if self.dx * 1e-3 / self.dt < vmax or self.dy * 1e-3 / self.dt < vmax:
-            raise ValueError(
-                f"Grid spacing and time step too large for velocity resolution: "
-                f"dx/dt={self.dx*1e-3/self.dt:.2e} m/s, dy/dt={self.dy*1e-3/self.dt:.2e} m/s, "
-                f"vmax={vmax:.2e} m/s. "
-                f"Choose dx, dy and dt such that dx/dt >= vmax and dy/dt >= vmax."
+            dt_cfl = 0.95 * min(self.dx * 1e-3, self.dy * 1e-3) / vmax
+            old_dt = self.dt
+            self.dt = min(self.dt, dt_cfl)
+            print(
+                f"[Domain CFL] Grid spacing dx={self.dx:.4f} mm requires finer time step: "
+                f"dx/dt was {self.dx*1e-3/old_dt:.2e} m/s < vmax ({vmax:.2e} m/s). "
+                f"Automatically adapted dt from {old_dt:.2e} s to {self.dt:.2e} s to satisfy CFL velocity resolution."
             )
 
         geometry = params.get('geometry', 'half_hole')

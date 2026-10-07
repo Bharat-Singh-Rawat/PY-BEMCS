@@ -214,6 +214,9 @@ class AdvancedSettingsDialog(QDialog):
         self.form.addRow(r"\deltax/debye_length =", spin_dx)
         self.inputs["dx_over_debye"] = spin_dx
 
+        val_dt_ns = current_params.get("dt_ns", current_params.get("dt", 5e-10) * 1e9)
+        add_spin("dt_ns", "Time Step (dt, ns):", 0.001, 100.0, float(val_dt_ns), decimals=3, step=0.05)
+
         val_Lx = current_params.get("Lx", default_Lx if default_Lx is not None else 20.0)
         val_Ly = current_params.get("Ly", default_Ly if default_Ly is not None else 3.0)
         add_spin("Lx", "Domain Length (Lx, mm):", 0.1, 500, val_Lx, decimals=3, step=0.5)
@@ -271,6 +274,8 @@ class AdvancedSettingsDialog(QDialog):
         if "dx_over_debye" in result:
             result[r"\deltax/debye_length"] = result["dx_over_debye"]
             result["deltax_debye_length"] = result["dx_over_debye"]
+        if "dt_ns" in result:
+            result["dt"] = result["dt_ns"] * 1e-9
         return result
 
 

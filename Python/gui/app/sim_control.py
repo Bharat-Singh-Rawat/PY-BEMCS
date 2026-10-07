@@ -152,7 +152,12 @@ class SimControlMixin:
             self.adv_params["Ly"] = auto_Ly
 
         self.apply_advanced_settings_to_sim()
-        self.sim.build_domain(self.get_params())
+        try:
+            self.sim.build_domain(self.get_params())
+        except Exception as exc:
+            self.lbl_status.setText(f"Status: Domain build error: {exc}")
+            QMessageBox.critical(self, "Domain Build Error", f"Failed to build domain:\n\n{exc}")
+            return
         self.sim.enable_perf_monitor(log_every=50)
 
         if not getattr(self, '_user_overrode_Lx', False):

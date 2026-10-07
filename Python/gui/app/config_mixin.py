@@ -29,6 +29,8 @@ class ConfigMixin:
             "entire_bulk_plasma": False,  # default: presheath mode
             "dx_over_debye": 0.8,
             r"\deltax/debye_length": 0.8,
+            "dt_ns": 0.50,
+            "dt": 5e-10,
         }
 
         self.inputs["n0_plasma"].setValue(1e17)
@@ -209,6 +211,7 @@ class ConfigMixin:
 
         adv = config.get("advanced_settings", {})
         val_dx_debye = adv.get(r"\deltax/debye_length", adv.get("dx_over_debye", adv.get("deltax_debye_length", 0.8)))
+        val_dt_ns = adv.get("dt_ns", adv.get("dt", 5e-10) * 1e9 if "dt" in adv else 0.50)
         self.adv_params = {
             "V_plasma_offset": adv.get("V_plasma_offset", 20.0),
             "m_e_ratio": adv.get("m_e_ratio", 1000.0),
@@ -216,6 +219,8 @@ class ConfigMixin:
             "use_json_mesh_zones": bool(adv.get("use_json_mesh_zones", False)),
             "dx_over_debye": float(val_dx_debye),
             r"\deltax/debye_length": float(val_dx_debye),
+            "dt_ns": float(val_dt_ns),
+            "dt": float(val_dt_ns) * 1e-9,
         }
 
         self.mesh_zones = config.get("mesh_zones", {
@@ -352,6 +357,8 @@ class ConfigMixin:
         self.sim.Z_ion = self.beam_charge_state
         self.sim.q_ion = self.beam_charge_state * self.sim.q
         self.sim.m_e = self.sim.m_ion / self.adv_params["m_e_ratio"]
+        if "dt" in self.adv_params and self.adv_params["dt"] > 0:
+            self.sim.dt = float(self.adv_params["dt"])
 
         self.sim.set_material(props=self.mat_props)
 
