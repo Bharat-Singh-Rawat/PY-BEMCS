@@ -201,6 +201,19 @@ class AdvancedSettingsDialog(QDialog):
         add_spin("V_plasma_offset", "Plasma Potential Offset (V):", 0, 500, current_params.get("V_plasma_offset", 20.0))
         add_spin("m_e_ratio", "Electron Mass Ratio (m_Xe / X):", 1, 100000, current_params.get("m_e_ratio", 1000.0), 0, 100)
 
+        val_dx_debye = current_params.get(r"\deltax/debye_length", current_params.get("dx_over_debye", 0.8))
+        spin_dx = QDoubleSpinBox()
+        spin_dx.setRange(0.01, 10.0)
+        spin_dx.setDecimals(3)
+        spin_dx.setSingleStep(0.05)
+        spin_dx.setValue(float(val_dx_debye))
+        spin_dx.setToolTip(
+            "Ratio between spatial grid cell size (Δx, Δy) and electron Debye length (λ_D).\n"
+            "Default: 0.8 (Δx = 0.8 · λ_D). Smaller values provide finer spatial resolution."
+        )
+        self.form.addRow(r"\deltax/debye_length =", spin_dx)
+        self.inputs["dx_over_debye"] = spin_dx
+
         val_Lx = current_params.get("Lx", default_Lx if default_Lx is not None else 20.0)
         val_Ly = current_params.get("Ly", default_Ly if default_Ly is not None else 3.0)
         add_spin("Lx", "Domain Length (Lx, mm):", 0.1, 500, val_Lx, decimals=3, step=0.5)
@@ -255,6 +268,9 @@ class AdvancedSettingsDialog(QDialog):
         result = {k: v.value() for k, v in self.inputs.items()}
         result["entire_bulk_plasma"] = self.chk_bulk.isChecked()
         result["use_json_mesh_zones"] = self.chk_json_zones.isChecked()
+        if "dx_over_debye" in result:
+            result[r"\deltax/debye_length"] = result["dx_over_debye"]
+            result["deltax_debye_length"] = result["dx_over_debye"]
         return result
 
 

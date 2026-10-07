@@ -140,7 +140,8 @@ class SimControlMixin:
         _q    = 1.602e-19
         _lambda_D_m  = np.sqrt(_eps0 * _Te * _q / (_n0 * _q**2))
         _lambda_D_mm = _lambda_D_m * 1e3
-        _dxy_mm = 0.8 * _lambda_D_mm
+        _ratio = float(self.adv_params.get(r"\deltax/debye_length", self.adv_params.get("dx_over_debye", 0.8)))
+        _dxy_mm = _ratio * _lambda_D_mm
         self.sim.dx = _dxy_mm
         self.sim.dy = _dxy_mm
 

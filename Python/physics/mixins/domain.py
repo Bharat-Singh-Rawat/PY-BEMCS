@@ -163,6 +163,14 @@ class DomainMixin:
             screen_r = grids[0]['r'] if grids else 0.80
             self.recommended_upstream_gap_mm = 0.75 * screen_r
 
+        ratio_debye = params.get(r"\deltax/debye_length", params.get("dx_over_debye", None))
+        if ratio_debye is not None:
+            _lambda_D_m = np.sqrt(self.eps0 * Te_up * self.q / (n0_n * self.q**2))
+            _lambda_D_mm = _lambda_D_m * 1e3
+            _dxy_mm = float(ratio_debye) * _lambda_D_mm
+            self.dx = _dxy_mm
+            self.dy = _dxy_mm
+
         user_gap = float(params.get('upstream_gap_mm', 0.0))
         upstream_gap = user_gap if user_gap > 0.0 else self.recommended_upstream_gap_mm
         upstream_gap = max(upstream_gap, self.dx * 2)
@@ -177,12 +185,17 @@ class DomainMixin:
             self.Lx = grid_Lx
 
         if self.dx * 1e-3 > debye_length or self.dy * 1e-3 > debye_length:
-            raise ValueError(
+            warn_msg = (
                 f"Grid spacing too large for Debye resolution: "
                 f"dx={self.dx:.6f} mm, dy={self.dy:.6f} mm, "
-                f"lambda_D={debye_length*1e3:.6f} mm. "
-                f"Choose dx, dy <= lambda_D."
+                f"lambda_D={debye_length*1e3:.6f} mm."
             )
+            if ratio_debye is not None and float(ratio_debye) > 1.0:
+                print(f"[Domain Warning] {warn_msg} Allowed by user override (dx/debye={ratio_debye}).")
+            else:
+                raise ValueError(
+                    f"{warn_msg} Choose dx, dy <= lambda_D or configure \\deltax/debye_length in Advanced Settings."
+                )
 
         plasma_freq = np.sqrt(n0_n * self.q ** 2 / (self.m_ion * self.eps0))
         elet_freq = np.sqrt(n0_n * self.q ** 2 / (self.m_e * self.eps0))
