@@ -38,9 +38,30 @@ class UIBuilderMixin:
         gui_action.triggered.connect(self.open_gui_settings)
         settings_menu.addAction(gui_action)
 
+        settings_menu.addSeparator()
+
+        open_action = QAction("Open Config JSON...", self)
+        open_action.triggered.connect(self.open_config_json)
+        settings_menu.addAction(open_action)
+
         self.reload_action = QAction(f"Reload {self.current_config_name}", self)
         self.reload_action.triggered.connect(self.reload_config)
         settings_menu.addAction(self.reload_action)
+
+        self.save_action = QAction("Save", self)
+        self.save_action.setShortcut("Ctrl+S")
+        self.save_action.triggered.connect(self.save_config)
+        settings_menu.addAction(self.save_action)
+
+        self.save_as_action = QAction("Save as", self)
+        self.save_as_action.setShortcut("Ctrl+Shift+S")
+        self.save_as_action.triggered.connect(self.save_as_config)
+        settings_menu.addAction(self.save_as_action)
+
+        settings_menu.addSeparator()
+        build_exe_action = QAction("Build .exe...", self)
+        build_exe_action.triggered.connect(self.build_exe)
+        settings_menu.addAction(build_exe_action)
 
         beam_menu = menubar.addMenu("Beam")
         assert beam_menu is not None
@@ -58,14 +79,6 @@ class UIBuilderMixin:
         mat_action = QAction("Grid Material...", self)
         mat_action.triggered.connect(self.open_grid_material)
         mat_menu.addAction(mat_action)
-        open_action = QAction("Open Config JSON...", self)
-        open_action.triggered.connect(self.open_config_json)
-        settings_menu.addAction(open_action)
-
-        settings_menu.addSeparator()
-        build_exe_action = QAction("Build .exe...", self)
-        build_exe_action.triggered.connect(self.build_exe)
-        settings_menu.addAction(build_exe_action)
 
         diag_menu = menubar.addMenu("Diagnostics")
         assert diag_menu is not None

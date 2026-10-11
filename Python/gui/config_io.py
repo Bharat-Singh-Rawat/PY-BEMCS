@@ -40,6 +40,43 @@ def load_json_config(config_path=None):
         return json.load(f)
 
 
+def _sanitize_for_json(obj):
+    """Recursively convert NumPy scalars and arrays to native Python types."""
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return [_sanitize_for_json(v) for v in obj]
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
+
+def save_json_config(config_dict, config_path=None):
+    """
+    Saves a configuration dictionary to a JSON file.
+    If no path is provided, it defaults to the 'config.json' located next to the
+    executable or in the project root.
+    """
+    if config_path is None:
+        config_path = _config_path()
+
+    target_dir = os.path.dirname(os.path.abspath(config_path))
+    if target_dir:
+        os.makedirs(target_dir, exist_ok=True)
+
+    sanitized = _sanitize_for_json(config_dict)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(sanitized, f, indent=2)
+
+
 def load_cross_sections_from_config(config):
     """Load and spline cross-section datasets defined in configuration."""
     cs_store = {}

@@ -2,10 +2,17 @@
 Configuration synchronization, Debye length calculations, and domain sizing mixin.
 """
 import os
+import copy
 import numpy as np
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMessageBox, QFileDialog
 
-from ..config_io import _config_path, load_json_config, load_cross_sections_from_config
+from ..config_io import (
+    _config_path,
+    load_json_config,
+    save_json_config,
+    load_cross_sections_from_config
+)
+from ..bootstrap import _safe_start_dir
 from ..dialogs import GridMaterialDialog
 from physics_engine import compute_debye_upstream_gap
 
@@ -345,6 +352,238 @@ class ConfigMixin:
                                     f"{cfg_name} was reloaded successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Config Error", f"Failed to reload config:\n{e}")
+
+    def get_current_config_dict(self):
+        """
+        Assemble the full JSON configuration dictionary reflecting the current
+        application state and GUI inputs.
+        """
+        if hasattr(self, 'config') and isinstance(self.config, dict):
+            cfg = copy.deepcopy(self.config)
+        else:
+            cfg = {}
+
+        # 1. Beam species
+        cfg["beam_species"] = {
+            "mass_amu": float(getattr(self, "beam_mass_amu", 131.293)),
+            "charge_state": int(getattr(self, "beam_charge_state", 1))
+        }
+
+        # 2. Grid material
+        mat_name = getattr(self, "mat_name", "Molybdenum")
+        mat_props = getattr(self, "mat_props", {})
+        if mat_name in GridMaterialDialog.PRESETS and mat_name != "Custom":
+            cfg["grid_material"] = {
+                "preset": mat_name
+            }
+        else:
+            cfg["grid_material"] = {
+                "preset": "Custom",
+                "k": float(mat_props.get("k", 138.0)),
+                "rho": float(mat_props.get("rho", 10280.0)),
+                "cp": float(mat_props.get("cp", 250.0)),
+                "emissivity": float(mat_props.get("emissivity", 0.80)),
+                "alpha": float(mat_props.get("alpha", 4.8e-6)),
+                "E_mod": float(mat_props.get("E_mod", 329e9)),
+                "Y_coeff": float(mat_props.get("Y_coeff", 1.05e-4)),
+                "E_th": float(mat_props.get("E_th", 30.0))
+            }
+
+        # 3. Advanced settings
+        adv_cfg = cfg.get("advanced_settings", {})
+        adv_params = getattr(self, "adv_params", {})
+        adv_cfg["V_plasma_offset"] = float(adv_params.get("V_plasma_offset", 20.0))
+        adv_cfg["m_e_ratio"] = float(adv_params.get("m_e_ratio", 1000.0))
+
+        if "entire_bulk_plasma" in adv_params:
+            adv_cfg["entire_bulk_plasma"] = bool(adv_params["entire_bulk_plasma"])
+        if "use_json_mesh_zones" in adv_params:
+            adv_cfg["use_json_mesh_zones"] = bool(adv_params["use_json_mesh_zones"])
+        if "dx_over_debye" in adv_params:
+            adv_cfg["dx_over_debye"] = float(adv_params["dx_over_debye"])
+        if "dt_ns" in adv_params:
+            adv_cfg["dt_ns"] = float(adv_params["dt_ns"])
+
+        if getattr(self, "_user_overrode_Lx", False) or "Lx" in adv_cfg:
+            adv_cfg["Lx"] = float(adv_params.get("Lx", 20.0))
+        if getattr(self, "_user_overrode_Ly", False) or "Ly" in adv_cfg:
+            adv_cfg["Ly"] = float(adv_params.get("Ly", 3.0))
+
+        cfg["advanced_settings"] = adv_cfg
+
+        # 4. Mesh zones
+        cfg["mesh_zones"] = getattr(self, "mesh_zones", {
+            "presheath_factor": 1.0,
+            "optics_factor": 2.0,
+            "plume_factor": 4.0
+        })
+
+        # 5. Simulation
+        sim_cfg = cfg.get("simulation", {})
+        inputs = getattr(self, "inputs", {})
+        sim_cfg["n0_plasma"] = float(inputs["n0_plasma"].value()) if "n0_plasma" in inputs else float(sim_cfg.get("n0_plasma", 1e17))
+        sim_cfg["Te_up"] = float(inputs["Te_up"].value()) if "Te_up" in inputs else float(sim_cfg.get("Te_up", 3.0))
+        sim_cfg["Ti"] = float(inputs["Ti"].value()) if "Ti" in inputs else float(sim_cfg.get("Ti", 0.5))
+        sim_cfg["Tn"] = float(inputs["Tn"].value()) if "Tn" in inputs else float(sim_cfg.get("Tn", 300.0))
+        sim_cfg["n0"] = float(inputs["n0"].value()) if "n0" in inputs else float(sim_cfg.get("n0", 1e18))
+        sim_cfg["Accel"] = float(inputs["Accel"].value()) if "Accel" in inputs else float(sim_cfg.get("Accel", 1.0))
+        sim_cfg["Thresh"] = float(inputs["Thresh"].value()) if "Thresh" in inputs else float(sim_cfg.get("Thresh", 1e6))
+        sim_cfg["sim_mode"] = str(self.combo_mode.currentText()) if hasattr(self, "combo_mode") else str(sim_cfg.get("sim_mode", "Thermal"))
+        sim_cfg["geometry"] = str(self.combo_geometry.currentText()) if hasattr(self, "combo_geometry") else str(sim_cfg.get("geometry", "half_hole"))
+        if "target_ppc" in inputs:
+            sim_cfg["target_ppc"] = float(inputs["target_ppc"].value())
+        if "inj_time_µs" in inputs and inputs["inj_time_µs"].value() > 0:
+            sim_cfg["inj_time_µs"] = float(inputs["inj_time_µs"].value())
+
+        cfg["simulation"] = sim_cfg
+
+        # 6. RF co-extraction
+        cfg["rf_co_extraction"] = {
+            "rf_enable": bool(self.chk_rf.isChecked()) if hasattr(self, "chk_rf") else False,
+            "rf_grid_idx": int(self.combo_rf_grid.currentIndex()) if hasattr(self, "combo_rf_grid") else 0,
+            "rf_freq": float(self.spin_rf_freq.value()) if hasattr(self, "spin_rf_freq") else 13.56,
+            "rf_amp": float(self.spin_rf_amp.value()) if hasattr(self, "spin_rf_amp") else 0.0
+        }
+
+        # 7. Neutralizer
+        neut_rate_val = inputs["neut_rate"].value() if "neut_rate" in inputs else 30.0
+        neut_rate_num = int(neut_rate_val) if neut_rate_val == int(neut_rate_val) else float(neut_rate_val)
+        cfg["neutralizer"] = {
+            "neut_rate": neut_rate_num,
+            "neut_match_ion": bool(self.chk_neut_match_ion.isChecked()) if hasattr(self, "chk_neut_match_ion") else False,
+            "Te": float(inputs["Te"].value()) if "Te" in inputs else 2.0,
+            "neut_x": float(inputs["neut_x"].value()) if "neut_x" in inputs else 10.0,
+            "neut_r": float(inputs["neut_r"].value()) if "neut_r" in inputs else 1.5
+        }
+
+        # 8. Grids
+        grids_data = []
+        if hasattr(self, "grid_widgets"):
+            for gw in self.grid_widgets:
+                grids_data.append({
+                    "V": float(gw["V"].value()),
+                    "t": float(gw["t"].value()),
+                    "gap": float(gw["gap"].value()),
+                    "r": float(gw["r"].value()),
+                    "cham": float(gw["cham"].value()),
+                })
+        cfg["grids"] = grids_data
+
+        # 9. Additional sections preserved or defaulted
+        if "cross_sections" not in cfg:
+            cfg["cross_sections"] = {
+                "cx_file": "",
+                "see_file": "",
+                "custom_file": "",
+                "spline_smoothing": 0.0
+            }
+
+        if "terminal_output" not in cfg:
+            cfg["terminal_output"] = {
+                "grid_temperatures": True,
+                "beam_divergence": True,
+                "saddle_point_potential": True,
+                "mean_particle_energy": True,
+                "iteration_time": True
+            }
+
+        if "discharge_chamber" not in cfg:
+            cfg["discharge_chamber"] = {
+                "radius_m": 0.02,
+                "length_m": 0.10,
+                "n_cusp": 4,
+                "pitch_mm": float(getattr(self, "pitch_mm", 3.0))
+            }
+        else:
+            cfg["discharge_chamber"]["pitch_mm"] = float(getattr(self, "pitch_mm", cfg["discharge_chamber"].get("pitch_mm", 3.0)))
+
+        if "grid_transparency" not in cfg:
+            cfg["grid_transparency"] = {
+                "beta_i": 0.7,
+                "beta_g": 0.5
+            }
+
+        if "power_and_flow" not in cfg:
+            cfg["power_and_flow"] = {
+                "B": 0.05,
+                "massflow_in": 2.18e-7,
+                "Pw": 45.0,
+                "Te_0": 3.0
+            }
+
+        return cfg
+
+    def save_config(self):
+        """Save the current configuration to the active .json file after confirmation."""
+        reply = QMessageBox.question(
+            self,
+            "Save Configuration",
+            "Are you sure you want to save this configuration?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        target_path = getattr(self, "current_config_path", None)
+        if not target_path:
+            target_path = _config_path()
+
+        try:
+            cfg_dict = self.get_current_config_dict()
+            save_json_config(cfg_dict, target_path)
+            self.config = cfg_dict
+            self.current_config_path = target_path
+            self.current_config_name = os.path.basename(target_path)
+            self.update_config_title()
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Configuration saved to {self.current_config_name}")
+            QMessageBox.information(
+                self,
+                "Configuration Saved",
+                f"Configuration successfully saved to:\n{target_path}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save configuration:\n{e}")
+
+    def save_as_config(self):
+        """Save the current configuration to a user-selected .json file."""
+        start_dir = (
+            os.path.dirname(self.current_config_path)
+            if getattr(self, "current_config_path", None) and os.path.dirname(self.current_config_path)
+            else _safe_start_dir()
+        )
+        suggested_name = getattr(self, "current_config_name", "config.json")
+        default_save_path = os.path.join(start_dir, suggested_name)
+
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Configuration As",
+            default_save_path,
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if not file_name:
+            return
+
+        if not file_name.lower().endswith(".json"):
+            file_name += ".json"
+
+        try:
+            cfg_dict = self.get_current_config_dict()
+            save_json_config(cfg_dict, file_name)
+            self.config = cfg_dict
+            self.current_config_path = file_name
+            self.current_config_name = os.path.basename(file_name)
+            self.update_config_title()
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Configuration saved to {self.current_config_name}")
+            QMessageBox.information(
+                self,
+                "Configuration Saved",
+                f"Configuration successfully saved to:\n{file_name}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save configuration:\n{e}")
 
     def apply_advanced_settings_to_sim(self):
         self.sim.Lx = self.adv_params["Lx"]
