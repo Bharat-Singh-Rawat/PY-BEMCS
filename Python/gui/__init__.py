@@ -8,6 +8,7 @@ from .dialogs import (
     GridMaterialDialog,
     AdvancedSettingsDialog,
     GUISettingsDialog,
+    DivergencePlaneDialog,
 )
 from .workers import PyInstallerWorker, SimulationWorker
 from .app import DigitalTwinApp
@@ -19,6 +20,7 @@ __all__ = [
     "GridMaterialDialog",
     "AdvancedSettingsDialog",
     "GUISettingsDialog",
+    "DivergencePlaneDialog",
     "PyInstallerWorker",
     "SimulationWorker",
     "DigitalTwinApp",

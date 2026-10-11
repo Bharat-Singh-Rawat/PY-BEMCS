@@ -516,6 +516,10 @@ class UIBuilderMixin:
             self._div_method_group.addAction(act)
             self._div_method_actions[method_name] = act
 
+        self.action_div_plane = QAction("Plane", self)
+        self.action_div_plane.triggered.connect(self.open_divergence_plane_dialog)
+        self.menu_div.addAction(self.action_div_plane)
+
         self.btn_div_menu.setMenu(self.menu_div)
         self.btn_div_menu.setPopupMode(QToolButton.InstantPopup)
 

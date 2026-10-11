@@ -47,6 +47,7 @@ class RenderingMixin:
         self.ax_live.set_xlim(0, self.sim.Lx)
         self.ax_live.set_ylim(0, self.sim.Ly)
         self.ax_live.set_title("Beam Extraction & Tracking")
+        self._update_div_plane_line()
         self.canvas.draw_idle()
 
         if self.sim.Tmap is not None and len(self.sim.mask_grids) > 0:
@@ -427,9 +428,15 @@ class RenderingMixin:
         self._div_legend_map.clear()
         method_str = getattr(self, 'div_method', '95%')
         tag = f"θ{method_str.replace('%', '')}"
+        plane_x = getattr(self, 'div_plane_x', None)
+        if plane_x is not None:
+            plane_label = f"Plane x={plane_x:.2f}mm ({tag})"
+        else:
+            plane_label = f"Mid Plume ({tag})"
+
         quantities = [
             ('grid', f"Grid Exit ({tag})", '#1f77b4', '-', 1.8),
-            ('mid', f"Mid Plume ({tag})", '#e67e22', '--', 1.8),
+            ('mid', plane_label, '#e67e22', '-', 1.8),
         ]
         legend_handles = []
         legend_labels = []
@@ -485,6 +492,8 @@ class RenderingMixin:
             self.line_div.set_visible(show_grid)
         if hasattr(self, 'line_div_mid'):
             self.line_div_mid.set_visible(show_mid)
+        if hasattr(self, 'line_div_plane') and self.line_div_plane is not None:
+            self.line_div_plane.set_visible(show_mid)
 
         visible_divs = []
         if show_grid and hasattr(self, 'div_history') and len(self.div_history) > 0:
@@ -522,6 +531,64 @@ class RenderingMixin:
         self._update_div_legend()
         if hasattr(self, 'canvas'):
             self.canvas.draw_idle()
+
+    def set_divergence_plane(self, plane_x: float):
+        """Set the axial position (x) in mm for beam divergence evaluation."""
+        self.div_plane_x = float(plane_x)
+        if hasattr(self, 'sim'):
+            self.sim.div_plane_x = self.div_plane_x
+
+        # Notify active simulation worker if running
+        if getattr(self, 'sim_isRunning', False) and hasattr(self, '_sim_worker'):
+            p = self.get_params()
+            self._sim_worker.update_params(p)
+
+        # Update dotted plane indicator in ax_live
+        self._update_div_plane_line()
+
+        # Re-render legend to update label with new plane position
+        self._update_div_legend()
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+        if hasattr(self, 'lbl_status'):
+            self.lbl_status.setText(f"Divergence evaluation plane set to x = {self.div_plane_x:.3f} mm")
+
+    def _update_div_plane_line(self):
+        """Draw or update the dotted vertical line showing the divergence evaluation plane in ax_live."""
+        if not hasattr(self, 'ax_live'):
+            return
+
+        plane_x = getattr(self, 'div_plane_x', None)
+        if plane_x is None:
+            if hasattr(self, 'get_divergence_plane_limits'):
+                x_min, x_max = self.get_divergence_plane_limits()
+                plane_x = round(x_min + 0.5 * (x_max - x_min), 3)
+            elif hasattr(self, 'sim') and hasattr(self.sim, 'Lx') and self.sim.Lx > 0:
+                plane_x = self.sim.Lx * 0.75
+            else:
+                plane_x = None
+
+        if plane_x is None:
+            return
+
+        show_plane = True
+        if hasattr(self, '_div_curve_visible'):
+            show_plane = self._div_curve_visible.get('mid', True)
+
+        if getattr(self, 'line_div_plane', None) is not None and self.line_div_plane in self.ax_live.lines:
+            self.line_div_plane.set_xdata([plane_x, plane_x])
+            self.line_div_plane.set_visible(show_plane)
+        else:
+            self.line_div_plane = self.ax_live.axvline(
+                x=plane_x,
+                color="#e67e22",
+                linestyle=":",
+                linewidth=1.8,
+                alpha=0.85,
+                zorder=6
+            )
+            self.line_div_plane.set_visible(show_plane)
 
     def _reposition_div_menu_btn(self):
         """Position the dropdown arrow button immediately aside the 'Beam Divergence' title."""

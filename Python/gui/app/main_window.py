@@ -56,6 +56,7 @@ class DigitalTwinApp(
         self._div_legend_map = {}
         self.div_method = "95%"
         self.div_percentile = 95.0
+        self.div_plane_x = None
         self.time_history = []
         self.transparency_history  = []
         self.transparency3_history = []

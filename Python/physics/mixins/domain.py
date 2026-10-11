@@ -184,6 +184,11 @@ class DomainMixin:
         else:
             self.Lx = grid_Lx
 
+        if 'div_plane_x' in params and params['div_plane_x'] is not None:
+            self.div_plane_x = float(params['div_plane_x'])
+        if 'div_percentile' in params and params['div_percentile'] is not None:
+            self.div_percentile = float(params['div_percentile'])
+
         if self.dx * 1e-3 > debye_length or self.dy * 1e-3 > debye_length:
             warn_msg = (
                 f"Grid spacing too large for Debye resolution: "

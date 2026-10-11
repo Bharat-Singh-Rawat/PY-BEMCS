@@ -179,8 +179,13 @@ def step_ion_interactions(sim, ctx: StepContext):
         if np.count_nonzero(crossed_mask) > 5 else np.nan
     )
 
-    x_mid = x_exit_last + 0.5 * (sim.Lx - x_exit_last)
-    crossed_mid_mask = (p_x_old <= x_mid) & (p_x > x_mid) & (p_vx > 0.0)
+    x_plane = getattr(sim, 'div_plane_x', None)
+    if x_plane is None:
+        x_plane = params.get('div_plane_x', None)
+    if x_plane is None or not (x_exit_last <= x_plane <= sim.Lx):
+        x_plane = x_exit_last + 0.5 * (sim.Lx - x_exit_last)
+
+    crossed_mid_mask = (p_x_old <= x_plane) & (p_x > x_plane) & (p_vx > 0.0)
     ctx.current_div_mid = (
         np.percentile(
             np.abs(np.arctan2(p_vy[crossed_mid_mask], p_vx[crossed_mid_mask])) * 180.0 / np.pi,

@@ -5,7 +5,8 @@ Includes Beam Species, Grid Material, Advanced Physics/Mesh, and GUI Settings di
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QFormLayout, QDoubleSpinBox, QSpinBox, QPushButton,
-    QCheckBox, QGroupBox, QButtonGroup, QRadioButton
+    QCheckBox, QGroupBox, QButtonGroup, QRadioButton,
+    QMessageBox
 )
 from .workers.simulation_worker import SimulationWorker
 
@@ -393,3 +394,95 @@ class GUISettingsDialog(QDialog):
     def get_diag_interval_ms(self):
         """Return the chosen diagnostic refresh interval in milliseconds."""
         return int(self._spin_diag_ms.value())
+
+
+class DivergencePlaneDialog(QDialog):
+    """Dialog for setting the axial plane position where beam divergence is evaluated."""
+    def __init__(self, current_x, x_min, x_max, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Divergence Evaluation Plane")
+        self.setMinimumWidth(380)
+
+        self.x_min = float(x_min)
+        self.x_max = float(x_max)
+
+        # Ensure current_x is within bounds
+        if current_x is None or not (self.x_min <= current_x <= self.x_max):
+            current_x = self.x_min + 0.5 * (self.x_max - self.x_min)
+        self.current_x = float(current_x)
+
+        layout = QVBoxLayout(self)
+        self.setLayout(layout)
+
+        info_lbl = QLabel(
+            "Configure the axial position (x) downstream of the grid system\n"
+            "where beam divergence is evaluated.\n\n"
+            f"• Last Grid Exit:  x = {self.x_min:.3f} mm\n"
+            f"• Domain Boundary: x = {self.x_max:.3f} mm"
+        )
+        info_lbl.setStyleSheet("color: #495057; font-size: 11px; margin-bottom: 6px;")
+        layout.addWidget(info_lbl)
+
+        form = QFormLayout()
+        self.spin_x = QDoubleSpinBox()
+        self.spin_x.setDecimals(3)
+        self.spin_x.setSingleStep(0.05)
+        # Strict control on range
+        self.spin_x.setRange(self.x_min, self.x_max)
+        self.spin_x.setValue(self.current_x)
+        self.spin_x.setSuffix(" mm")
+        self.spin_x.setToolTip(
+            f"Plane position in mm. Must be between {self.x_min:.3f} mm and {self.x_max:.3f} mm."
+        )
+        form.addRow("Evaluation Plane (x):", self.spin_x)
+        layout.addLayout(form)
+
+        # Preset shortcuts
+        btn_layout = QHBoxLayout()
+        btn_grid_exit = QPushButton("Last Grid Exit")
+        btn_grid_exit.setToolTip("Set to exit face of last grid")
+        btn_grid_exit.clicked.connect(lambda: self.spin_x.setValue(self.x_min))
+
+        btn_mid = QPushButton("Mid-Plume")
+        btn_mid.setToolTip("Set to halfway between last grid and boundary")
+        mid_val = round(self.x_min + 0.5 * (self.x_max - self.x_min), 3)
+        btn_mid.clicked.connect(lambda: self.spin_x.setValue(mid_val))
+
+        btn_boundary = QPushButton("End Boundary")
+        btn_boundary.setToolTip("Set to domain exit boundary")
+        btn_boundary.clicked.connect(lambda: self.spin_x.setValue(self.x_max))
+
+        btn_layout.addWidget(btn_grid_exit)
+        btn_layout.addWidget(btn_mid)
+        btn_layout.addWidget(btn_boundary)
+        layout.addLayout(btn_layout)
+
+        layout.addSpacing(10)
+
+        btn_box = QHBoxLayout()
+        ok_btn = QPushButton("Apply")
+        ok_btn.setStyleSheet("font-weight: bold;")
+        ok_btn.clicked.connect(self.validate_and_accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_box.addStretch()
+        btn_box.addWidget(ok_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+
+    def validate_and_accept(self):
+        val = self.spin_x.value()
+        if val < self.x_min or val > self.x_max:
+            QMessageBox.warning(
+                self,
+                "Invalid Plane Position",
+                f"Selected plane (x = {val:.3f} mm) is outside the valid domain range.\n\n"
+                f"It must be between the last grid (x = {self.x_min:.3f} mm) "
+                f"and the domain boundary (x = {self.x_max:.3f} mm)."
+            )
+            return
+        self.accept()
+
+    def get_plane_x(self):
+        return round(self.spin_x.value(), 3)

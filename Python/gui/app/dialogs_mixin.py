@@ -9,6 +9,7 @@ from ..dialogs import (
     AdvancedSettingsDialog,
     BeamSpeciesDialog,
     GridMaterialDialog,
+    DivergencePlaneDialog,
 )
 from physics_engine import compute_debye_upstream_gap
 from diagnostics import (
@@ -179,3 +180,47 @@ class DialogsMixin:
         if hasattr(self, 'sim'):
             params = self.get_params() if hasattr(self, 'get_params') else None
             self.mesh_window.update_plot(self.sim, params=params)
+
+    def get_divergence_plane_limits(self):
+        """Return (x_min, x_max) in mm defining the allowed range for the divergence evaluation plane."""
+        if (
+            hasattr(self, 'sim')
+            and hasattr(self.sim, 'grid_x_ends')
+            and len(self.sim.grid_x_ends) > 0
+            and hasattr(self.sim, 'Lx')
+            and self.sim.Lx > 0
+        ):
+            x_min = float(self.sim.grid_x_ends[-1])
+            x_max = float(self.sim.Lx)
+        else:
+            upstream = (
+                self.inputs["upstream_gap_mm"].value()
+                if hasattr(self, 'inputs') and "upstream_gap_mm" in self.inputs
+                else 0.6
+            )
+            grids_thickness = 0.0
+            if hasattr(self, 'grid_widgets') and self.grid_widgets:
+                for i, gw in enumerate(self.grid_widgets):
+                    t = gw["t"].value()
+                    gap = gw["gap"].value() if i < len(self.grid_widgets) - 1 else 0.0
+                    grids_thickness += t + gap
+            x_min = round(upstream + grids_thickness, 3)
+            auto_Lx, _ = self.compute_grid_domain_size() if hasattr(self, 'compute_grid_domain_size') else (20.0, 3.0)
+            x_max = float(getattr(self, 'adv_params', {}).get('Lx', auto_Lx))
+
+        if x_max <= x_min:
+            x_max = round(x_min + 1.0, 3)
+
+        return round(x_min, 3), round(x_max, 3)
+
+    def open_divergence_plane_dialog(self):
+        """Open the modal dialog to configure the axial divergence evaluation plane."""
+        x_min, x_max = self.get_divergence_plane_limits()
+        current_x = getattr(self, 'div_plane_x', None)
+        if current_x is None:
+            current_x = round(x_min + 0.5 * (x_max - x_min), 3)
+
+        dialog = DivergencePlaneDialog(current_x, x_min, x_max, self)
+        if dialog.exec_() == QDialog.Accepted:
+            new_plane_x = dialog.get_plane_x()
+            self.set_divergence_plane(new_plane_x)
