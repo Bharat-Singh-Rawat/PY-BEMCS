@@ -96,6 +96,8 @@ class RenderingMixin:
             self.charge_window.update_plot(self.sim)
         if self.perf_window and self.perf_window.isVisible():
             self.perf_window.update_plot(self.sim)
+        if getattr(self, 'field_window', None) and self.field_window.isVisible():
+            self.field_window.update_plot(self.sim)
 
         v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
         if v_init_saddle is not None:
@@ -265,6 +267,8 @@ class RenderingMixin:
                 self.charge_window.update_plot(self.sim)
             if self.perf_window and self.perf_window.isVisible():
                 self.perf_window.update_plot(self.sim)
+            if getattr(self, 'field_window', None) and self.field_window.isVisible():
+                self.field_window.update_plot(self.sim)
 
         if self.chk_track_ptcls.isChecked():
             ptcl_data = self.sim.get_particle_kinematics()

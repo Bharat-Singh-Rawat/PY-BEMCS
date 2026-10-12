@@ -107,6 +107,10 @@ class UIBuilderMixin:
         iedf_action.triggered.connect(self.open_iedf_window)
         diag_menu.addAction(iedf_action)
 
+        field_action = QAction("⚡ Field Diagnostics (Ex, Ey, Quiver)...", self)
+        field_action.triggered.connect(self.open_field_window)
+        diag_menu.addAction(field_action)
+
         self.lbl_active_config = QLabel(f"  Config: {self.current_config_name}  ")
         self.lbl_active_config.setStyleSheet(
             "font-weight: bold; color: #1a5276; font-size: 11px; padding-right: 12px;"

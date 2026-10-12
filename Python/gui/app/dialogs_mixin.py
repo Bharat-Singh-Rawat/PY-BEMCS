@@ -20,6 +20,7 @@ from diagnostics import (
     TotalChargeMonitorWindow,
     PerformanceMonitorWindow,
     MeshWindow,
+    FieldDiagnosticWindow,
 )
 
 
@@ -180,6 +181,16 @@ class DialogsMixin:
         if hasattr(self, 'sim'):
             params = self.get_params() if hasattr(self, 'get_params') else None
             self.mesh_window.update_plot(self.sim, params=params)
+
+    def open_field_window(self):
+        """Open Electric Field & Potential Diagnostics window."""
+        if getattr(self, 'field_window', None) is None:
+            self.field_window = FieldDiagnosticWindow(self)
+        self.field_window.show()
+        self.field_window.raise_()
+        self.field_window.activateWindow()
+        if hasattr(self, 'sim'):
+            self.field_window.update_plot(self.sim)
 
     def get_divergence_plane_limits(self):
         """Return (x_min, x_max) in mm defining the allowed range for the divergence evaluation plane."""

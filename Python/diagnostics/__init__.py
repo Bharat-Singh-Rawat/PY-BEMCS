@@ -14,6 +14,7 @@ from .energy_window import PhysicalConstraintsWindow, TotalEnergyWindow
 from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
 from .perf_window import PerformanceMonitorWindow
 from .mesh_window import MeshWindow
+from .field_window import FieldDiagnosticWindow
 
 __all__ = [
     "PerformanceMonitor",
@@ -29,4 +30,5 @@ __all__ = [
     "ChargeMonitorWindow",
     "PerformanceMonitorWindow",
     "MeshWindow",
+    "FieldDiagnosticWindow",
 ]
