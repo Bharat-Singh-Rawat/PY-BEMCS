@@ -6,6 +6,124 @@ from ..backend import _NP_FP
 from .context import StepContext
 
 
+def compute_beam_divergence(
+    p_y: np.ndarray,
+    p_vx: np.ndarray,
+    p_vy: np.ndarray,
+    mask: np.ndarray,
+    method: str = "95%",
+    div_percentile: float = 95.0,
+    n_sigmas: float = 1.0,
+) -> float:
+    """Compute the beam divergence (half-angle in degrees) for ions crossing a plane.
+
+    Supported evaluation methods:
+      - '95%': 95th percentile of |theta|
+      - '90%': 90th percentile of |theta|
+      - 'Direct RMS': raw Root Mean Square of particle angles: sqrt(mean(theta^2))
+      - 'RMS (Twiss)': n_sigmas * sqrt(epsilon * gamma) from Courant-Snyder emittance ellipse
+      - 'FWHM': half the full width at half-maximum of the angular distribution histogram peak
+    """
+    n_pts = int(np.count_nonzero(mask))
+    if n_pts < 5:
+        return np.nan
+
+    y = p_y[mask]
+    vx = p_vx[mask]
+    vy = p_vy[mask]
+
+    # Transverse angles in degrees
+    angles_deg = np.arctan2(vy, vx) * (180.0 / np.pi)
+
+    method_clean = str(method).strip().lower() if method is not None else "95%"
+
+    if "direct" in method_clean and "rms" in method_clean:
+        # Direct raw RMS of particle angles, skipping emittance ellipse fit
+        return float(np.sqrt(np.mean(angles_deg ** 2)))
+
+    elif "twiss" in method_clean:
+        # RMS (Twiss): Divergence = n * sigmas * sqrt(epsilon * gamma)
+        # Using transverse position y and trace-space angle y' (in degrees)
+        y_mean = np.mean(y)
+        y_dev = y - y_mean
+        theta_mean = np.mean(angles_deg)
+        theta_dev = angles_deg - theta_mean
+
+        sigma_y_sq = np.mean(y_dev ** 2)
+        sigma_theta_sq = np.mean(theta_dev ** 2)
+        sigma_y_theta = np.mean(y_dev * theta_dev)
+
+        # Statistical Courant-Snyder emittance
+        eps_sq = max(0.0, sigma_y_sq * sigma_theta_sq - sigma_y_theta ** 2)
+        eps = np.sqrt(eps_sq)
+
+        if eps > 1e-15:
+            gamma = sigma_theta_sq / eps
+            rms_div = np.sqrt(eps * gamma)
+        else:
+            rms_div = np.sqrt(sigma_theta_sq)
+
+        return float(n_sigmas * rms_div)
+
+    elif "fwhm" in method_clean:
+        # FWHM: Half the full width at half-maximum of angular distribution histogram peak
+        if n_pts < 15:
+            # For small sample sizes, empirical histogram is sparse;
+            # use Gaussian equivalent half-FWHM: sqrt(2 * ln(2)) * sigma
+            sigma = np.std(angles_deg)
+            return float(np.sqrt(2.0 * np.log(2.0)) * sigma)
+
+        theta_min = float(np.min(angles_deg))
+        theta_max = float(np.max(angles_deg))
+        if theta_max - theta_min < 1e-4:
+            return 0.0
+
+        n_bins = int(np.clip(np.sqrt(n_pts) * 1.5, 12, 50))
+        counts, bin_edges = np.histogram(angles_deg, bins=n_bins)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+        # 3-point moving average smoothing to eliminate discrete binning noise spikes
+        kernel = np.array([0.2, 0.6, 0.2])
+        smooth = np.convolve(counts, kernel, mode="same")
+        peak_idx = int(np.argmax(smooth))
+        max_val = float(smooth[peak_idx])
+
+        if max_val <= 0:
+            return 0.0
+
+        half_max = 0.5 * max_val
+
+        # Find left crossing via linear interpolation
+        left_x = float(bin_centers[0])
+        for i in range(peak_idx, 0, -1):
+            if smooth[i - 1] <= half_max:
+                denom = smooth[i] - smooth[i - 1]
+                frac = (half_max - smooth[i - 1]) / denom if denom > 0 else 0.5
+                left_x = float(bin_centers[i - 1] + frac * (bin_centers[i] - bin_centers[i - 1]))
+                break
+
+        # Find right crossing via linear interpolation
+        right_x = float(bin_centers[-1])
+        for i in range(peak_idx, len(smooth) - 1):
+            if smooth[i + 1] <= half_max:
+                denom = smooth[i] - smooth[i + 1]
+                frac = (smooth[i] - half_max) / denom if denom > 0 else 0.5
+                right_x = float(bin_centers[i] + frac * (bin_centers[i + 1] - bin_centers[i]))
+                break
+
+        fwhm = max(0.0, right_x - left_x)
+        return float(0.5 * fwhm)
+
+    else:
+        # Percentile method (default '95%' or '90%')
+        pct = 95.0
+        if "90" in method_clean:
+            pct = 90.0
+        elif div_percentile is not None:
+            pct = float(div_percentile)
+        return float(np.percentile(np.abs(angles_deg), pct))
+
+
 def step_ion_interactions(sim, ctx: StepContext):
     """Handle ion collisions with grid walls, thermal loads, sputter erosion, SEE, and exit diagnostics."""
     num_p_step = ctx.num_p_step
@@ -170,13 +288,13 @@ def step_ion_interactions(sim, ctx: StepContext):
         sim.exit_v_mean_primary = np.nan
         sim.exit_v_mean_cex = np.nan
 
+    div_method = getattr(sim, 'div_method', params.get('div_method', '95%'))
     div_pct = getattr(sim, 'div_percentile', params.get('div_percentile', 95.0))
-    ctx.current_div = (
-        np.percentile(
-            np.abs(np.arctan2(p_vy[crossed_mask], p_vx[crossed_mask])) * 180.0 / np.pi,
-            div_pct
-        )
-        if np.count_nonzero(crossed_mask) > 5 else np.nan
+    n_sigmas = getattr(sim, 'twiss_n_sigma', params.get('twiss_n_sigma', 1.0))
+
+    ctx.current_div = compute_beam_divergence(
+        p_y, p_vx, p_vy, crossed_mask,
+        method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas
     )
 
     x_plane = getattr(sim, 'div_plane_x', None)
@@ -186,12 +304,9 @@ def step_ion_interactions(sim, ctx: StepContext):
         x_plane = x_exit_last + 0.5 * (sim.Lx - x_exit_last)
 
     crossed_mid_mask = (p_x_old <= x_plane) & (p_x > x_plane) & (p_vx > 0.0)
-    ctx.current_div_mid = (
-        np.percentile(
-            np.abs(np.arctan2(p_vy[crossed_mid_mask], p_vx[crossed_mid_mask])) * 180.0 / np.pi,
-            div_pct
-        )
-        if np.count_nonzero(crossed_mid_mask) > 5 else np.nan
+    ctx.current_div_mid = compute_beam_divergence(
+        p_y, p_vx, p_vy, crossed_mid_mask,
+        method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas
     )
 
     sim.current_div = ctx.current_div

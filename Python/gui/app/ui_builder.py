@@ -448,6 +448,9 @@ class UIBuilderMixin:
         self.DIVERGENCE_METHODS = {
             "95%": 95.0,
             "90%": 90.0,
+            "RMS (Twiss)": "RMS (Twiss)",
+            "Direct RMS": "Direct RMS",
+            "FWHM": "FWHM",
         }
 
         # Small downstream arrow button overlaid directly on the canvas
@@ -499,20 +502,30 @@ class UIBuilderMixin:
             }
         """)
 
-        # Submenu: "Divergence evaluation" (extensible for future submenus / buttons)
+        # Submenu: "Divergence evaluation"
         self.menu_div_eval = self.menu_div.addMenu("Divergence evaluation")
         self.menu_div_eval.setStyleSheet(self.menu_div.styleSheet())
 
-        # Submenu items: 95% and 90% (extensible for future evaluation methods)
+        # Submenu items: 95%, 90%, RMS (Twiss), Direct RMS, FWHM
         self._div_method_actions = {}
         self._div_method_group = QActionGroup(self)
         self._div_method_group.setExclusive(True)
+
+        tooltips = {
+            "95%": "95th percentile divergence angle",
+            "90%": "90th percentile divergence angle",
+            "RMS (Twiss)": "Courant-Snyder emittance ellipse: n·σ·√(ε·γ)",
+            "Direct RMS": "Raw Root Mean Square of particle angles",
+            "FWHM": "Half the full width at half-maximum of the angular distribution peak",
+        }
 
         current_method = getattr(self, 'div_method', '95%')
         for method_name in self.DIVERGENCE_METHODS.keys():
             act = self.menu_div_eval.addAction(method_name)
             act.setCheckable(True)
             act.setChecked(method_name == current_method)
+            if method_name in tooltips:
+                act.setToolTip(tooltips[method_name])
             act.triggered.connect(lambda checked, m=method_name: self.set_divergence_method(m))
             self._div_method_group.addAction(act)
             self._div_method_actions[method_name] = act

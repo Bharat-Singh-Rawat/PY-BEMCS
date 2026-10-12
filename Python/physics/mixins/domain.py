@@ -186,8 +186,12 @@ class DomainMixin:
 
         if 'div_plane_x' in params and params['div_plane_x'] is not None:
             self.div_plane_x = float(params['div_plane_x'])
+        if 'div_method' in params and params['div_method'] is not None:
+            self.div_method = str(params['div_method'])
         if 'div_percentile' in params and params['div_percentile'] is not None:
             self.div_percentile = float(params['div_percentile'])
+        if 'twiss_n_sigma' in params and params['twiss_n_sigma'] is not None:
+            self.twiss_n_sigma = float(params['twiss_n_sigma'])
 
         if self.dx * 1e-3 > debye_length or self.dy * 1e-3 > debye_length:
             warn_msg = (

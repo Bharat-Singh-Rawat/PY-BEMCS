@@ -427,7 +427,15 @@ class RenderingMixin:
 
         self._div_legend_map.clear()
         method_str = getattr(self, 'div_method', '95%')
-        tag = f"θ{method_str.replace('%', '')}"
+        tag_map = {
+            "95%": "θ95",
+            "90%": "θ90",
+            "RMS (Twiss)": "θ_Twiss",
+            "RMS (twiss)": "θ_Twiss",
+            "Direct RMS": "θ_RMS",
+            "FWHM": "θ_FWHM/2",
+        }
+        tag = tag_map.get(method_str, f"θ{method_str.replace('%', '')}")
         plane_x = getattr(self, 'div_plane_x', None)
         if plane_x is not None:
             plane_label = f"Plane x={plane_x:.2f}mm ({tag})"
@@ -511,26 +519,44 @@ class RenderingMixin:
             self._update_div_legend()
 
     def set_divergence_method(self, method_name: str):
-        """Set the active divergence evaluation method (e.g. '95%', '90%')."""
+        """Set the active divergence evaluation method (e.g. '95%', '90%', 'RMS (Twiss)', 'Direct RMS', 'FWHM')."""
         self.div_method = method_name
-        methods = getattr(self, 'DIVERGENCE_METHODS', {"95%": 95.0, "90%": 90.0})
-        self.div_percentile = methods.get(method_name, 95.0)
-        self.sim.div_percentile = self.div_percentile
+        methods = getattr(self, 'DIVERGENCE_METHODS', {
+            "95%": 95.0,
+            "90%": 90.0,
+            "RMS (Twiss)": "RMS (Twiss)",
+            "Direct RMS": "Direct RMS",
+            "FWHM": "FWHM",
+        })
+        val = methods.get(method_name)
+        if isinstance(val, (int, float)):
+            self.div_percentile = float(val)
+        elif method_name == "90%":
+            self.div_percentile = 90.0
+        elif method_name == "95%":
+            self.div_percentile = 95.0
+
+        if hasattr(self, 'sim'):
+            self.sim.div_method = self.div_method
+            self.sim.div_percentile = getattr(self, 'div_percentile', 95.0)
 
         # Update action checkmarks in menu
         if hasattr(self, '_div_method_actions'):
             for name, act in self._div_method_actions.items():
-                act.setChecked(name == method_name)
+                act.setChecked(name.strip().lower() == method_name.strip().lower())
 
         # Notify active simulation worker if running
         if getattr(self, 'sim_isRunning', False) and hasattr(self, '_sim_worker'):
             p = self.get_params()
             self._sim_worker.update_params(p)
 
-        # Re-render legend to update label tag (e.g. θ95 vs θ90)
+        # Re-render legend to update label tag (e.g. θ95 vs θ90 vs θ_Twiss)
         self._update_div_legend()
         if hasattr(self, 'canvas'):
             self.canvas.draw_idle()
+
+        if hasattr(self, 'lbl_status'):
+            self.lbl_status.setText(f"Divergence evaluation method set to {method_name}")
 
     def set_divergence_plane(self, plane_x: float):
         """Set the axial position (x) in mm for beam divergence evaluation."""

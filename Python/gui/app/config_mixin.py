@@ -274,6 +274,10 @@ class ConfigMixin:
             if hasattr(self, 'sim'):
                 self.sim.div_plane_x = None
 
+        div_method_val = sim.get("div_method", adv.get("div_method", None))
+        if div_method_val and hasattr(self, 'set_divergence_method'):
+            self.set_divergence_method(str(div_method_val))
+
         grids_cfg = config.get("grids", [])
         if self.adv_params["entire_bulk_plasma"]:
             _gap_val = round(compute_debye_upstream_gap(sim["n0_plasma"], sim["Te_up"]), 3)
@@ -449,6 +453,8 @@ class ConfigMixin:
             sim_cfg["inj_time_µs"] = float(inputs["inj_time_µs"].value())
         if getattr(self, "div_plane_x", None) is not None:
             sim_cfg["div_plane_x"] = float(self.div_plane_x)
+        if getattr(self, "div_method", None) is not None:
+            sim_cfg["div_method"] = str(self.div_method)
 
         cfg["simulation"] = sim_cfg
 
@@ -664,4 +670,5 @@ class ConfigMixin:
         params['div_percentile'] = getattr(self, 'div_percentile', 95.0)
         params['div_method'] = getattr(self, 'div_method', '95%')
         params['div_plane_x'] = getattr(self, 'div_plane_x', None)
+        params['twiss_n_sigma'] = getattr(self, 'twiss_n_sigma', 1.0)
         return params

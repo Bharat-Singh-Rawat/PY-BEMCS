@@ -149,8 +149,10 @@ class DigitalTwinSimulator(
         self.exit_count_step     = 0
         self.current_div         = np.nan
         self.current_div_mid     = np.nan
+        self.div_method          = "95%"
         self.div_percentile      = 95.0
         self.div_plane_x         = None
+        self.twiss_n_sigma       = 1.0
         self.total_active_cells  = 0
         self.low_ppc_cells       = 0
         self.min_ppc_threshold   = 3
