@@ -207,6 +207,7 @@ class UIBuilderMixin:
         # Top Bar: Simulation Duration Timer & Status
         top_bar = QFrame()
         top_bar.setObjectName("topBar")
+        top_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         top_bar.setStyleSheet("""
             QFrame#topBar {
                 background-color: #f8fafc;
@@ -243,7 +244,7 @@ class UIBuilderMixin:
         self.lbl_top_sim_time.setStyleSheet("font-family: monospace; font-size: 11px; color: #64748b;")
         top_bar_layout.addWidget(self.lbl_top_sim_time)
 
-        root_layout.addWidget(top_bar)
+        root_layout.addWidget(top_bar, 0)
 
         content_splitter = QSplitter(Qt.Horizontal)
         content_splitter.setHandleWidth(0)
@@ -435,7 +436,7 @@ class UIBuilderMixin:
         content_splitter.setStretchFactor(0, 0)
         content_splitter.setStretchFactor(1, 1)
 
-        root_layout.addWidget(content_splitter)
+        root_layout.addWidget(content_splitter, 1)
 
         setup_figure_layout(self)
         self.canvas.mpl_connect('pick_event', self._on_legend_pick)
