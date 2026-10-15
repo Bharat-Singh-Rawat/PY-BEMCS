@@ -74,11 +74,12 @@ def step_push(sim, ctx: StepContext):
                     ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones
                 )
 
-            sim.p_x[:num_p_step]  = px_ti
-            sim.p_y[:num_p_step]  = py_ti
-            sim.p_vx[:num_p_step] = pvx_ti
-            sim.p_vy[:num_p_step] = pvy_ti
-            sim.p_vz[:num_p_step] = pvz_ti
+            if px_ti.base is not sim.p_x:
+                sim.p_x[:num_p_step]  = px_ti
+                sim.p_y[:num_p_step]  = py_ti
+                sim.p_vx[:num_p_step] = pvx_ti
+                sim.p_vy[:num_p_step] = pvy_ti
+                sim.p_vz[:num_p_step] = pvz_ti
         else:
             for _ in range(n_sub_ion):
                 push_particles_boris_cpu(
@@ -115,11 +116,12 @@ def step_push(sim, ctx: StepContext):
                     ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones
                 )
 
-            sim.e_x[:num_e_step]  = ex_ti
-            sim.e_y[:num_e_step]  = ey_ti
-            sim.e_vx[:num_e_step] = evx_ti
-            sim.e_vy[:num_e_step] = evy_ti
-            sim.e_vz[:num_e_step] = evz_ti
+            if ex_ti.base is not sim.e_x:
+                sim.e_x[:num_e_step]  = ex_ti
+                sim.e_y[:num_e_step]  = ey_ti
+                sim.e_vx[:num_e_step] = evx_ti
+                sim.e_vy[:num_e_step] = evy_ti
+                sim.e_vz[:num_e_step] = evz_ti
         else:
             for _ in range(n_sub_e):
                 push_particles_boris_cpu(
