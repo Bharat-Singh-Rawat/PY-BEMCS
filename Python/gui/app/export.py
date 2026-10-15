@@ -12,6 +12,7 @@ from PyQt5.QtGui import QImage
 
 from ..bootstrap import _safe_start_dir
 from ..workers.pyinstaller_worker import PyInstallerWorker
+from ..dialogs import EXPORT_PARAMETER_DEFS, EXPORT_PARTICLE_PARAMETER_DEFS
 
 
 class ExportMixin:
@@ -33,6 +34,33 @@ class ExportMixin:
         n = len(self.iter_history)
         if n == 0:
             QMessageBox.warning(self, "No Data", "No simulation history data to export.")
+            return
+
+        # Determine active export columns from user selection
+        selected = getattr(self, 'export_selected_params', None)
+        if selected is None:
+            selected = {p['id']: True for p in EXPORT_PARAMETER_DEFS}
+
+        header = []
+        active_defs = []
+        for pdef in EXPORT_PARAMETER_DEFS:
+            pid = pdef['id']
+            if selected.get(pid, True):
+                active_defs.append(pdef)
+                if pdef.get('is_multi', False):
+                    for i in range(len(self.T_histories)):
+                        header.append(f"grid_{i+1}_temp_K")
+                elif 'header_fn' in pdef:
+                    header.append(pdef['header_fn'](self))
+                else:
+                    header.append(pdef['header'])
+
+        if not header:
+            QMessageBox.warning(
+                self,
+                "No Parameters Selected",
+                "No data parameters are currently selected for export.\n\nPlease click 'Parameters' to select at least one parameter."
+            )
             return
 
         startdir = _safe_start_dir()
@@ -63,20 +91,6 @@ class ExportMixin:
         try:
             with open(file_name, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                header = [
-                    'iteration', 't_sim_s',
-                    'minpotential',
-                    'beamdivergence°',
-                    'beamdivergence_mid_plume°',
-                    'transparency',
-                    'ion_current_exit_A',
-                    'ion_current_exit_avg_A',
-                    'transmitted_ions_step',
-                    'total_active_cells',
-                    f'cells_less_than_{getattr(self.sim, "min_ppc_threshold", 3)}_macroparticles'
-                ]
-                for i in range(len(self.T_histories)):
-                    header.append(f"grid_{i+1}_temp_K")
                 writer.writerow(header)
 
                 chunk_size = max(1, n // 100)
@@ -85,21 +99,13 @@ class ExportMixin:
                         cancelled = True
                         break
 
-                    row = [
-                        self.iter_history[j],
-                        self.time_history[j] if j < len(self.time_history) else '',
-                        self.ebs_history[j],
-                        self.div_history[j],
-                        self.div_mid_history[j] if j < len(self.div_mid_history) else '',
-                        self.transparency_history[j] if j < len(self.transparency_history) else '',
-                        self.ion_current_exit_history[j] if j < len(self.ion_current_exit_history) else '',
-                        self.ion_current_exit_avg_history[j] if j < len(self.ion_current_exit_avg_history) else '',
-                        self.transmitted_ions_history[j] if j < len(self.transmitted_ions_history) else '',
-                        self.active_cells_history[j] if j < len(self.active_cells_history) else '',
-                        self.low_ppc_cells_history[j] if j < len(self.low_ppc_cells_history) else ''
-                    ]
-                    for i in range(len(self.T_histories)):
-                        row.append(self.T_histories[i][j] if j < len(self.T_histories[i]) else "")
+                    row = []
+                    for pdef in active_defs:
+                        if pdef.get('is_multi', False):
+                            for i in range(len(self.T_histories)):
+                                row.append(self.T_histories[i][j] if j < len(self.T_histories[i]) else "")
+                        else:
+                            row.append(pdef['getter'](self, j))
                     writer.writerow(row)
 
                     if (j + 1) % chunk_size == 0 or j == n - 1:
@@ -160,12 +166,41 @@ class ExportMixin:
             n_rows = len(data)
             ncols = data.shape[1] if data.ndim > 1 else 0
 
+            # Filter columns based on user parameter selection
+            selected = getattr(self, 'export_selected_particle_params', None)
+            if selected is None:
+                selected = {p['id']: True for p in EXPORT_PARTICLE_PARAMETER_DEFS}
+
             if ncols == 8:
-                header = ['time_s', 'x_mm', 'y_mm', 'vx_ms', 'vy_ms', 'vz_ms', 'energy_eV', 'type']
+                active_indices = []
+                header = []
+                for pdef in EXPORT_PARTICLE_PARAMETER_DEFS:
+                    idx = pdef.get('index_8')
+                    if idx is not None and idx < ncols and selected.get(pdef['id'], True):
+                        active_indices.append(idx)
+                        header.append(pdef['header'])
             elif ncols == 6:
-                header = ['x_mm', 'y_mm', 'vx_ms', 'vy_ms', 'vz_ms', 'isCEX']
+                active_indices = []
+                header = []
+                for pdef in EXPORT_PARTICLE_PARAMETER_DEFS:
+                    idx = pdef.get('index_6')
+                    if idx is not None and idx < ncols and selected.get(pdef['id'], True):
+                        active_indices.append(idx)
+                        header.append(pdef['header'] if pdef['id'] != 'type' else 'isCEX')
             else:
+                active_indices = list(range(ncols))
                 header = [f"col_{c}" for c in range(ncols)]
+
+            if not header:
+                QMessageBox.warning(
+                    self,
+                    "No Parameters Selected",
+                    "No particle parameters are currently selected for export.\n\nPlease click 'Parameters' next to Export Particle Data."
+                )
+                return
+
+            if len(active_indices) < ncols:
+                data = data[:, active_indices]
 
             progress = self._create_progress_dialog("Exporting Particle Data", "Writing particle tracking data...", n_rows)
             cancelled = False

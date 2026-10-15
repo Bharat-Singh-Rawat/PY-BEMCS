@@ -56,6 +56,7 @@ class FieldDiagnosticWindow(QDialog):
         super().__init__(parent)
         self.parent_app = parent
         self.setWindowTitle("Electric Field & Potential Diagnostics")
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         self.resize(960, 740)
         self.setMinimumSize(800, 580)
 

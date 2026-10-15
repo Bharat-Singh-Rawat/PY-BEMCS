@@ -387,12 +387,37 @@ class UIBuilderMixin:
         self.btn_toggle = QPushButton("2. START BEAM")
         self.btn_toggle.clicked.connect(self.toggle_sim)
 
+        export_row = QHBoxLayout()
+        export_row.setSpacing(4)
+        export_row.setContentsMargins(0, 0, 0, 0)
+
         self.btn_csv = QPushButton("Export Data (.csv / .txt)")
         self.btn_csv.clicked.connect(self.export_csv)
 
+        self.btn_export_params = QPushButton("Parameters")
+        self.btn_export_params.setToolTip("Select which data parameters to export (.csv / .txt)")
+        self.btn_export_params.clicked.connect(self.open_export_parameters_dialog)
+        self.btn_export_params.setStyleSheet("font-size: 11px; padding: 4px 8px;")
+
+        export_row.addWidget(self.btn_csv, 1)
+        export_row.addWidget(self.btn_export_params, 0)
+
         self.chk_track_ptcls = QCheckBox("Record Kinematics")
-        self.btn_export_trk  = QPushButton("Export Particle Data (.csv / .txt)")
+
+        export_trk_row = QHBoxLayout()
+        export_trk_row.setSpacing(4)
+        export_trk_row.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_export_trk = QPushButton("Export Particle Data (.csv / .txt)")
         self.btn_export_trk.clicked.connect(self.exporttrackingdata)
+
+        self.btn_export_trk_params = QPushButton("Parameters")
+        self.btn_export_trk_params.setToolTip("Select which particle data parameters to export (.csv / .txt)")
+        self.btn_export_trk_params.clicked.connect(self.open_export_particle_parameters_dialog)
+        self.btn_export_trk_params.setStyleSheet("font-size: 11px; padding: 4px 8px;")
+
+        export_trk_row.addWidget(self.btn_export_trk, 1)
+        export_trk_row.addWidget(self.btn_export_trk_params, 0)
 
         self.chk_record = QCheckBox("Record Frames (0)")
         self.btn_save   = QPushButton("Save GIF Animation")
@@ -405,9 +430,13 @@ class UIBuilderMixin:
         self.lbl_temp.setWordWrap(True)
         self.lbl_material.setWordWrap(True)
 
+        control_layout.addWidget(self.btn_build)
+        control_layout.addWidget(self.btn_toggle)
+        control_layout.addLayout(export_row)
+        control_layout.addWidget(self.chk_track_ptcls)
+        control_layout.addLayout(export_trk_row)
+
         for w in [
-            self.btn_build, self.btn_toggle, self.btn_csv, self.chk_track_ptcls,
-            self.btn_export_trk,
             self.chk_record, self.btn_save,
             self.lbl_status, self.lbl_temp, self.lbl_material
         ]:

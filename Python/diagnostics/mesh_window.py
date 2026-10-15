@@ -40,6 +40,7 @@ class MeshWindow(QDialog):
         super().__init__(parent)
         self.parent_app = parent
         self.setWindowTitle("Computational Domain & Mesh Grid Inspector")
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         self.resize(920, 720)
         self.setMinimumSize(780, 560)
 

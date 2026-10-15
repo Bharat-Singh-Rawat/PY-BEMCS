@@ -67,6 +67,30 @@ class DigitalTwinApp(
         self.active_cells_history  = []
         self.low_ppc_cells_history = []
         self.T_histories = {}
+        self.export_selected_params = {
+            'iteration': True,
+            't_sim_s': True,
+            'minpotential': True,
+            'beamdivergence': True,
+            'beamdivergence_mid': True,
+            'transparency': True,
+            'ion_current_exit': True,
+            'ion_current_exit_avg': True,
+            'transmitted_ions': True,
+            'total_active_cells': True,
+            'low_ppc_cells': True,
+            'grid_temps': True,
+        }
+        self.export_selected_particle_params = {
+            'time_s': True,
+            'x_mm': True,
+            'y_mm': True,
+            'vx_ms': True,
+            'vy_ms': True,
+            'vz_ms': True,
+            'energy_eV': True,
+            'type': True,
+        }
         self.recorded_frames = []
         self.tracking_buffer = []
         self.iedf_window = None

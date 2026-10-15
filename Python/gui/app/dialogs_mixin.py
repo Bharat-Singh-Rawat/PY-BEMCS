@@ -10,6 +10,8 @@ from ..dialogs import (
     BeamSpeciesDialog,
     GridMaterialDialog,
     DivergencePlaneDialog,
+    ExportParametersDialog,
+    ExportParticleParametersDialog,
 )
 from physics_engine import compute_debye_upstream_gap
 from diagnostics import (
@@ -235,3 +237,25 @@ class DialogsMixin:
         if dialog.exec_() == QDialog.Accepted:
             new_plane_x = dialog.get_plane_x()
             self.set_divergence_plane(new_plane_x)
+
+    def open_export_parameters_dialog(self):
+        """Open the checklist popup to configure which data columns to export."""
+        current_sel = getattr(self, 'export_selected_params', None)
+        dialog = ExportParametersDialog(current_sel, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.export_selected_params = dialog.get_selected_params()
+            count = sum(1 for v in self.export_selected_params.values() if v)
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Export parameters updated: {count} active.")
+
+    def open_export_particle_parameters_dialog(self):
+        """Open the checklist popup to configure which particle data columns to export."""
+        current_sel = getattr(self, 'export_selected_particle_params', None)
+        dialog = ExportParticleParametersDialog(current_sel, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.export_selected_particle_params = dialog.get_selected_params()
+            count = sum(1 for v in self.export_selected_particle_params.values() if v)
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Particle export parameters updated: {count} active.")
+
+

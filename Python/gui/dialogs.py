@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QFormLayout, QDoubleSpinBox, QSpinBox, QPushButton,
     QCheckBox, QGroupBox, QButtonGroup, QRadioButton,
-    QMessageBox
+    QMessageBox, QScrollArea, QWidget, QFrame
 )
 from .workers.simulation_worker import SimulationWorker
 
@@ -486,3 +486,386 @@ class DivergencePlaneDialog(QDialog):
 
     def get_plane_x(self):
         return round(self.spin_x.value(), 3)
+
+
+EXPORT_PARAMETER_DEFS = [
+    {
+        "id": "iteration",
+        "label": "Iteration Number",
+        "header": "iteration",
+        "tooltip": "Simulation iteration index",
+        "default": True,
+        "getter": lambda app, j: app.iter_history[j] if j < len(app.iter_history) else '',
+    },
+    {
+        "id": "t_sim_s",
+        "label": "Simulation Time (t_sim_s) [s]",
+        "header": "t_sim_s",
+        "tooltip": "Physical plasma simulation time in seconds",
+        "default": True,
+        "getter": lambda app, j: app.time_history[j] if j < len(app.time_history) else '',
+    },
+    {
+        "id": "minpotential",
+        "label": "Saddle-Point Potential (minpotential) [V]",
+        "header": "minpotential",
+        "tooltip": "Centerline minimum / saddle-point potential in volts",
+        "default": True,
+        "getter": lambda app, j: app.ebs_history[j] if j < len(app.ebs_history) else '',
+    },
+    {
+        "id": "beamdivergence",
+        "label": "Beam Divergence (Grid Exit) [°]",
+        "header": "beamdivergence°",
+        "tooltip": "Beam divergence angle measured at the exit face of the accelerator grid",
+        "default": True,
+        "getter": lambda app, j: app.div_history[j] if j < len(app.div_history) else '',
+    },
+    {
+        "id": "beamdivergence_mid",
+        "label": "Beam Divergence (Mid-Plume) [°]",
+        "header": "beamdivergence_mid_plume°",
+        "tooltip": "Beam divergence angle measured at mid-plume location",
+        "default": True,
+        "getter": lambda app, j: app.div_mid_history[j] if j < len(app.div_mid_history) else '',
+    },
+    {
+        "id": "transparency",
+        "label": "Grid Transparency",
+        "header": "transparency",
+        "tooltip": "Grid optical / ion particle transmission efficiency",
+        "default": True,
+        "getter": lambda app, j: app.transparency_history[j] if j < len(app.transparency_history) else '',
+    },
+    {
+        "id": "ion_current_exit",
+        "label": "Exit Ion Current (Instantaneous) [A]",
+        "header": "ion_current_exit_A",
+        "tooltip": "Instantaneous ion beam current crossing downstream boundary in Amperes",
+        "default": True,
+        "getter": lambda app, j: app.ion_current_exit_history[j] if j < len(app.ion_current_exit_history) else '',
+    },
+    {
+        "id": "ion_current_exit_avg",
+        "label": "Exit Ion Current (Running Avg) [A]",
+        "header": "ion_current_exit_avg_A",
+        "tooltip": "Time-averaged exit ion current in Amperes",
+        "default": True,
+        "getter": lambda app, j: app.ion_current_exit_avg_history[j] if j < len(app.ion_current_exit_avg_history) else '',
+    },
+    {
+        "id": "transmitted_ions",
+        "label": "Transmitted Ions per Step",
+        "header": "transmitted_ions_step",
+        "tooltip": "Number of macroparticles crossing the exit plane in current iteration",
+        "default": True,
+        "getter": lambda app, j: app.transmitted_ions_history[j] if j < len(app.transmitted_ions_history) else '',
+    },
+    {
+        "id": "total_active_cells",
+        "label": "Total Active PIC Cells",
+        "header": "total_active_cells",
+        "tooltip": "Number of grid cells containing active particles",
+        "default": True,
+        "getter": lambda app, j: app.active_cells_history[j] if j < len(app.active_cells_history) else '',
+    },
+    {
+        "id": "low_ppc_cells",
+        "label": "Low-PPC Cells (< threshold)",
+        "header_fn": lambda app: f'cells_less_than_{getattr(app.sim, "min_ppc_threshold", 3)}_macroparticles',
+        "tooltip": "Count of cells with particle count below statistical threshold",
+        "default": True,
+        "getter": lambda app, j: app.low_ppc_cells_history[j] if j < len(app.low_ppc_cells_history) else '',
+    },
+    {
+        "id": "grid_temps",
+        "label": "Grid Temperatures [K]",
+        "is_multi": True,
+        "tooltip": "Temperatures of individual grid electrodes in Kelvin",
+        "default": True,
+    },
+]
+
+
+class ExportParametersDialog(QDialog):
+    """
+    Dialog allowing the user to select which simulation parameters to export
+    into the telemetry CSV / TXT file via an interactive checklist.
+    """
+    def __init__(self, current_selection=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export Parameters")
+        self.setMinimumWidth(380)
+        self.setMinimumHeight(440)
+
+        self._current_selection = dict(current_selection) if current_selection else {}
+        self._checkboxes = {}
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Header description
+        info_lbl = QLabel("Select data parameters to include in the exported (.csv / .txt) file:")
+        info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("font-weight: bold; color: #212529;")
+        layout.addWidget(info_lbl)
+
+        # Quick action buttons row
+        btn_row = QHBoxLayout()
+        btn_all = QPushButton("Select All")
+        btn_all.clicked.connect(self._select_all)
+        btn_none = QPushButton("Deselect All")
+        btn_none.clicked.connect(self._deselect_all)
+        btn_reset = QPushButton("Reset Defaults")
+        btn_reset.clicked.connect(self._reset_defaults)
+
+        for b in [btn_all, btn_none, btn_reset]:
+            b.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+            btn_row.addWidget(b)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # Checklist inside a scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: 1px solid #ced4da; border-radius: 4px; background: #ffffff; }")
+
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(6)
+        scroll_layout.setContentsMargins(10, 8, 10, 8)
+
+        for pdef in EXPORT_PARAMETER_DEFS:
+            pid = pdef["id"]
+            chk = QCheckBox(pdef["label"])
+            chk.setToolTip(pdef.get("tooltip", ""))
+            is_checked = self._current_selection.get(pid, pdef.get("default", True))
+            chk.setChecked(bool(is_checked))
+            chk.setStyleSheet("QCheckBox { font-size: 12px; } QCheckBox:hover { color: #0d6efd; }")
+            self._checkboxes[pid] = chk
+            scroll_layout.addWidget(chk)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll, stretch=1)
+
+        # Bottom buttons (Apply / Cancel)
+        btn_box = QHBoxLayout()
+        ok_btn = QPushButton("Apply")
+        ok_btn.setStyleSheet("font-weight: bold; min-width: 75px;")
+        ok_btn.clicked.connect(self.validate_and_accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("min-width: 75px;")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_box.addStretch()
+        btn_box.addWidget(ok_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+
+    def _select_all(self):
+        for chk in self._checkboxes.values():
+            chk.setChecked(True)
+
+    def _deselect_all(self):
+        for chk in self._checkboxes.values():
+            chk.setChecked(False)
+
+    def _reset_defaults(self):
+        for pdef in EXPORT_PARAMETER_DEFS:
+            pid = pdef["id"]
+            if pid in self._checkboxes:
+                self._checkboxes[pid].setChecked(pdef.get("default", True))
+
+    def validate_and_accept(self):
+        selected_any = any(chk.isChecked() for chk in self._checkboxes.values())
+        if not selected_any:
+            QMessageBox.warning(
+                self,
+                "No Parameters Selected",
+                "Please select at least one parameter to export."
+            )
+            return
+        self.accept()
+
+    def get_selected_params(self):
+        return {pid: chk.isChecked() for pid, chk in self._checkboxes.items()}
+
+
+EXPORT_PARTICLE_PARAMETER_DEFS = [
+    {
+        "id": "time_s",
+        "label": "Time (time_s) [s]",
+        "header": "time_s",
+        "index_8": 0,
+        "index_6": None,
+        "tooltip": "Simulation physical timestamp in seconds",
+        "default": True,
+    },
+    {
+        "id": "x_mm",
+        "label": "Axial Position (x_mm) [mm]",
+        "header": "x_mm",
+        "index_8": 1,
+        "index_6": 0,
+        "tooltip": "Axial position along thruster extraction axis in mm",
+        "default": True,
+    },
+    {
+        "id": "y_mm",
+        "label": "Radial Position (y_mm) [mm]",
+        "header": "y_mm",
+        "index_8": 2,
+        "index_6": 1,
+        "tooltip": "Radial position in mm",
+        "default": True,
+    },
+    {
+        "id": "vx_ms",
+        "label": "Axial Velocity (vx_ms) [m/s]",
+        "header": "vx_ms",
+        "index_8": 3,
+        "index_6": 2,
+        "tooltip": "Velocity along the axial direction in m/s",
+        "default": True,
+    },
+    {
+        "id": "vy_ms",
+        "label": "Radial Velocity (vy_ms) [m/s]",
+        "header": "vy_ms",
+        "index_8": 4,
+        "index_6": 3,
+        "tooltip": "Velocity along the radial direction in m/s",
+        "default": True,
+    },
+    {
+        "id": "vz_ms",
+        "label": "Azimuthal Velocity (vz_ms) [m/s]",
+        "header": "vz_ms",
+        "index_8": 5,
+        "index_6": 4,
+        "tooltip": "Velocity along the azimuthal direction in m/s",
+        "default": True,
+    },
+    {
+        "id": "energy_eV",
+        "label": "Kinetic Energy (energy_eV) [eV]",
+        "header": "energy_eV",
+        "index_8": 6,
+        "index_6": None,
+        "tooltip": "Kinetic energy of the particle in electron-volts",
+        "default": True,
+    },
+    {
+        "id": "type",
+        "label": "Particle Type / Species (type)",
+        "header": "type",
+        "index_8": 7,
+        "index_6": 5,
+        "tooltip": "Particle classification: 0: Primary Ion, 1: CEX Ion, 2/3: Electron",
+        "default": True,
+    },
+]
+
+
+class ExportParticleParametersDialog(QDialog):
+    """
+    Dialog allowing the user to select which particle kinematic parameters to export
+    into the particle CSV / TXT file via an interactive checklist.
+    """
+    def __init__(self, current_selection=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export Particle Parameters")
+        self.setMinimumWidth(380)
+        self.setMinimumHeight(400)
+
+        self._current_selection = dict(current_selection) if current_selection else {}
+        self._checkboxes = {}
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        info_lbl = QLabel("Select particle data parameters to include in the exported (.csv / .txt) file:")
+        info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("font-weight: bold; color: #212529;")
+        layout.addWidget(info_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_all = QPushButton("Select All")
+        btn_all.clicked.connect(self._select_all)
+        btn_none = QPushButton("Deselect All")
+        btn_none.clicked.connect(self._deselect_all)
+        btn_reset = QPushButton("Reset Defaults")
+        btn_reset.clicked.connect(self._reset_defaults)
+
+        for b in [btn_all, btn_none, btn_reset]:
+            b.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+            btn_row.addWidget(b)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: 1px solid #ced4da; border-radius: 4px; background: #ffffff; }")
+
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(6)
+        scroll_layout.setContentsMargins(10, 8, 10, 8)
+
+        for pdef in EXPORT_PARTICLE_PARAMETER_DEFS:
+            pid = pdef["id"]
+            chk = QCheckBox(pdef["label"])
+            chk.setToolTip(pdef.get("tooltip", ""))
+            is_checked = self._current_selection.get(pid, pdef.get("default", True))
+            chk.setChecked(bool(is_checked))
+            chk.setStyleSheet("QCheckBox { font-size: 12px; } QCheckBox:hover { color: #0d6efd; }")
+            self._checkboxes[pid] = chk
+            scroll_layout.addWidget(chk)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll, stretch=1)
+
+        btn_box = QHBoxLayout()
+        ok_btn = QPushButton("Apply")
+        ok_btn.setStyleSheet("font-weight: bold; min-width: 75px;")
+        ok_btn.clicked.connect(self.validate_and_accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("min-width: 75px;")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_box.addStretch()
+        btn_box.addWidget(ok_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+
+    def _select_all(self):
+        for chk in self._checkboxes.values():
+            chk.setChecked(True)
+
+    def _deselect_all(self):
+        for chk in self._checkboxes.values():
+            chk.setChecked(False)
+
+    def _reset_defaults(self):
+        for pdef in EXPORT_PARTICLE_PARAMETER_DEFS:
+            pid = pdef["id"]
+            if pid in self._checkboxes:
+                self._checkboxes[pid].setChecked(pdef.get("default", True))
+
+    def validate_and_accept(self):
+        selected_any = any(chk.isChecked() for chk in self._checkboxes.values())
+        if not selected_any:
+            QMessageBox.warning(
+                self,
+                "No Parameters Selected",
+                "Please select at least one parameter to export."
+            )
+            return
+        self.accept()
+
+    def get_selected_params(self):
+        return {pid: chk.isChecked() for pid, chk in self._checkboxes.items()}
+
+
