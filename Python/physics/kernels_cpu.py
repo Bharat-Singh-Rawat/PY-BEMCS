@@ -54,7 +54,6 @@ def push_particles_boris_cpu(x, y, vx, vy, vz,
         return F[iy0, ix0]*w00 + F[iy0, ix1]*w10 + F[iy1, ix0]*w01 + F[iy1, ix1]*w11
 
     Ex_p = interp(Ex);  Ey_p = interp(Ey)
-    Bx_p = interp(Bx);  By_p = interp(By);  Bz_p = interp(Bz)
 
     # —- Boris algorithm (vectorised) —-
     hqmdt = 0.5 * q_m * dt          # half charge-mass-time factor
@@ -64,24 +63,31 @@ def push_particles_boris_cpu(x, y, vx, vy, vz,
     vmy = vy[:n] + hqmdt * Ey_p
     vmz = vz[:n]  # no Ez in 2D
 
-    # Step 2: magnetic rotation
-    tx = hqmdt * Bx_p
-    ty = hqmdt * By_p
-    tz = hqmdt * Bz_p
-    t2 = tx*tx + ty*ty + tz*tz
-    sx = 2.0 * tx / (1.0 + t2)
-    sy = 2.0 * ty / (1.0 + t2)
-    sz = 2.0 * tz / (1.0 + t2)
+    # Step 2: magnetic rotation (skipped if B is zero)
+    has_B = (Bx is not None and np.any(Bx)) or (By is not None and np.any(By)) or (Bz is not None and np.any(Bz))
+    if has_B:
+        Bx_p = interp(Bx);  By_p = interp(By);  Bz_p = interp(Bz)
+        tx = hqmdt * Bx_p
+        ty = hqmdt * By_p
+        tz = hqmdt * Bz_p
+        t2 = tx*tx + ty*ty + tz*tz
+        sx = 2.0 * tx / (1.0 + t2)
+        sy = 2.0 * ty / (1.0 + t2)
+        sz = 2.0 * tz / (1.0 + t2)
 
-    # v_prime = v_minus + v_minus x t
-    vpx = vmx + (vmy*tz - vmz*ty)
-    vpy = vmy + (vmz*tx - vmx*tz)
-    vpz = vmz + (vmx*ty - vmy*tx)
+        # v_prime = v_minus + v_minus x t
+        vpx = vmx + (vmy*tz - vmz*ty)
+        vpy = vmy + (vmz*tx - vmx*tz)
+        vpz = vmz + (vmx*ty - vmy*tx)
 
-    # v_plus = v_minus + v_prime x s
-    vpx2 = vmx + (vpy*sz - vpz*sy)
-    vpy2 = vmy + (vpz*sx - vpx*sz)
-    vpz2 = vmz + (vpx*sy - vpy*sx)
+        # v_plus = v_minus + v_prime x s
+        vpx2 = vmx + (vpy*sz - vpz*sy)
+        vpy2 = vmy + (vpz*sx - vpx*sz)
+        vpz2 = vmz + (vpx*sy - vpy*sx)
+    else:
+        vpx2 = vmx
+        vpy2 = vmy
+        vpz2 = vmz
 
     # Step 3: second half E-field kick
     vx[:n] = vpx2 + hqmdt * Ex_p

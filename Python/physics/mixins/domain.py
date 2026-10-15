@@ -305,6 +305,9 @@ class DomainMixin:
         self.ypts = np.linspace(0, self.Ly, self.ny)
         self.y_coords = self.ypts
         self.y_pts = self.y_coords
+        self.x_coords_m = self.x_coords * 1e-3
+        self.y_coords_m = self.y_coords * 1e-3
+        self.two_dy_m = 2.0 * self.dy * 1e-3
         self.dy_cells = np.diff(self.y_coords)
 
         hx = np.zeros(self.nx, dtype=np.float64)

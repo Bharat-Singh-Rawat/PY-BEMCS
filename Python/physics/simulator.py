@@ -100,6 +100,9 @@ class DigitalTwinSimulator(
 
         self.x_coords = np.linspace(0, self.Lx, self.nx)
         self.y_coords = np.linspace(0, self.Ly, self.ny)
+        self.x_coords_m = self.x_coords * 1e-3
+        self.y_coords_m = self.y_coords * 1e-3
+        self.two_dy_m = 2.0 * self.dy * 1e-3
         self.x_pts = self.x_coords
         self.y_pts = self.y_coords
         self.xpts = self.x_coords

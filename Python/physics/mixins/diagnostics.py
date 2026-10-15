@@ -94,26 +94,59 @@ class DiagnosticsMixin:
         return (self.num_p > 0) or (self.num_e > 0)
 
     def _segment_hits_grid(self, x0, y0, x1, y1, samples=8):
-        hit = np.zeros(len(x0), dtype=bool)
-        # Default to ending cell (will be overwritten for hits)
-        hit_ix = self._x_to_ix(x1)
-        hit_iy = np.clip(np.round(y1 / self.dy).astype(int), 0, self.ny - 1)
+        n = len(x0)
+        hit = np.zeros(n, dtype=bool)
+        hit_ix = np.zeros(n, dtype=np.int32)
+        hit_iy = np.zeros(n, dtype=np.int32)
+        if n == 0:
+            return hit, hit_ix, hit_iy
 
+        grid_x_starts = getattr(self, 'grid_x_starts', None)
+        grid_x_ends = getattr(self, 'grid_x_ends', None)
+        if grid_x_starts and grid_x_ends:
+            grid_x_min = max(0.0, min(grid_x_starts) - 0.2)
+            grid_x_max = min(self.Lx, max(grid_x_ends) + 0.2)
+        else:
+            grid_x_min = 0.0
+            grid_x_max = self.Lx
+
+        seg_min_x = np.minimum(x0, x1)
+        seg_max_x = np.maximum(x0, x1)
+        cand_mask = (seg_max_x >= grid_x_min) & (seg_min_x <= grid_x_max)
+
+        cand_indices = np.where(cand_mask)[0]
+        if len(cand_indices) == 0:
+            return hit, hit_ix, hit_iy
+
+        x0_c = x0[cand_indices]
+        y0_c = y0[cand_indices]
+        x1_c = x1[cand_indices]
+        y1_c = y1[cand_indices]
+
+        hit_c = np.zeros(len(cand_indices), dtype=bool)
+        hit_ix_c = self._x_to_ix(x1_c)
+        hit_iy_c = np.clip(np.round(y1_c / self.dy).astype(int), 0, self.ny - 1)
+
+        dx = x1_c - x0_c
+        dy = y1_c - y0_c
         for i in range(1, samples + 1):
             f = i / float(samples)
-            xi = x0 + (x1 - x0) * f
-            yi = y0 + (y1 - y0) * f
+            xi = x0_c + dx * f
+            yi = y0_c + dy * f
             c_x = self._x_to_ix(xi)
             c_y = np.clip(np.round(yi / self.dy).astype(int), 0, self.ny - 1)
             step_hit = self.isBound[c_y, c_x]
 
             # Record coordinates only for the FIRST hit
-            new_hits = step_hit & ~hit
-            hit_ix[new_hits] = c_x[new_hits]
-            hit_iy[new_hits] = c_y[new_hits]
+            new_hits = step_hit & ~hit_c
+            hit_ix_c[new_hits] = c_x[new_hits]
+            hit_iy_c[new_hits] = c_y[new_hits]
 
-            hit |= step_hit
+            hit_c |= step_hit
 
+        hit[cand_indices] = hit_c
+        hit_ix[cand_indices] = hit_ix_c
+        hit_iy[cand_indices] = hit_iy_c
         return hit, hit_ix, hit_iy
 
     def get_groove_profile(self, grid_idx, thresh=None, accumulate_subcell=True, face='upstream'):

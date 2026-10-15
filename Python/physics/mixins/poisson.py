@@ -87,10 +87,16 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
                 f"(final delta_V = {delta_V:.4f} V)."
             )
 
-        self.Ey, self.Ex = np.gradient(-self.V, self.y_coords * 1e-3, self.x_coords * 1e-3)
+        y_m = getattr(self, 'y_coords_m', None)
+        x_m = getattr(self, 'x_coords_m', None)
+        if y_m is None or x_m is None:
+            y_m = self.y_coords * 1e-3
+            x_m = self.x_coords * 1e-3
+
+        self.Ey, self.Ex = np.gradient(-self.V, y_m, x_m)
 
         if getattr(self, 'periodic_y', False):
-            two_dy_m = 2.0 * self.dy * 1e-3
+            two_dy_m = getattr(self, 'two_dy_m', 2.0 * self.dy * 1e-3)
             self.Ey[0, :] = (self.V[self.ny - 1, :] - self.V[1, :]) / two_dy_m
             self.Ey[self.ny - 1, :] = (self.V[self.ny - 2, :] - self.V[0, :]) / two_dy_m
 
