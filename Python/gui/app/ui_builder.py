@@ -9,7 +9,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox,
     QPushButton, QCheckBox, QMessageBox, QFileDialog, QComboBox,
     QScrollArea, QGroupBox, QAction, QMenuBar, QSplitter,
-    QFrame, QSizePolicy, QToolButton, QMenu, QActionGroup
+    QFrame, QSizePolicy, QToolButton, QMenu, QActionGroup,
+    QScrollBar
 )
 from PyQt5.QtCore import Qt
 
@@ -437,6 +438,33 @@ class UIBuilderMixin:
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content_splitter.addWidget(self.canvas)
 
+        # Floating scrollbar overlaid on canvas, positioned below ax_div only
+        self.div_scrollbar = QScrollBar(Qt.Horizontal, self.canvas)
+        self.div_scrollbar.setMinimum(0)
+        self.div_scrollbar.setMaximum(0)
+        self.div_scrollbar.setValue(0)
+        self.div_scrollbar.setSingleStep(1)
+        self.div_scrollbar.setPageStep(50)
+        self.div_scrollbar.setFixedHeight(12)
+        self.div_scrollbar.setToolTip("Scroll through divergence history")
+        self.div_scrollbar.valueChanged.connect(self._on_div_scroll)
+        self.div_scrollbar.hide()   # shown after first layout pass
+
+        # Floating Live toggle button next to the scrollbar
+        self.btn_div_live = QPushButton("📌 Live", self.canvas)
+        self.btn_div_live.setCheckable(True)
+        self.btn_div_live.setChecked(True)
+        self.btn_div_live.setFixedSize(48, 12)
+        self.btn_div_live.setToolTip("Follow the latest data live (uncheck to inspect history)")
+        self.btn_div_live.setStyleSheet(
+            "QPushButton { font-size: 8px; padding: 0px 2px; border: 1px solid #adb5bd; border-radius: 2px; "
+            "background-color: #d4edda; color: #155724; font-weight: bold; }"
+            "QPushButton:checked { background-color: #d4edda; color: #155724; }"
+            "QPushButton:!checked { background-color: #f8d7da; color: #721c24; }"
+        )
+        self.btn_div_live.toggled.connect(self._on_div_live_toggled)
+        self.btn_div_live.hide()
+
         content_splitter.setStretchFactor(0, 0)
         content_splitter.setStretchFactor(1, 1)
 
@@ -541,7 +569,10 @@ class UIBuilderMixin:
         self.btn_div_menu.setMenu(self.menu_div)
         self.btn_div_menu.setPopupMode(QToolButton.InstantPopup)
 
-        # Reposition button on canvas draw and resize
+        # Reposition button + scrollbar on canvas draw and resize
         self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_menu_btn())
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_scrollbar())
         self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_menu_btn())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_scrollbar())
         self._reposition_div_menu_btn()
+        self._reposition_div_scrollbar()

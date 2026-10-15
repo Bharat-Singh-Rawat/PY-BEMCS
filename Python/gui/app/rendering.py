@@ -297,7 +297,7 @@ class RenderingMixin:
             self.line_div_mid.set_data(self.iter_history, self.div_mid_history)
 
         self.ax_ebs.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
-        self.ax_div.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
+        self._update_div_scroll_range(snap['iteration'])
 
         if len(self.ebs_history) > 0:
             y_min = min(self.ebs_history)
@@ -656,3 +656,159 @@ class RenderingMixin:
             self.btn_div_menu.raise_()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Divergence history scrollbar helpers
+    # ------------------------------------------------------------------
+
+    def _reposition_div_scrollbar(self):
+        """Position the floating scrollbar and Live button below the 'Iteration' xlabel of ax_div."""
+        if not hasattr(self, 'div_scrollbar') or not hasattr(self, 'ax_div'):
+            return
+
+        try:
+            renderer = self.canvas.get_renderer()
+            ax_bbox = self.ax_div.get_window_extent(renderer)   # in display pixels (y from bottom)
+
+            canvas_h = self.canvas.height()
+            canvas_w = self.canvas.width()
+
+            # ax_div left/right edges in Qt coords (y flipped: Qt y=0 is top)
+            x_left  = int(ax_bbox.x0)
+            x_right = int(ax_bbox.x1)
+
+            # Find the bottom of the "Iteration" xlabel in display coordinates (so we don't cover tick values)
+            y_bottom_disp = None
+            try:
+                xlabel_bbox = self.ax_div.xaxis.label.get_window_extent(renderer)
+                if xlabel_bbox is not None and xlabel_bbox.height > 0:
+                    y_bottom_disp = xlabel_bbox.y0
+            except Exception:
+                pass
+
+            if y_bottom_disp is None:
+                try:
+                    tight_bbox = self.ax_div.get_tightbbox(renderer)
+                    if tight_bbox is not None:
+                        y_bottom_disp = tight_bbox.y0
+                except Exception:
+                    pass
+
+            if y_bottom_disp is None:
+                # Fallback: estimate 25px below ax_div bottom to clear tick values and xlabel
+                y_bottom_disp = ax_bbox.y0 - 25
+
+            # Bottom of "Iteration" xlabel in Qt coords (Qt y=0 is top)
+            y_bottom_qt = int(canvas_h - y_bottom_disp)
+
+            bar_h   = self.div_scrollbar.height()   # 12 px fixed
+            btn_w   = self.btn_div_live.width()      # 48 px fixed
+            gap     = 2                              # px gap below xlabel
+
+            total_w = x_right - x_left
+            scroll_w = max(20, total_w - btn_w - gap)
+
+            y_pos = y_bottom_qt + gap
+
+            # Clamp to canvas bounds
+            y_pos  = max(0, min(y_pos, canvas_h - bar_h))
+            x_left = max(0, min(x_left, canvas_w - total_w))
+
+            self.div_scrollbar.setGeometry(x_left, y_pos, scroll_w, bar_h)
+            self.btn_div_live.setGeometry(x_left + scroll_w + gap, y_pos, btn_w, bar_h)
+
+            self.div_scrollbar.show()
+            self.btn_div_live.show()
+            self.div_scrollbar.raise_()
+            self.btn_div_live.raise_()
+        except Exception:
+            pass
+
+
+    _DIV_WINDOW = 400   # number of iterations visible in the plot window
+
+    def _update_div_scroll_range(self, current_iter: int):
+        """Update scrollbar range and, if in live mode, auto-follow the latest data."""
+        if not hasattr(self, 'div_scrollbar'):
+            return
+
+        n = len(self.iter_history)
+        window = self._DIV_WINDOW
+
+        # Maximum value the scrollbar can reach: the leftmost start of the live window
+        # Each unit of scroll corresponds to 1 iteration offset from the beginning.
+        max_scroll = max(0, n - window)
+
+        # Block signals to prevent recursive _on_div_scroll while we update the range
+        self.div_scrollbar.blockSignals(True)
+        self.div_scrollbar.setMaximum(max_scroll)
+        self.div_scrollbar.setPageStep(max(1, window // 4))
+
+        live_mode = getattr(self, '_div_live_mode', True)
+        if live_mode:
+            # Snap to rightmost (latest) position
+            self.div_scrollbar.setValue(max_scroll)
+            x_end = max(100, current_iter)
+            x_start = max(0, x_end - window)
+            self.ax_div.set_xlim(x_start, x_end)
+        # else: leave xlim as-is (user is scrolling)
+
+        self.div_scrollbar.blockSignals(False)
+
+    def _on_div_scroll(self, value: int):
+        """Called when the user drags the history scrollbar."""
+        if not hasattr(self, 'iter_history') or len(self.iter_history) == 0:
+            return
+
+        # Moving away from the rightmost position disables live mode
+        live_mode = getattr(self, '_div_live_mode', True)
+        max_val = self.div_scrollbar.maximum()
+
+        if value < max_val:
+            # User scrolled back in history — switch to history mode
+            self._div_live_mode = False
+            if hasattr(self, 'btn_div_live'):
+                self.btn_div_live.blockSignals(True)
+                self.btn_div_live.setChecked(False)
+                self.btn_div_live.setText("▶ Live")
+                self.btn_div_live.blockSignals(False)
+        else:
+            # Scrolled back to the end — restore live mode
+            self._div_live_mode = True
+            if hasattr(self, 'btn_div_live'):
+                self.btn_div_live.blockSignals(True)
+                self.btn_div_live.setChecked(True)
+                self.btn_div_live.setText("📌 Live")
+                self.btn_div_live.blockSignals(False)
+
+        window = self._DIV_WINDOW
+        iters = self.iter_history
+
+        if len(iters) == 0:
+            return
+
+        # Map scroll position to iteration range
+        # value = index of the first data-point visible (0-based)
+        idx_start = value
+        idx_end = min(len(iters) - 1, idx_start + window)
+
+        x_start = iters[idx_start] if idx_start < len(iters) else 0
+        x_end = iters[idx_end] if idx_end < len(iters) else iters[-1]
+        if x_end <= x_start:
+            x_end = x_start + window
+
+        self.ax_div.set_xlim(x_start, x_end)
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+    def _on_div_live_toggled(self, checked: bool):
+        """Called when the user clicks the Live/History toggle button."""
+        self._div_live_mode = checked
+        if hasattr(self, 'btn_div_live'):
+            if checked:
+                self.btn_div_live.setText("📌 Live")
+                # Jump scrollbar to the end immediately
+                if hasattr(self, 'div_scrollbar'):
+                    self.div_scrollbar.setValue(self.div_scrollbar.maximum())
+            else:
+                self.btn_div_live.setText("▶ Live")
