@@ -134,12 +134,13 @@ def step_ion_interactions(sim, ctx: StepContext):
     params = ctx.params
     t_current = ctx.t_current
 
-    p_x = sim.p_x[:num_p_step].copy()
-    p_y = sim.p_y[:num_p_step].copy()
-    p_vx = sim.p_vx[:num_p_step].copy()
-    p_vy = sim.p_vy[:num_p_step].copy()
-    p_vz = sim.p_vz[:num_p_step].copy()
-    p_cex = sim.p_isCEX[:num_p_step].copy()
+    p_x = sim.p_x[:num_p_step]
+    p_y = sim.p_y[:num_p_step]
+    p_vx = sim.p_vx[:num_p_step]
+    p_vy = sim.p_vy[:num_p_step]
+    p_vz = sim.p_vz[:num_p_step]
+    p_cex = sim.p_isCEX[:num_p_step]
+    
 
     if grids and hasattr(sim, "grid_x_starts") and len(sim.grid_x_starts) == len(grids):
         x_entry_first_grid = sim.grid_x_starts[0]
