@@ -12,7 +12,7 @@ from PyQt5.QtCore import QTimer
 class RenderingMixin:
     """Mixin managing canvas plotting, static domain rendering, and live snapshot consumption."""
 
-    def draw_static_domain(self):
+    def draw_static_domain(self, redraw=True):
         self.tempmesh = None
         self.dmg_mesh = None
 
@@ -48,7 +48,6 @@ class RenderingMixin:
         self.ax_live.set_ylim(0, self.sim.Ly)
         self.ax_live.set_title("Beam Extraction & Tracking")
         self._update_div_plane_line()
-        self.canvas.draw_idle()
 
         if self.sim.Tmap is not None and len(self.sim.mask_grids) > 0:
             grid_mask = np.zeros_like(self.sim.isBound, dtype=bool)
@@ -82,7 +81,6 @@ class RenderingMixin:
             dividert = make_axes_locatable(self.ax_temp)
             self.cax_temp = dividert.append_axes("right", size="5%", pad=0.1)
             self.cbar_temp = self.fig.colorbar(self.tempmesh, cax=self.cax_temp)
-            self.cbartemp = self.cbar_temp
             self.cbar_temp.set_label("Temperature (°C)")
             self.cbar_temp.formatter.set_useOffset(False)
             self.cbar_temp.formatter.set_scientific(False)
@@ -148,7 +146,8 @@ class RenderingMixin:
         self.ax_dmg.set_ylim(0, self.sim.Ly)
 
         self._reposition_div_menu_btn()
-        self.canvas.draw_idle()
+        if redraw:
+            self.canvas.draw_idle()
 
     def _on_step_result(self, snap):
         """Process a single simulation step result on the GUI thread."""
@@ -218,7 +217,7 @@ class RenderingMixin:
 
         if remeshed:
             self.lbl_status.setText("Domain Remeshed (Thermal or Erosion)!")
-            self.draw_static_domain()
+            self.draw_static_domain(redraw=False)
 
         if self.scat_prim is not None and self.scat_cex is not None:
             self.scat_prim.set_offsets(snap['prim_xy'])
@@ -353,7 +352,6 @@ class RenderingMixin:
                 self.cax_temp = divider_t.append_axes("right", size="5%", pad=0.1)
 
                 self.cbar_temp = self.fig.colorbar(self.tempmesh, cax=self.cax_temp)
-                self.cbartemp = self.cbar_temp
                 self.cbar_temp.set_label("Temperature (°C)")
                 self.cbar_temp.formatter.set_useOffset(False)
                 self.cbar_temp.formatter.set_scientific(False)

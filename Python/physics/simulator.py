@@ -139,7 +139,6 @@ class DigitalTwinSimulator(
         self.Tmap       = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
         self.T_map      = self.Tmap
         self.T_map_new  = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
-        self.Tmapnew    = self.T_map_new
 
         self.laplacian_lu   = None
         self.is_interior_mask = None
