@@ -26,6 +26,14 @@ except ImportError:
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton, QFrame
     )
 
+try:
+    from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+except Exception:
+    try:
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+    except Exception:
+        NavigationToolbar = None
+
 
 class PhysicalConstraintsWindow(QWidget):
     """
@@ -72,52 +80,40 @@ class PhysicalConstraintsWindow(QWidget):
         ctrl.addStretch()
         layout.addLayout(ctrl)
 
-        # --- Row 2: Checkmark Legend Bar ---
-        leg_bar = QFrame()
-        leg_bar.setStyleSheet(
-            "QFrame { background-color: #f8fafc; border: 1px solid #e2e8f0; "
-            "border-radius: 6px; padding: 4px; }"
-        )
-        leg_layout = QHBoxLayout(leg_bar)
-        leg_layout.setContentsMargins(6, 2, 6, 2)
-
-        lbl_leg = QLabel("<b>Legend & Curves:</b>")
-        lbl_leg.setStyleSheet("color: #334155; font-size: 11px;")
-        leg_layout.addWidget(lbl_leg)
-
-        # Individual Checkmarks for each quantity
+        # Checkbox states for individual quantities (toggled via in-graph clickable legend)
         self.chk_total = QCheckBox("Total (KE + Field)")
         self.chk_total.setChecked(True)
-        self.chk_total.setStyleSheet("QCheckBox { font-weight: bold; color: #1f77b4; font-size: 11px; }")
         self.chk_total.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_total)
 
         self.chk_ke_i = QCheckBox("KE ions")
         self.chk_ke_i.setChecked(True)
-        self.chk_ke_i.setStyleSheet("QCheckBox { font-weight: bold; color: #ff7f0e; font-size: 11px; }")
         self.chk_ke_i.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_ke_i)
 
         self.chk_ke_e = QCheckBox("KE electrons")
         self.chk_ke_e.setChecked(True)
-        self.chk_ke_e.setStyleSheet("QCheckBox { font-weight: bold; color: #2ca02c; font-size: 11px; }")
         self.chk_ke_e.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_ke_e)
 
         self.chk_fe = QCheckBox("E field")
         self.chk_fe.setChecked(True)
-        self.chk_fe.setStyleSheet("QCheckBox { font-weight: bold; color: #9467bd; font-size: 11px; }")
         self.chk_fe.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_fe)
 
         self.chk_warnings = QCheckBox("Spikes (>5%)")
         self.chk_warnings.setChecked(True)
-        self.chk_warnings.setStyleSheet("QCheckBox { font-weight: bold; color: #d62728; font-size: 11px; }")
         self.chk_warnings.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_warnings)
 
-        leg_layout.addStretch()
-        layout.addWidget(leg_bar)
+        # --- Matplotlib Canvas and Navigation Toolbar ---
+        self.fig = Figure(figsize=(8.0, 4.4), dpi=100)
+        self.fig.patch.set_facecolor("#ffffff")
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+
+        # Toolbar placed under controls ("the house, left/right arrows and so on")
+        if NavigationToolbar is not None:
+            self.toolbar = NavigationToolbar(self.canvas, self)
+            self.toolbar.setMaximumHeight(30)
+            layout.addWidget(self.toolbar)
+        else:
+            self.toolbar = None
 
         # --- Stats label ---
         self.lbl_stats = QLabel("Total Energy: — J  |  Delta(last step): —%  |  Warnings: 0")
@@ -127,11 +123,7 @@ class PhysicalConstraintsWindow(QWidget):
         )
         layout.addWidget(self.lbl_stats)
 
-        # --- Matplotlib figure ---
-        self.fig = plt.figure(figsize=(8.0, 4.4))
-        self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
+        layout.addWidget(self.canvas, stretch=1)
 
         # Connect pick events on the plot's legend to toggle the checkboxes
         self.canvas.mpl_connect('pick_event', self._on_legend_pick)
@@ -263,6 +255,18 @@ class PhysicalConstraintsWindow(QWidget):
                 "padding: 5px; border: 1px solid #d0d7de; border-radius: 4px;"
             )
 
+        # Check if user zoomed/panned via the toolbar
+        user_zoomed = False
+        cur_xlim = None
+        cur_ylim = None
+        if hasattr(self, 'toolbar') and self.toolbar is not None:
+            nav_stack_len = len(getattr(self.toolbar, '_nav_stack', []))
+            is_active_tool = getattr(self.toolbar, 'mode', '') != ''
+            if nav_stack_len > 1 or is_active_tool:
+                user_zoomed = True
+                cur_xlim = self.ax.get_xlim()
+                cur_ylim = self.ax.get_ylim()
+
         # Plot
         self.ax.clear()
 
@@ -317,6 +321,10 @@ class PhysicalConstraintsWindow(QWidget):
         self.ax.set_ylabel(ylabel)
         self.ax.set_title("PIC Energy Conservation Monitor", fontsize=10)
         self.ax.grid(True, alpha=0.3)
+
+        if user_zoomed and cur_xlim is not None and cur_ylim is not None:
+            self.ax.set_xlim(cur_xlim)
+            self.ax.set_ylim(cur_ylim)
 
         # --- Interactive Legend with Checkmarks [x] / [ ] ---
         self._legend_pick_map.clear()
