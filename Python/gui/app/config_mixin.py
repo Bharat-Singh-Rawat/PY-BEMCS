@@ -167,6 +167,30 @@ class ConfigMixin:
         current = round(self.inputs["upstream_gap_mm"].value(), 3)
         if abs(current - self._last_auto_gap) > 0.001:
             return
+
+        settings = getattr(self, 'upstream_gap_settings', None)
+        if settings and settings.get("method") == "custom":
+            return
+
+        if settings and settings.get("method") == "ratio":
+            ratio = float(settings.get("ratio", 0.75))
+            base = settings.get("ratio_base", "screen_r")
+            if base == "screen_r":
+                screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+                new_gap = round(ratio * screen_r, 3)
+            else:
+                n0    = self.inputs["n0_plasma"].value()
+                Te_up = self.inputs["Te_up"].value()
+                if n0 <= 0 or Te_up <= 0:
+                    return
+                debye_mm = (8.854e-12 * Te_up / (1.6e-19 * n0 * 0.61))**0.5 * 1e3
+                new_gap = round(ratio * debye_mm, 3)
+            self._last_auto_gap = new_gap
+            self.inputs["upstream_gap_mm"].blockSignals(True)
+            self.inputs["upstream_gap_mm"].setValue(new_gap)
+            self.inputs["upstream_gap_mm"].blockSignals(False)
+            return
+
         bulk = self.adv_params.get("entire_bulk_plasma", False) if hasattr(self, 'adv_params') else False
         if bulk:
             n0    = self.inputs["n0_plasma"].value()

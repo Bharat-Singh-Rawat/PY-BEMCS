@@ -2,6 +2,8 @@
 Modal configuration dialogs for PY-BEMCS.
 Includes Beam Species, Grid Material, Advanced Physics/Mesh, and GUI Settings dialogs.
 """
+import math
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QFormLayout, QDoubleSpinBox, QSpinBox, QPushButton,
@@ -867,5 +869,292 @@ class ExportParticleParametersDialog(QDialog):
 
     def get_selected_params(self):
         return {pid: chk.isChecked() for pid, chk in self._checkboxes.items()}
+
+
+class UpstreamGapDialog(QDialog):
+    """
+    Dialog allowing the user to view and modify the ratio used to calculate
+    the upstream gap, or define a custom gap value directly in millimeters.
+    """
+
+    def __init__(self, current_gap, screen_r, n0, Te_up, is_bulk=False, saved_settings=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Upstream Gap Settings")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        self.setMinimumWidth(500)
+
+        self.screen_r = max(float(screen_r), 0.01)
+        self.n0 = max(float(n0), 1e12)
+        self.Te_up = max(float(Te_up), 0.01)
+        self.is_bulk = bool(is_bulk)
+        self.current_gap = float(current_gap)
+
+        # Compute physics Debye length in mm: λ_D = sqrt(eps0 * Te_up / (q * n0 * 0.61)) * 1e3
+        eps0 = 8.854e-12
+        q = 1.6e-19
+        self.debye_mm = math.sqrt(eps0 * self.Te_up / (q * self.n0 * 0.61)) * 1e3
+
+        # Default literature ratios
+        self.def_screen_ratio = 0.75
+        if self.n0 <= 1e17:
+            self.def_debye_ratio = 80.0
+        elif self.n0 <= 4e17:
+            self.def_debye_ratio = 40.0
+        else:
+            self.def_debye_ratio = 30.0
+
+        # Determine initial selection & values
+        if saved_settings:
+            initial_method = saved_settings.get("method", "ratio")
+            initial_base = saved_settings.get("ratio_base", "debye" if self.is_bulk else "screen_r")
+            initial_ratio = float(saved_settings.get("ratio", self.def_debye_ratio if initial_base == "debye" else self.def_screen_ratio))
+            initial_custom = float(saved_settings.get("custom_value", self.current_gap))
+        else:
+            initial_base = "debye" if self.is_bulk else "screen_r"
+            default_base_ratio = self.def_debye_ratio if initial_base == "debye" else self.def_screen_ratio
+            default_gap = default_base_ratio * (self.debye_mm if initial_base == "debye" else self.screen_r)
+            if self.current_gap > 0 and abs(self.current_gap - default_gap) > 0.005:
+                initial_method = "custom"
+                initial_custom = self.current_gap
+                initial_ratio = default_base_ratio
+            else:
+                initial_method = "ratio"
+                initial_custom = self.current_gap if self.current_gap > 0 else default_gap
+                initial_ratio = default_base_ratio
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # 1. Physics Context Box
+        grp_ctx = QGroupBox("Physical Parameters & Reference State")
+        form_ctx = QFormLayout(grp_ctx)
+        form_ctx.setLabelAlignment(Qt.AlignLeft)
+
+        mode_str = "Entire Bulk Plasma (Debye-based)" if self.is_bulk else "Presheath Mode (Screen Aperture-based)"
+        lbl_mode = QLabel(f"<b>{mode_str}</b>")
+        form_ctx.addRow("Active Simulation Mode:", lbl_mode)
+
+        lbl_screen_r = QLabel(f"{self.screen_r:.3f} mm")
+        form_ctx.addRow("Screen Grid Hole Radius (r_screen):", lbl_screen_r)
+
+        lbl_n0 = QLabel(f"{self.n0:.2e} m⁻³")
+        form_ctx.addRow("Plasma Density (n₀):", lbl_n0)
+
+        lbl_te = QLabel(f"{self.Te_up:.2f} eV")
+        form_ctx.addRow("Electron Temperature (T_e,up):", lbl_te)
+
+        lbl_debye = QLabel(f"{self.debye_mm:.4f} mm")
+        form_ctx.addRow("Debye Length (λ_D):", lbl_debye)
+
+        layout.addWidget(grp_ctx)
+
+        # 2. Upstream Gap Method Configuration
+        grp_method = QGroupBox("Upstream Gap Configuration")
+        vbox_method = QVBoxLayout(grp_method)
+        vbox_method.setSpacing(10)
+
+        self.btn_group = QButtonGroup(self)
+
+        # Radio 1: Ratio-based
+        self.radio_ratio = QRadioButton("Ratio-Based Calculation")
+        self.btn_group.addButton(self.radio_ratio)
+        vbox_method.addWidget(self.radio_ratio)
+
+        self.frame_ratio = QWidget()
+        layout_ratio = QVBoxLayout(self.frame_ratio)
+        layout_ratio.setContentsMargins(20, 0, 0, 6)
+        layout_ratio.setSpacing(6)
+
+        form_ratio = QFormLayout()
+        self.combo_base = QComboBox()
+        self.combo_base.addItem("Screen Grid Radius (r_screen)", "screen_r")
+        self.combo_base.addItem("Debye Length (λ_D)", "debye")
+        idx = self.combo_base.findData(initial_base)
+        if idx >= 0:
+            self.combo_base.setCurrentIndex(idx)
+        form_ratio.addRow("Reference Base:", self.combo_base)
+
+        ratio_row = QHBoxLayout()
+        self.spin_ratio = QDoubleSpinBox()
+        self.btn_reset_ratio = QPushButton("Reset to Default Ratio")
+        self.btn_reset_ratio.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        ratio_row.addWidget(self.spin_ratio, 1)
+        ratio_row.addWidget(self.btn_reset_ratio, 0)
+        form_ratio.addRow("Ratio Factor:", ratio_row)
+
+        layout_ratio.addLayout(form_ratio)
+
+        self.lbl_ratio_formula = QLabel()
+        self.lbl_ratio_formula.setStyleSheet("color: #444; font-size: 11px;")
+        layout_ratio.addWidget(self.lbl_ratio_formula)
+
+        vbox_method.addWidget(self.frame_ratio)
+
+        # Radio 2: Custom Fixed Value
+        self.radio_custom = QRadioButton("Custom Fixed Value (without ratio)")
+        self.btn_group.addButton(self.radio_custom)
+        vbox_method.addWidget(self.radio_custom)
+
+        self.frame_custom = QWidget()
+        layout_custom = QVBoxLayout(self.frame_custom)
+        layout_custom.setContentsMargins(20, 0, 0, 4)
+        layout_custom.setSpacing(4)
+
+        form_custom = QFormLayout()
+        self.spin_custom = QDoubleSpinBox()
+        self.spin_custom.setRange(0.001, 50.0)
+        self.spin_custom.setDecimals(3)
+        self.spin_custom.setSingleStep(0.05)
+        self.spin_custom.setSuffix(" mm")
+        self.spin_custom.setValue(initial_custom)
+        form_custom.addRow("Custom Gap (mm):", self.spin_custom)
+        layout_custom.addLayout(form_custom)
+
+        lbl_custom_hint = QLabel("Enter a direct physical gap [mm]. Density and temperature changes will not overwrite this value.")
+        lbl_custom_hint.setStyleSheet("color: #666; font-size: 11px;")
+        lbl_custom_hint.setWordWrap(True)
+        layout_custom.addWidget(lbl_custom_hint)
+
+        vbox_method.addWidget(self.frame_custom)
+        layout.addWidget(grp_method)
+
+        # 3. Live Preview Card
+        self.card_preview = QFrame()
+        self.card_preview.setFrameShape(QFrame.StyledPanel)
+        self.card_preview.setStyleSheet(
+            "QFrame { background-color: #f0f4f8; border: 1px solid #c0d0e0; border-radius: 6px; padding: 8px; }"
+        )
+        lay_prev = QVBoxLayout(self.card_preview)
+        lay_prev.setContentsMargins(8, 8, 8, 8)
+        self.lbl_preview_title = QLabel("Resulting Upstream Gap:")
+        self.lbl_preview_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #1a365d;")
+        self.lbl_preview_math = QLabel()
+        self.lbl_preview_math.setStyleSheet("font-size: 12px; color: #2d3748;")
+        lay_prev.addWidget(self.lbl_preview_title)
+        lay_prev.addWidget(self.lbl_preview_math)
+        layout.addWidget(self.card_preview)
+
+        # 4. Buttons (Apply / Cancel)
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        btn_apply = QPushButton("Apply")
+        btn_apply.setStyleSheet("font-weight: bold; min-width: 80px; padding: 5px 12px;")
+        btn_apply.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setStyleSheet("min-width: 80px; padding: 5px 12px;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_apply)
+        btn_box.addWidget(btn_cancel)
+        layout.addLayout(btn_box)
+
+        # Setup initial ratio ranges & values
+        self._update_ratio_spin_config()
+        self.spin_ratio.setValue(initial_ratio)
+
+        if initial_method == "custom":
+            self.radio_custom.setChecked(True)
+        else:
+            self.radio_ratio.setChecked(True)
+
+        # Signals
+        self.radio_ratio.toggled.connect(self._on_method_toggled)
+        self.radio_custom.toggled.connect(self._on_method_toggled)
+        self.combo_base.currentIndexChanged.connect(self._on_base_changed)
+        self.spin_ratio.valueChanged.connect(self._update_preview)
+        self.spin_custom.valueChanged.connect(self._update_preview)
+        self.btn_reset_ratio.clicked.connect(self._reset_default_ratio)
+
+        self._on_method_toggled()
+        self._update_preview()
+
+    def _update_ratio_spin_config(self):
+        base = self.combo_base.currentData()
+        self.spin_ratio.blockSignals(True)
+        if base == "screen_r":
+            self.spin_ratio.setRange(0.01, 50.0)
+            self.spin_ratio.setDecimals(3)
+            self.spin_ratio.setSingleStep(0.05)
+            self.spin_ratio.setSuffix(" × r_screen")
+        else:
+            self.spin_ratio.setRange(0.1, 1000.0)
+            self.spin_ratio.setDecimals(2)
+            self.spin_ratio.setSingleStep(1.0)
+            self.spin_ratio.setSuffix(" × λ_D")
+        self.spin_ratio.blockSignals(False)
+
+    def _on_base_changed(self):
+        self._update_ratio_spin_config()
+        base = self.combo_base.currentData()
+        if base == "screen_r":
+            self.spin_ratio.setValue(self.def_screen_ratio)
+        else:
+            self.spin_ratio.setValue(self.def_debye_ratio)
+        self._update_preview()
+
+    def _reset_default_ratio(self):
+        base = self.combo_base.currentData()
+        if base == "screen_r":
+            self.spin_ratio.setValue(self.def_screen_ratio)
+        else:
+            self.spin_ratio.setValue(self.def_debye_ratio)
+        self._update_preview()
+
+    def _on_method_toggled(self):
+        is_ratio = self.radio_ratio.isChecked()
+        self.frame_ratio.setEnabled(is_ratio)
+        self.frame_custom.setEnabled(not is_ratio)
+        self._update_preview()
+
+    def _update_preview(self):
+        if self.radio_ratio.isChecked():
+            base = self.combo_base.currentData()
+            ratio = self.spin_ratio.value()
+            if base == "screen_r":
+                base_val = self.screen_r
+                base_name = "Screen Hole Radius (r_screen)"
+                formula_text = (
+                    f"Calculation: {ratio:.3f} × {base_val:.3f} mm = {ratio * base_val:.3f} mm "
+                    f"(Default recommended: {self.def_screen_ratio:.2f})"
+                )
+            else:
+                base_val = self.debye_mm
+                base_name = "Debye Length (λ_D)"
+                formula_text = (
+                    f"Calculation: {ratio:.2f} × {base_val:.4f} mm = {ratio * base_val:.3f} mm "
+                    f"(Literature recommended: {self.def_debye_ratio:.0f})"
+                )
+            final_gap = round(ratio * base_val, 3)
+            self.lbl_ratio_formula.setText(formula_text)
+            self.lbl_preview_title.setText(f"Resulting Upstream Gap: <b>{final_gap:.3f} mm</b>")
+            self.lbl_preview_math.setText(f"Determined via ratio over {base_name}: <i>{ratio:.3f} × {base_val:.3f} mm</i>")
+        else:
+            final_gap = round(self.spin_custom.value(), 3)
+            self.lbl_preview_title.setText(f"Resulting Upstream Gap: <b>{final_gap:.3f} mm</b>")
+            self.lbl_preview_math.setText("Direct custom value (no ratio applied)")
+
+    def get_result(self):
+        if self.radio_ratio.isChecked():
+            base = self.combo_base.currentData()
+            ratio = self.spin_ratio.value()
+            base_val = self.screen_r if base == "screen_r" else self.debye_mm
+            gap = round(ratio * base_val, 3)
+            settings = {
+                "method": "ratio",
+                "ratio_base": base,
+                "ratio": ratio,
+                "custom_value": self.spin_custom.value(),
+                "final_gap": gap,
+            }
+            return gap, settings
+        else:
+            gap = round(self.spin_custom.value(), 3)
+            settings = {
+                "method": "custom",
+                "ratio_base": self.combo_base.currentData(),
+                "ratio": self.spin_ratio.value(),
+                "custom_value": gap,
+                "final_gap": gap,
+            }
+            return gap, settings
 
 

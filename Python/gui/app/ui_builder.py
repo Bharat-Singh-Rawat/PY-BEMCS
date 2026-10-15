@@ -274,6 +274,11 @@ class UIBuilderMixin:
         row, self.inputs["upstream_gap_mm"] = self.create_input(
             "Upstream Gap (mm):", 0.0, 20.0, 0.1, 2
         )
+        self.btn_upstream_gap_settings = QPushButton("Settings")
+        self.btn_upstream_gap_settings.setToolTip("Configure upstream gap calculation ratio or set a custom value")
+        self.btn_upstream_gap_settings.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self.btn_upstream_gap_settings.clicked.connect(self.open_upstream_gap_dialog)
+        row.addWidget(self.btn_upstream_gap_settings)
         control_layout.addLayout(row)
         self.inputs["upstream_gap_mm"].setToolTip(
             "Distance from the injection wall to the left face of the screen grid [mm].\n\n"

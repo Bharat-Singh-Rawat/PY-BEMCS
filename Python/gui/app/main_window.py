@@ -114,6 +114,7 @@ class DigitalTwinApp(
         self.mat_name   = None
         self.mat_props  = {}
         self.adv_params = {}
+        self.upstream_gap_settings = None
 
         self.inputs = {}
 

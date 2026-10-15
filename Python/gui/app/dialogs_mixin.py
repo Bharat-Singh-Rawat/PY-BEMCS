@@ -12,6 +12,7 @@ from ..dialogs import (
     DivergencePlaneDialog,
     ExportParametersDialog,
     ExportParticleParametersDialog,
+    UpstreamGapDialog,
 )
 from physics_engine import compute_debye_upstream_gap
 from diagnostics import (
@@ -76,20 +77,37 @@ class DialogsMixin:
             if hasattr(self, '_last_auto_gap'):
                 current = round(self.inputs["upstream_gap_mm"].value(), 3)
                 if abs(current - self._last_auto_gap) <= 0.001:
-                    if self.adv_params.get("entire_bulk_plasma", False):
-                        n0    = self.inputs["n0_plasma"].value()
-                        Te_up = self.inputs["Te_up"].value()
-                        if n0 > 0 and Te_up > 0:
-                            new_gap = round(compute_debye_upstream_gap(n0, Te_up), 3)
+                    settings = getattr(self, 'upstream_gap_settings', None)
+                    if not (settings and settings.get("method") == "custom"):
+                        if settings and settings.get("method") == "ratio":
+                            ratio = float(settings.get("ratio", 0.75))
+                            base = settings.get("ratio_base", "screen_r")
+                            if base == "screen_r":
+                                screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+                                new_gap = round(ratio * screen_r, 3)
+                            else:
+                                n0    = self.inputs["n0_plasma"].value()
+                                Te_up = self.inputs["Te_up"].value()
+                                if n0 > 0 and Te_up > 0:
+                                    debye_mm = (8.854e-12 * Te_up / (1.6e-19 * n0 * 0.61))**0.5 * 1e3
+                                    new_gap = round(ratio * debye_mm, 3)
+                                else:
+                                    new_gap = self._last_auto_gap
                         else:
-                            new_gap = self._last_auto_gap
-                    else:
-                        screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
-                        new_gap = round(0.75 * screen_r, 3)
-                    self._last_auto_gap = new_gap
-                    self.inputs["upstream_gap_mm"].blockSignals(True)
-                    self.inputs["upstream_gap_mm"].setValue(new_gap)
-                    self.inputs["upstream_gap_mm"].blockSignals(False)
+                            if self.adv_params.get("entire_bulk_plasma", False):
+                                n0    = self.inputs["n0_plasma"].value()
+                                Te_up = self.inputs["Te_up"].value()
+                                if n0 > 0 and Te_up > 0:
+                                    new_gap = round(compute_debye_upstream_gap(n0, Te_up), 3)
+                                else:
+                                    new_gap = self._last_auto_gap
+                            else:
+                                screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+                                new_gap = round(0.75 * screen_r, 3)
+                        self._last_auto_gap = new_gap
+                        self.inputs["upstream_gap_mm"].blockSignals(True)
+                        self.inputs["upstream_gap_mm"].setValue(new_gap)
+                        self.inputs["upstream_gap_mm"].blockSignals(False)
             QMessageBox.information(
                 self, "Settings Updated",
                 "Advanced settings updated in memory. Click '1. BUILD DOMAIN' to apply."
@@ -257,5 +275,36 @@ class DialogsMixin:
             count = sum(1 for v in self.export_selected_particle_params.values() if v)
             if hasattr(self, 'lbl_status'):
                 self.lbl_status.setText(f"Particle export parameters updated: {count} active.")
+
+    def open_upstream_gap_dialog(self):
+        """Open modal dialog to view/modify the upstream gap calculation ratio or set a custom value."""
+        current_gap = self.inputs["upstream_gap_mm"].value() if (hasattr(self, 'inputs') and "upstream_gap_mm" in self.inputs) else 0.0
+        screen_r = self.grid_widgets[0]["r"].value() if getattr(self, 'grid_widgets', None) else 0.80
+        n0 = self.inputs["n0_plasma"].value() if (hasattr(self, 'inputs') and "n0_plasma" in self.inputs) else 1e18
+        Te_up = self.inputs["Te_up"].value() if (hasattr(self, 'inputs') and "Te_up" in self.inputs) else 3.0
+        bulk = self.adv_params.get("entire_bulk_plasma", False) if hasattr(self, 'adv_params') else False
+        saved_settings = getattr(self, 'upstream_gap_settings', None)
+
+        dialog = UpstreamGapDialog(
+            current_gap=current_gap,
+            screen_r=screen_r,
+            n0=n0,
+            Te_up=Te_up,
+            is_bulk=bulk,
+            saved_settings=saved_settings,
+            parent=self,
+        )
+        if dialog.exec_() == QDialog.Accepted:
+            new_gap, settings = dialog.get_result()
+            self.upstream_gap_settings = settings
+            self._last_auto_gap = new_gap
+            if hasattr(self, 'inputs') and "upstream_gap_mm" in self.inputs:
+                self.inputs["upstream_gap_mm"].blockSignals(True)
+                self.inputs["upstream_gap_mm"].setValue(new_gap)
+                self.inputs["upstream_gap_mm"].blockSignals(False)
+            if hasattr(self, 'lbl_status'):
+                method_desc = "ratio" if settings.get("method") == "ratio" else "custom value"
+                self.lbl_status.setText(f"Upstream gap set to {new_gap:.3f} mm via {method_desc}.")
+
 
 
