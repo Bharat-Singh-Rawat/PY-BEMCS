@@ -27,6 +27,14 @@ except ImportError:
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton, QFrame
     )
 
+try:
+    from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+except Exception:
+    try:
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+    except Exception:
+        NavigationToolbar = None
+
 
 class TotalChargeMonitorWindow(QWidget):
     """
@@ -73,58 +81,44 @@ class TotalChargeMonitorWindow(QWidget):
         ctrl.addStretch()
         layout.addLayout(ctrl)
 
-        # --- Row 2: Checkmark Legend Bar ---
-        leg_bar = QFrame()
-        leg_bar.setStyleSheet(
-            "QFrame { background-color: #f8fafc; border: 1px solid #e2e8f0; "
-            "border-radius: 6px; padding: 4px; }"
-        )
-        leg_layout = QHBoxLayout(leg_bar)
-        leg_layout.setContentsMargins(6, 2, 6, 2)
-
-        lbl_leg = QLabel("<b>Legend & Curves:</b>")
-        lbl_leg.setStyleSheet("color: #334155; font-size: 11px;")
-        leg_layout.addWidget(lbl_leg)
-
-        # Individual Checkmarks for each curve
+        # Checkbox states for individual curves (toggled via in-graph clickable legend)
         self.chk_net = QCheckBox("Total Net Charge")
         self.chk_net.setChecked(True)
-        self.chk_net.setStyleSheet("QCheckBox { font-weight: bold; color: #1f77b4; font-size: 11px; }")
         self.chk_net.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_net)
 
         self.chk_q_i = QCheckBox("Ions (+)")
         self.chk_q_i.setChecked(True)
-        self.chk_q_i.setStyleSheet("QCheckBox { font-weight: bold; color: #ff7f0e; font-size: 11px; }")
         self.chk_q_i.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_q_i)
 
         self.chk_q_e = QCheckBox("Kinetic e⁻ (-)")
         self.chk_q_e.setChecked(True)
-        self.chk_q_e.setStyleSheet("QCheckBox { font-weight: bold; color: #2ca02c; font-size: 11px; }")
         self.chk_q_e.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_q_e)
 
         self.chk_q_b = QCheckBox("Boltzmann e⁻ (-)")
         self.chk_q_b.setChecked(True)
-        self.chk_q_b.setStyleSheet("QCheckBox { font-weight: bold; color: #9467bd; font-size: 11px; }")
         self.chk_q_b.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_q_b)
 
         self.chk_q_free = QCheckBox("Free Ptcls (i + e)")
         self.chk_q_free.setChecked(False)
-        self.chk_q_free.setStyleSheet("QCheckBox { font-weight: bold; color: #17becf; font-size: 11px; }")
         self.chk_q_free.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_q_free)
 
         self.chk_neutrality = QCheckBox("Neutrality (Q=0)")
         self.chk_neutrality.setChecked(True)
-        self.chk_neutrality.setStyleSheet("QCheckBox { font-weight: bold; color: #64748b; font-size: 11px; }")
         self.chk_neutrality.stateChanged.connect(self._refresh)
-        leg_layout.addWidget(self.chk_neutrality)
 
-        leg_layout.addStretch()
-        layout.addWidget(leg_bar)
+        # --- Matplotlib Canvas and Navigation Toolbar ---
+        self.fig = Figure(figsize=(8.0, 4.4), dpi=100)
+        self.fig.patch.set_facecolor("#ffffff")
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+
+        # Toolbar placed under controls ("the house, left/right arrows and so on")
+        if NavigationToolbar is not None:
+            self.toolbar = NavigationToolbar(self.canvas, self)
+            self.toolbar.setMaximumHeight(30)
+            layout.addWidget(self.toolbar)
+        else:
+            self.toolbar = None
 
         # --- Stats label ---
         self.lbl_stats = QLabel("Net Charge: -  |  Q_ions: -  |  Q_elec: -  |  Delta(last step): -")
@@ -134,11 +128,7 @@ class TotalChargeMonitorWindow(QWidget):
         )
         layout.addWidget(self.lbl_stats)
 
-        # --- Matplotlib figure ---
-        self.fig = plt.figure(figsize=(8.0, 4.4))
-        self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
+        layout.addWidget(self.canvas, stretch=1)
 
         # Connect pick events on the plot's legend to toggle the checkboxes
         self.canvas.mpl_connect('pick_event', self._on_legend_pick)
@@ -316,6 +306,18 @@ class TotalChargeMonitorWindow(QWidget):
         )
         self.lbl_stats.setText(stats_text)
 
+        # Check if user zoomed/panned via the toolbar
+        user_zoomed = False
+        cur_xlim = None
+        cur_ylim = None
+        if hasattr(self, 'toolbar') and self.toolbar is not None:
+            nav_stack_len = len(getattr(self.toolbar, '_nav_stack', []))
+            is_active_tool = getattr(self.toolbar, 'mode', '') != ''
+            if nav_stack_len > 1 or is_active_tool:
+                user_zoomed = True
+                cur_xlim = self.ax.get_xlim()
+                cur_ylim = self.ax.get_ylim()
+
         # Plotting
         self.ax.clear()
 
@@ -360,6 +362,10 @@ class TotalChargeMonitorWindow(QWidget):
         self.ax.set_ylabel(ylabel)
         self.ax.set_title("PIC Total Charge Monitor", fontsize=10)
         self.ax.grid(True, alpha=0.3)
+
+        if user_zoomed and cur_xlim is not None and cur_ylim is not None:
+            self.ax.set_xlim(cur_xlim)
+            self.ax.set_ylim(cur_ylim)
 
         # --- Interactive Legend with Checkmarks [x] / [ ] ---
         self._legend_pick_map.clear()
