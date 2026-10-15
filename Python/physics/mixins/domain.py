@@ -218,7 +218,7 @@ class DomainMixin:
         dt_e = 2 * 3.14159 / elet_freq
         if dt < self.dt:
             raise ValueError(
-                f"Too low time step: "
+                f"Too large time step: "
                 f"dt used ={self.dt:.8e} s, dt minimum ={dt:.6e} s, "
             )
         Ti = params.get('Ti', 0.1)
