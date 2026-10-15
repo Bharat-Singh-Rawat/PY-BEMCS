@@ -3,6 +3,9 @@ Diagnostics and physical observables mixin for DigitalTwinSimulator.
 """
 import numpy as np
 
+from diagnostics.metrics import compute_energy_budget, compute_charge_budget
+from diagnostics.performance_monitor import PerformanceMonitor
+
 
 class DiagnosticsMixin:
     """Methods for retrieving diagnostic maps, energy/charge balance, erosion profiles, and particle kinematics."""
@@ -48,7 +51,6 @@ class DiagnosticsMixin:
         Keyword arguments are forwarded to PerformanceMonitor.__init__
         (log_every, warn_particles, warn_memory_mb, warn_step_time_ms).
         """
-        from diagnostics.performance_monitor import PerformanceMonitor
         self._perf_monitor = PerformanceMonitor(**kwargs)
         return self._perf_monitor
 
@@ -64,7 +66,6 @@ class DiagnosticsMixin:
             E_total = E_kinetic_ions + E_kinetic_electrons + E_field
         Delegates calculation and warning logging to diagnostics.metrics.compute_energy_budget.
         """
-        from diagnostics.metrics import compute_energy_budget
         return compute_energy_budget(self)
 
     def get_total_charge(self):
@@ -73,7 +74,6 @@ class DiagnosticsMixin:
             Q_net = Q_ions + Q_electrons + Q_boltzmann
         Delegates calculation and history logging to diagnostics.metrics.compute_charge_budget.
         """
-        from diagnostics.metrics import compute_charge_budget
         return compute_charge_budget(self)
 
     def get_third_grid_transparency_frame(self):

@@ -124,6 +124,7 @@ class DigitalTwinSimulator(
         self.zone_offsets = np.array([0, int(self.nx / 3), int(2 * self.nx / 3)], dtype=np.int32)
 
         self._recompute_cell_constants()
+        self._update_taichi_mesh_constants()
 
         self.T_grids  = []
         self.mask_grids = []

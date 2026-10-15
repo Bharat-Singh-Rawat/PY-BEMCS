@@ -318,6 +318,7 @@ class DomainMixin:
         self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
 
         self.X, self.Y = np.meshgrid(self.xpts, self.ypts)
+        self._update_taichi_mesh_constants()
 
         if not preserve_state:
             self.Tmap       = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)

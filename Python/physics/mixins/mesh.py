@@ -3,6 +3,8 @@ Mesh coordinates and indexing mixin for DigitalTwinSimulator.
 """
 import numpy as np
 
+from ..backend import _NP_FP, _ti_arr, _ti_arr_i32
+
 
 class MeshMixin:
     """Mesh creation, coordinate transforms, and cell indexing."""
@@ -10,6 +12,15 @@ class MeshMixin:
     def _recompute_cell_constants(self):
         self.C_cell = self.mat_rho * (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3 * self.mat_cp
         self.A_cell = 2 * (self.dx * 1e-3) * 1e-3
+
+    def _update_taichi_mesh_constants(self):
+        """Pre-compute and cache contiguous float32/int32 mesh arrays for Taichi kernels."""
+        self.zone_b_ti = _ti_arr(self.zone_boundaries.astype(_NP_FP))
+        self.zone_dx_ti = _ti_arr(self.zone_dx.astype(_NP_FP))
+        self.zone_off_ti = _ti_arr_i32(self.zone_offsets)
+        self.num_zones = int(len(self.zone_dx))
+        self.cvol_ti = _ti_arr(self.cell_vol_1d.astype(_NP_FP))
+        self._dy_f32 = np.float32(self.dy)
 
     def _x_to_ix(self, x):
         """Vectorized O(1) nearest-grid-point node index lookup for piecewise-uniform mesh."""

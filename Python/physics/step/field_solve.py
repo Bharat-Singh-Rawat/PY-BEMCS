@@ -3,7 +3,7 @@ Charge deposition and periodic Poisson solve step phase.
 """
 import numpy as np
 
-from ..backend import USE_TAICHI, _NP_FP, _ti_arr, _ti_arr_i32
+from ..backend import USE_TAICHI, _ti_arr
 from ..kernels_taichi import accumulate_rho_taichi
 from ..kernels_cpu import accumulate_rho_cpu
 from .context import StepContext
@@ -14,12 +14,15 @@ def step_deposit_and_solve(sim, ctx: StepContext):
     sim.rho.fill(0.0)
     charge_per_particle = sim.q * sim.macro_weight
 
-    ctx.zone_b_ti = _ti_arr(sim.zone_boundaries.astype(_NP_FP))
-    ctx.zone_dx_ti = _ti_arr(sim.zone_dx.astype(_NP_FP))
-    ctx.zone_off_ti = _ti_arr_i32(sim.zone_offsets)
-    ctx.num_zones = int(len(sim.zone_dx))
-    ctx._dy = np.float32(sim.dy)
-    cvol_ti = _ti_arr(sim.cell_vol_1d.astype(_NP_FP))
+    if getattr(sim, 'zone_b_ti', None) is None:
+        sim._update_taichi_mesh_constants()
+
+    ctx.zone_b_ti = sim.zone_b_ti
+    ctx.zone_dx_ti = sim.zone_dx_ti
+    ctx.zone_off_ti = sim.zone_off_ti
+    ctx.num_zones = sim.num_zones
+    ctx._dy = sim._dy_f32
+    cvol_ti = sim.cvol_ti
 
     if sim.num_p > 0:
         if USE_TAICHI:
