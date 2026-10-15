@@ -33,7 +33,7 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
         peak_guard = float(params.get('poisson_tol_peak_guard', target_tol * 5.0))
         min_it = int(min_iters if min_iters is not None else params.get('poisson_min_iters', 3))
 
-        default_max = 100 if getattr(self, 'iteration', 0) == 0 else 100
+        default_max = 100 # maximum number of iteration. Usually it's never reached
         if iterations is not None and iterations > default_max:
             max_it = iterations
         elif iterations is not None and not params.get('poisson_adaptive', True):
