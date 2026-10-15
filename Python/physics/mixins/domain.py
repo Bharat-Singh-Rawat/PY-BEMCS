@@ -213,13 +213,15 @@ class DomainMixin:
             self.dt = float(params.get('dt_ns')) * 1e-9
 
         plasma_freq = np.sqrt(n0_n * self.q ** 2 / (self.m_ion * self.eps0))
-        elet_freq = np.sqrt(n0_n * self.q ** 2 / (self.m_e * self.eps0))
-        dt = 2 * 3.14159 / plasma_freq
-        dt_e = 2 * 3.14159 / elet_freq
-        if dt < self.dt:
+        elet_freq   = np.sqrt(n0_n * self.q ** 2 / (self.m_e * self.eps0))
+        dt_max_ion  = 2.0 * np.pi / plasma_freq
+        self.dt_max_electron = 2.0 * np.pi / elet_freq
+
+        if self.dt > dt_max_ion:
             raise ValueError(
-                f"Too large time step: "
-                f"dt used ={self.dt:.8e} s, dt minimum ={dt:.6e} s, "
+                f"Time step too large for ion plasma frequency: "
+                f"dt used = {self.dt:.4e} s exceeds max allowable dt = {dt_max_ion:.4e} s "
+                f"(f_pi = {plasma_freq / (2.0 * np.pi):.2e} Hz)."
             )
         Ti = params.get('Ti', 0.1)
         v_bohm = np.sqrt(self.q_ion * Te_up / self.m_ion)

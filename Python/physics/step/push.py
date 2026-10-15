@@ -43,6 +43,9 @@ def step_push(sim, ctx: StepContext):
             sim.e_vx[:num_e_step], sim.e_vy[:num_e_step], sim.e_vz[:num_e_step],
             -sim.q / sim.m_e, sim.dt
         )
+        dt_max_e = getattr(sim, 'dt_max_electron', None)
+        if dt_max_e is not None and dt_max_e > 0:
+            n_sub_e = max(n_sub_e, int(np.ceil(sim.dt / dt_max_e)))
     else:
         n_sub_e = 1
 
