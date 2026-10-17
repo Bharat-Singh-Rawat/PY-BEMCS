@@ -55,12 +55,8 @@ def step_electrons(sim, ctx: StepContext):
     neut_x_param = params.get('neut_x', _neut_default)
     neut_r_param = params.get('neut_r', sim.Ly)
     if neut_x_param > sim.Lx or neut_x_param < 0.0:
-        if not getattr(sim, '_warned_neut_oob', False):
-            print(f"[Warning] Neutralizer position x={neut_x_param:.3f} mm is outside x-domain [0, {sim.Lx:.3f} mm]. Setting to x = Lx ({sim.Lx:.3f} mm).")
-            sim._warned_neut_oob = True
         neut_x = float(sim.Lx)
     else:
-        sim._warned_neut_oob = False
         neut_x = float(neut_x_param)
     neut_r = float(np.clip(neut_r_param, sim.dy, sim.Ly))
     if num_e_neut > 0:

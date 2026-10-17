@@ -187,8 +187,7 @@ class SimControlMixin:
             self.inputs["neut_x"].blockSignals(True)
             self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
             self.inputs["neut_x"].blockSignals(False)
-            self._last_auto_neut_x = round(self.sim.Lx, 3)
-            print(f"[Warning] Neutralizer position x={_current_neut:.3f} mm is outside x-domain [0, {self.sim.Lx:.3f} mm]. Settled to x = Lx ({self.sim.Lx:.3f} mm).")
+            self._last_auto_neut_x = -999.0
         elif _last is None or abs(_current_neut - _last) <= 0.001:
             self._last_auto_neut_x = _neut_auto
             self.inputs["neut_x"].blockSignals(True)

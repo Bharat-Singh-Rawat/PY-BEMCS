@@ -157,8 +157,7 @@ class ConfigMixin:
                 self.inputs["neut_x"].blockSignals(True)
                 self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
                 self.inputs["neut_x"].blockSignals(False)
-                self._last_auto_neut_x = round(self.sim.Lx, 3)
-                print(f"[Warning] Neutralizer position x={val:.3f} mm is outside domain [0, {self.sim.Lx:.3f} mm]. Settled to x = Lx ({self.sim.Lx:.3f} mm).")
+                self._last_auto_neut_x = -999.0
 
     def _update_debye_gap(self):
         """Auto-update the Upstream Gap spinbox when n0 or Te_up change."""
@@ -358,11 +357,8 @@ class ConfigMixin:
         # Neutralizer axial distance (x):
         if "neut_x" in neut or "neut_x" in adv:
             val_neut_x = float(neut.get("neut_x", adv.get("neut_x")))
-            if val_neut_x > auto_Lx or val_neut_x < 0.0:
-                print(f"[Warning] Neutralizer position x={val_neut_x:.3f} mm in config is outside domain [0, {auto_Lx:.3f} mm]. Settled to x = Lx ({auto_Lx:.3f} mm).")
-                val_neut_x = auto_Lx
             self.inputs["neut_x"].setValue(val_neut_x)
-            self._last_auto_neut_x = val_neut_x
+            self._last_auto_neut_x = -999.0
         else:
             if grids:
                 upstream = self.inputs["upstream_gap_mm"].value()
