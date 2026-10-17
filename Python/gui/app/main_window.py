@@ -101,6 +101,10 @@ class DigitalTwinApp(
         self.cs_viewer_window = None
         self.mesh_window = None
         self.field_window = None
+        self.substep_window = None
+        self.substep_history_iter = []
+        self.substep_history_ion = []
+        self.substep_history_e = []
         self.sim.enable_perf_monitor(log_every=50)
 
         self.cbar_temp = None

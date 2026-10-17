@@ -29,13 +29,6 @@ def step_push(sim, ctx: StepContext):
     else:
         n_sub_ion = 1
 
-    if n_sub_ion > 1:
-        print(
-            f"[Warning] Ion displacement criterion violated at iter {sim.iteration}: "
-            f"predicted ds_max = {ds_ion:.3e} m, allowed = {ds_lim_ion:.3e} m, "
-            f"required substeps = {n_sub_ion}"
-        )
-
     num_e_step = int(sim.num_e)
     if num_e_step > 0:
         n_sub_e, ds_e, ds_lim_e = sim.compute_particle_substeps(
@@ -49,12 +42,15 @@ def step_push(sim, ctx: StepContext):
     else:
         n_sub_e = 1
 
-    if n_sub_e > 1:
-        print(
-            f"[Warning] Electron displacement criterion violated at iter {sim.iteration}: "
-            f"predicted ds_max = {ds_e:.3e} m, allowed = {ds_lim_e:.3e} m, "
-            f"required substeps = {n_sub_e}"
-        )
+    sim.last_n_sub_ion = int(n_sub_ion)
+    sim.last_n_sub_e = int(n_sub_e)
+    if not hasattr(sim, 'substep_history_iter'):
+        sim.substep_history_iter = []
+        sim.substep_history_ion = []
+        sim.substep_history_e = []
+    sim.substep_history_iter.append(int(sim.iteration))
+    sim.substep_history_ion.append(int(n_sub_ion))
+    sim.substep_history_e.append(int(n_sub_e))
 
     if num_p_step > 0:
         dt_ion = np.float32(sim.dt / n_sub_ion)

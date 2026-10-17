@@ -245,6 +245,8 @@ class SimulationWorker(QThread):
                 'low_ppc_cells':       self.sim.low_ppc_cells,
                 'injection_enabled':   self.sim.injection_enabled,
                 'has_active_particles': self.sim.has_active_particles(),
+                'n_sub_ion':           getattr(self.sim, 'last_n_sub_ion', 1),
+                'n_sub_e':             getattr(self.sim, 'last_n_sub_e', 1),
                 'm_ion':               m_ion,
                 'm_e':                 m_e,
                 'q':                   q,

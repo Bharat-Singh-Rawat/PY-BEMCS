@@ -375,6 +375,13 @@ class DomainMixin:
         self.charge_history_q_net.clear()
         self._prev_total_charge = None
 
+        if hasattr(self, 'substep_history_iter'):
+            self.substep_history_iter.clear()
+            self.substep_history_ion.clear()
+            self.substep_history_e.clear()
+            self.last_n_sub_ion = 1
+            self.last_n_sub_e = 1
+
         if not hasattr(self, 'grid_deflections') or len(self.grid_deflections) != len(grids):
             self.grid_deflections = [0.0] * len(grids)
 

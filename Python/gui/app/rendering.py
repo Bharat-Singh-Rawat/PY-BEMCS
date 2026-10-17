@@ -96,6 +96,10 @@ class RenderingMixin:
             self.perf_window.update_plot(self.sim)
         if getattr(self, 'field_window', None) and self.field_window.isVisible():
             self.field_window.update_plot(self.sim)
+        if getattr(self, 'mesh_window', None) and self.mesh_window.isVisible():
+            self.mesh_window.update_plot(self.sim, params=self.get_params())
+        if getattr(self, 'substep_window', None) and self.substep_window.isVisible():
+            self.substep_window.update_plot(self.sim)
 
         v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
         if v_init_saddle is not None:
@@ -268,6 +272,10 @@ class RenderingMixin:
                 self.perf_window.update_plot(self.sim)
             if getattr(self, 'field_window', None) and self.field_window.isVisible():
                 self.field_window.update_plot(self.sim)
+            if getattr(self, 'mesh_window', None) and self.mesh_window.isVisible():
+                self.mesh_window.update_plot(self.sim, params=self.get_params())
+            if getattr(self, 'substep_window', None) and self.substep_window.isVisible():
+                self.substep_window.update_plot(self.sim)
 
         if self.chk_track_ptcls.isChecked():
             ptcl_data = self.sim.get_particle_kinematics()
@@ -275,6 +283,13 @@ class RenderingMixin:
                 self.tracking_buffer.append(ptcl_data)
 
         self.iter_history.append(snap['iteration'])
+        if not hasattr(self, 'substep_history_iter'):
+            self.substep_history_iter = []
+            self.substep_history_ion = []
+            self.substep_history_e = []
+        self.substep_history_iter.append(snap['iteration'])
+        self.substep_history_ion.append(snap.get('n_sub_ion', 1))
+        self.substep_history_e.append(snap.get('n_sub_e', 1))
         self.ebs_history.append(min_pot)
         self.div_history.append(current_div)
         self.div_mid_history.append(current_div_mid)

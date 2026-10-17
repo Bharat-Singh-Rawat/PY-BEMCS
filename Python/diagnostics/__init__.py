@@ -13,7 +13,7 @@ from .ppc_window import PPCWindow
 from .energy_window import PhysicalConstraintsWindow, TotalEnergyWindow
 from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
 from .perf_window import PerformanceMonitorWindow
-from .mesh_window import MeshWindow
+from .mesh_window import MeshWindow, DisplacementSubstepsWindow, SubstepGraphWidget
 from .field_window import FieldDiagnosticWindow
 
 __all__ = [
@@ -30,5 +30,7 @@ __all__ = [
     "ChargeMonitorWindow",
     "PerformanceMonitorWindow",
     "MeshWindow",
+    "DisplacementSubstepsWindow",
+    "SubstepGraphWidget",
     "FieldDiagnosticWindow",
 ]

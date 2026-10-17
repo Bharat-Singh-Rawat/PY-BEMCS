@@ -23,6 +23,7 @@ from diagnostics import (
     TotalChargeMonitorWindow,
     PerformanceMonitorWindow,
     MeshWindow,
+    DisplacementSubstepsWindow,
     FieldDiagnosticWindow,
 )
 
@@ -201,6 +202,16 @@ class DialogsMixin:
         if hasattr(self, 'sim'):
             params = self.get_params() if hasattr(self, 'get_params') else None
             self.mesh_window.update_plot(self.sim, params=params)
+
+    def open_substep_window(self):
+        """Open Displacement Substeps monitor window."""
+        if getattr(self, 'substep_window', None) is None:
+            self.substep_window = DisplacementSubstepsWindow(self)
+        self.substep_window.show()
+        self.substep_window.raise_()
+        self.substep_window.activateWindow()
+        if hasattr(self, 'sim'):
+            self.substep_window.update_plot(self.sim)
 
     def open_field_window(self):
         """Open Electric Field & Potential Diagnostics window."""

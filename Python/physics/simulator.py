@@ -216,6 +216,12 @@ class DigitalTwinSimulator(
         self._prev_total_charge  = None
         self.charge_warning_threshold = 0.10
 
+        self.substep_history_iter = []
+        self.substep_history_ion  = []
+        self.substep_history_e    = []
+        self.last_n_sub_ion       = 1
+        self.last_n_sub_e         = 1
+
     def step(self, params):
         if self.laplacian_lu is None:
             return False, np.nan, np.nan, self.T_grids, 0.0

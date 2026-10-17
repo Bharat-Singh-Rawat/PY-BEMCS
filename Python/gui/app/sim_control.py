@@ -127,6 +127,10 @@ class SimControlMixin:
         self.T_histories = {i: [] for i in range(len(self.grid_widgets))}
         self.tracking_buffer.clear()
         self.recorded_frames.clear()
+        if hasattr(self, 'substep_history_iter'):
+            self.substep_history_iter.clear()
+            self.substep_history_ion.clear()
+            self.substep_history_e.clear()
         if hasattr(self, 'chk_record'):
             self.chk_record.setChecked(False)
             self.chk_record.setText("Record Frames (0)")
@@ -217,6 +221,8 @@ class SimControlMixin:
 
         if getattr(self, 'mesh_window', None) is not None and self.mesh_window.isVisible():
             self.mesh_window.update_plot(self.sim, params=self.get_params())
+        if getattr(self, 'substep_window', None) is not None and self.substep_window.isVisible():
+            self.substep_window.update_plot(self.sim)
 
     def _on_worker_finished(self):
         """Called when the SimulationWorker thread exits its run loop."""

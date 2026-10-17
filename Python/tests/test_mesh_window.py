@@ -71,6 +71,38 @@ class TestMeshWindow(unittest.TestCase):
 
         win.close()
 
+    def test_substep_graph_widget_and_window(self):
+        from diagnostics.mesh_window import DisplacementSubstepsWindow, SubstepGraphWidget
+        self.sim.build_domain(self.params)
+        self.sim.substep_history_iter = [1, 2, 3, 4]
+        self.sim.substep_history_ion  = [1, 1, 2, 1]
+        self.sim.substep_history_e    = [1, 4, 8, 2]
+
+        sub_win = DisplacementSubstepsWindow()
+        sub_win.update_plot(self.sim)
+
+        widget = sub_win.substep_widget
+        self.assertIn("4", widget.lbl_curr_iter.text())
+        self.assertIn("1", widget.lbl_curr_ion.text())
+        self.assertIn("2", widget.lbl_curr_elec.text())
+        self.assertIn("Ion Violations:", widget.lbl_viol_ion.text())
+        self.assertIn("Electron Violations:", widget.lbl_viol_elec.text())
+
+        # Test filter violations toggle
+        widget.chk_violations.setChecked(True)
+        widget.chk_violations.setChecked(False)
+
+        sub_win.close()
+
+    def test_mesh_window_second_window_popup(self):
+        win = MeshWindow()
+        self.assertIsNone(win._substeps_dialog)
+        win.btn_open_substeps.click()
+        self.assertIsNotNone(win._substeps_dialog)
+        self.assertTrue(win._substeps_dialog.isVisible())
+        win._substeps_dialog.close()
+        win.close()
+
     def test_gui_integration_open_mesh_window(self):
         gui = DigitalTwinApp()
         self.assertIsNone(gui.mesh_window)
@@ -80,6 +112,16 @@ class TestMeshWindow(unittest.TestCase):
         gui.mesh_window.close()
         gui.close()
 
+    def test_gui_integration_open_substep_window(self):
+        gui = DigitalTwinApp()
+        self.assertIsNone(gui.substep_window)
+        gui.open_substep_window()
+        self.assertIsNotNone(gui.substep_window)
+        self.assertTrue(gui.substep_window.isVisible())
+        gui.substep_window.close()
+        gui.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
