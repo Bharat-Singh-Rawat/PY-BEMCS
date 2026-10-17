@@ -77,10 +77,7 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
                 f"(stuck at delta_V = {delta_V:.2f} V, rms {rms_V*1000:.1f} mV, progress < 2% over 5 iters{extra_info}). Terminated at Picard iter {n_done}."
             )
         elif status == 'converged_newton':
-            print(
-                f"[Poisson Info] Iter {self.iteration}: Successfully converged via Newton-Raphson fallback "
-                f"(final delta_V = {delta_V:.4f} V across {n_done} total iters)."
-            )
+            pass
         elif status == 'diverged_newton':
             print(
                 f"[Poisson Warning] Iter {self.iteration}: Newton-Raphson fallback failed to reach tolerance "
