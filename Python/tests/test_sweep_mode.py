@@ -128,16 +128,7 @@ class TestSweepDialogs(unittest.TestCase):
             tmp_txt_path = tmp_txt.name
 
         try:
-            with open(tmp_txt_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f, delimiter="\t")
-                unconverged = [r for r in mock_results if not r.get("steady_state_reached", True)]
-                if unconverged:
-                    writer.writerow([f"# WARNING: {len(unconverged)} of {len(mock_results)} scenarios DID NOT reach steady state within {cfg['max_iterations']} iterations!"])
-                writer.writerow(["scenario_idx", "parameter_value", "steady_state_reached", "warning_note"])
-                for r in mock_results:
-                    reached = r.get("steady_state_reached", True)
-                    warn = "" if reached else f"WARNING: Max iterations ({r.get('max_iters_hit', 5000)}) reached without steady state"
-                    writer.writerow([r["scenario_idx"], r["parameter_value"], "YES" if reached else "NO", warn])
+            dlg._write_tabular(tmp_txt_path, is_txt=True, notify=False)
 
             with open(tmp_txt_path, "r", encoding="utf-8") as f:
                 txt_content = f.read()
