@@ -1543,10 +1543,15 @@ class SweepResultsDialog(QDialog):
         # Action Buttons
         btn_row = QHBoxLayout()
 
-        btn_export_csv = QPushButton("Export Summary to CSV...")
+        btn_export_csv = QPushButton("Export to CSV...")
         btn_export_csv.setStyleSheet("font-weight: bold; padding: 6px 12px;")
         btn_export_csv.clicked.connect(self._export_csv)
         btn_row.addWidget(btn_export_csv)
+
+        btn_export_txt = QPushButton("Export to TXT...")
+        btn_export_txt.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        btn_export_txt.clicked.connect(self._export_txt)
+        btn_row.addWidget(btn_export_txt)
 
         btn_export_json = QPushButton("Export to JSON...")
         btn_export_json.clicked.connect(self._export_json)
@@ -1561,16 +1566,36 @@ class SweepResultsDialog(QDialog):
         layout.addLayout(btn_row)
 
     def _export_csv(self):
+        self._export_tabular(default_ext=".csv", file_filter="CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)")
+
+    def _export_txt(self):
+        self._export_tabular(default_ext=".txt", file_filter="Text Files (*.txt);;CSV Files (*.csv);;All Files (*.*)")
+
+    def _export_tabular(self, default_ext=".csv", file_filter="CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)"):
         import csv
-        fpath, _ = QFileDialog.getSaveFileName(self, "Export Sweep Results to CSV", "sweep_results.csv", "CSV Files (*.csv)")
+        import os
+        default_name = f"sweep_results{default_ext}"
+        fpath, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            f"Export Sweep Results ({default_ext.upper().replace('.', '')})",
+            default_name,
+            file_filter
+        )
         if not fpath:
             return
 
+        is_txt = "(*.txt)" in selected_filter or fpath.lower().endswith(".txt")
+        if is_txt and not fpath.lower().endswith(".txt"):
+            fpath += ".txt"
+        elif not is_txt and not fpath.lower().endswith(".csv"):
+            fpath += ".csv"
+
+        delim = "\t" if is_txt else ","
         unconverged = [r for r in self.results if not r.get("steady_state_reached", True)]
         param_label = self.sweep_config.get("param_label", "Parameter")
 
         with open(fpath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
+            writer = csv.writer(f, delimiter=delim)
             writer.writerow(["# PY-BEMCS Parametric Sweep Results"])
             writer.writerow([f"# Swept Parameter: {param_label}"])
             writer.writerow([f"# Total Scenarios: {len(self.results)}"])
@@ -1625,7 +1650,8 @@ class SweepResultsDialog(QDialog):
                     r.get("field_energy_J", ""),
                 ])
 
-        QMessageBox.information(self, "Export Complete", f"Sweep results successfully saved to:\n{fpath}")
+        fmt_name = "Text file (.txt)" if is_txt else "CSV file (.csv)"
+        QMessageBox.information(self, "Export Complete", f"Sweep results successfully saved as {fmt_name} to:\n{fpath}")
 
     def _export_json(self):
         import json
