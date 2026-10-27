@@ -182,12 +182,15 @@ class SimControlMixin:
         _last = getattr(self, '_last_auto_neut_x', None)
         _current_neut = round(self.inputs["neut_x"].value(), 3)
         if _current_neut > self.sim.Lx or _current_neut < 0.0:
-            QMessageBox.warning(
-                self,
-                "Neutralizer Warning",
-                f"Neutralizer axial position (x = {_current_neut:.3f} mm) is settled outside the x-domain [0, {self.sim.Lx:.3f} mm].\n\n"
-                f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
-            )
+            if not getattr(self, 'is_sweep_active', False):
+                QMessageBox.warning(
+                    self,
+                    "Neutralizer Warning",
+                    f"Neutralizer axial position (x = {_current_neut:.3f} mm) is settled outside the x-domain [0, {self.sim.Lx:.3f} mm].\n\n"
+                    f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
+                )
+            else:
+                print(f"[Sweep Mode] Auto-clamped neut_x from {_current_neut:.3f} mm to {self.sim.Lx:.3f} mm")
             self.inputs["neut_x"].blockSignals(True)
             self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
             self.inputs["neut_x"].blockSignals(False)

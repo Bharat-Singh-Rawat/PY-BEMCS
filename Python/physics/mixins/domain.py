@@ -375,6 +375,9 @@ class DomainMixin:
         self.charge_history_q_net.clear()
         self._prev_total_charge = None
 
+        if hasattr(self, 'potential_history'):
+            self.potential_history.clear()
+
         if hasattr(self, 'substep_history_iter'):
             self.substep_history_iter.clear()
             self.substep_history_ion.clear()

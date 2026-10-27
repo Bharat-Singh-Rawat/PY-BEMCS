@@ -216,6 +216,8 @@ class DigitalTwinSimulator(
         self._prev_total_charge  = None
         self.charge_warning_threshold = 0.10
 
+        self.potential_history   = []
+
         self.substep_history_iter = []
         self.substep_history_ion  = []
         self.substep_history_e    = []

@@ -25,6 +25,7 @@ from diagnostics import (
     MeshWindow,
     DisplacementSubstepsWindow,
     FieldDiagnosticWindow,
+    SteadyStateWindow,
 )
 
 
@@ -222,6 +223,16 @@ class DialogsMixin:
         self.field_window.activateWindow()
         if hasattr(self, 'sim'):
             self.field_window.update_plot(self.sim)
+
+    def open_steady_state_window(self):
+        """Open Steady State variation diagnostics window."""
+        if getattr(self, 'steady_state_window', None) is None:
+            self.steady_state_window = SteadyStateWindow(self)
+        self.steady_state_window.show()
+        self.steady_state_window.raise_()
+        self.steady_state_window.activateWindow()
+        if hasattr(self, 'sim'):
+            self.steady_state_window.update_plot(self.sim, self)
 
     def get_divergence_plane_limits(self):
         """Return (x_min, x_max) in mm defining the allowed range for the divergence evaluation plane."""

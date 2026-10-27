@@ -14,6 +14,7 @@ from .dialogs_mixin import DialogsMixin
 from .sim_control import SimControlMixin
 from .rendering import RenderingMixin
 from .export import ExportMixin
+from .sweep_mixin import SweepMixin
 
 
 class DigitalTwinApp(
@@ -23,7 +24,8 @@ class DigitalTwinApp(
     DialogsMixin,
     SimControlMixin,
     RenderingMixin,
-    ExportMixin
+    ExportMixin,
+    SweepMixin
 ):
     """Main window for PY-BEMCS orchestrating the interactive GUI, simulation loop, real-time plotting, and diagnostic windows."""
 
@@ -101,7 +103,13 @@ class DigitalTwinApp(
         self.cs_viewer_window = None
         self.mesh_window = None
         self.field_window = None
+        self.steady_state_window = None
         self.substep_window = None
+        self.is_sweep_active = False
+        self.sweep_config = None
+        self.sweep_results = []
+        self.sweep_current_idx = 0
+        self.sweep_scenario_start_iter = 0
         self.substep_history_iter = []
         self.substep_history_ion = []
         self.substep_history_e = []

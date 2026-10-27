@@ -144,3 +144,68 @@ def compute_charge_budget(sim):
         q_free_C=q_free,
         q_net_C=q_net,
     )
+
+
+def compute_rolling_variation(history, window=50, mode="rel_change", eps=1e-12):
+    """
+    Compute percentage variation of a time series across a rolling window of iterations.
+
+    Parameters
+    ----------
+    history : array-like
+        1D sequence of physical values across iterations.
+    window : int, optional
+        Window size in iterations (default 50).
+    mode : {'rel_change', 'p2p_spread', 'abs_change'}, optional
+        - 'rel_change': (Q[k] - Q[k-W]) / (|Q[k-W]| + eps) * 100 [%]
+        - 'abs_change': |Q[k] - Q[k-W]| / (|Q[k-W]| + eps) * 100 [%]
+        - 'p2p_spread': (max(Q[k-W:k]) - min(Q[k-W:k])) / (|mean(Q[k-W:k])| + eps) * 100 [%]
+    eps : float, optional
+        Small regularization constant to prevent division by zero.
+
+    Returns
+    -------
+    iters : np.ndarray
+        Indices corresponding to computed variations (0-indexed or 1-indexed matching history).
+    variations : np.ndarray
+        Percentage variation values for each valid iteration.
+    """
+    arr = np.asarray(history, dtype=np.float64)
+    n = len(arr)
+    if n <= 1:
+        return np.empty(0, dtype=int), np.empty(0, dtype=np.float64)
+
+    w = max(1, int(window))
+    if n <= w:
+        # If history has fewer elements than window, compute against the first available element
+        idx = np.arange(1, n)
+        if mode in ("rel_change", "abs_change"):
+            base = np.abs(arr[0]) + eps
+            diff = arr[1:] - arr[0]
+            if mode == "abs_change":
+                diff = np.abs(diff)
+            var = (diff / base) * 100.0
+        else: # p2p_spread
+            var = np.zeros(len(idx), dtype=np.float64)
+            for i, k in enumerate(idx):
+                sub = arr[:k + 1]
+                denom = np.abs(np.mean(sub)) + eps
+                var[i] = ((np.max(sub) - np.min(sub)) / denom) * 100.0
+        return idx, var
+
+    idx = np.arange(w, n)
+    if mode in ("rel_change", "abs_change"):
+        base = np.abs(arr[:n - w]) + eps
+        diff = arr[w:] - arr[:n - w]
+        if mode == "abs_change":
+            diff = np.abs(diff)
+        var = (diff / base) * 100.0
+    else:  # p2p_spread
+        var = np.zeros(len(idx), dtype=np.float64)
+        for i, k in enumerate(idx):
+            sub = arr[k - w : k + 1]
+            denom = np.abs(np.mean(sub)) + eps
+            var[i] = ((np.max(sub) - np.min(sub)) / denom) * 100.0
+
+    return idx, var
+

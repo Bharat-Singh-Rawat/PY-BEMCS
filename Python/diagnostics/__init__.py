@@ -6,7 +6,7 @@ and Qt diagnostic pop-up visualization windows.
 """
 
 from .performance_monitor import PerformanceMonitor, StepDiagnostics
-from .metrics import compute_energy_budget, compute_charge_budget
+from .metrics import compute_energy_budget, compute_charge_budget, compute_rolling_variation
 from .cs_viewer_window import CrossSectionViewerWindow
 from .iedf_window import IEDFWindow
 from .ppc_window import PPCWindow
@@ -15,12 +15,14 @@ from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
 from .perf_window import PerformanceMonitorWindow
 from .mesh_window import MeshWindow, DisplacementSubstepsWindow, SubstepGraphWidget
 from .field_window import FieldDiagnosticWindow
+from .steady_state_window import SteadyStateWindow
 
 __all__ = [
     "PerformanceMonitor",
     "StepDiagnostics",
     "compute_energy_budget",
     "compute_charge_budget",
+    "compute_rolling_variation",
     "CrossSectionViewerWindow",
     "IEDFWindow",
     "PPCWindow",
@@ -33,4 +35,5 @@ __all__ = [
     "DisplacementSubstepsWindow",
     "SubstepGraphWidget",
     "FieldDiagnosticWindow",
+    "SteadyStateWindow",
 ]

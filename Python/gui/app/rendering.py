@@ -100,6 +100,8 @@ class RenderingMixin:
             self.mesh_window.update_plot(self.sim, params=self.get_params())
         if getattr(self, 'substep_window', None) and self.substep_window.isVisible():
             self.substep_window.update_plot(self.sim)
+        if getattr(self, 'steady_state_window', None) and self.steady_state_window.isVisible():
+            self.steady_state_window.update_plot(self.sim, self)
 
         v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
         if v_init_saddle is not None:
@@ -276,6 +278,8 @@ class RenderingMixin:
                 self.mesh_window.update_plot(self.sim, params=self.get_params())
             if getattr(self, 'substep_window', None) and self.substep_window.isVisible():
                 self.substep_window.update_plot(self.sim)
+            if getattr(self, 'steady_state_window', None) and self.steady_state_window.isVisible():
+                self.steady_state_window.update_plot(self.sim, self)
 
         if self.chk_track_ptcls.isChecked():
             ptcl_data = self.sim.get_particle_kinematics()
@@ -432,6 +436,9 @@ class RenderingMixin:
             p = self.get_params()
             p['_last_gui_ms'] = self._last_gui_ms
             self._sim_worker.update_params(p)
+
+        if getattr(self, 'is_sweep_active', False):
+            self.check_sweep_steady_state()
 
     def _update_div_legend(self):
         """Build/update interactive clickable legend with [x] / [ ] checkmarks for ax_div."""

@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QFormLayout, QDoubleSpinBox, QSpinBox, QPushButton,
     QCheckBox, QGroupBox, QButtonGroup, QRadioButton,
-    QMessageBox, QScrollArea, QWidget, QFrame
+    QMessageBox, QScrollArea, QWidget, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog
 )
 from .workers.simulation_worker import SimulationWorker
 
@@ -1156,5 +1157,500 @@ class UpstreamGapDialog(QDialog):
                 "final_gap": gap,
             }
             return gap, settings
+
+
+SWEEP_PARAMETERS = [
+    {
+        "id": "Te_up",
+        "label": "Upstream Electron Temp Te_up (eV)",
+        "unit": "eV",
+        "default_start": 2.0,
+        "default_end": 10.0,
+        "default_n": 5,
+        "min": 0.01,
+        "max": 1000.0,
+        "step": 0.5,
+        "decimals": 2,
+        "scientific": False,
+    },
+    {
+        "id": "n0_plasma",
+        "label": "Plasma Density n0_plasma (m⁻³)",
+        "unit": "m⁻³",
+        "default_start": 1e16,
+        "default_end": 1e18,
+        "default_n": 5,
+        "min": 1e12,
+        "max": 1e25,
+        "step": 1e16,
+        "decimals": 4,
+        "scientific": True,
+    },
+    {
+        "id": "Ti",
+        "label": "Ion Temperature Ti (eV)",
+        "unit": "eV",
+        "default_start": 0.1,
+        "default_end": 2.0,
+        "default_n": 5,
+        "min": 0.01,
+        "max": 1000.0,
+        "step": 0.1,
+        "decimals": 2,
+        "scientific": False,
+    },
+    {
+        "id": "n0",
+        "label": "Neutral Gas Density n0 (m⁻³)",
+        "unit": "m⁻³",
+        "default_start": 1e17,
+        "default_end": 1e19,
+        "default_n": 5,
+        "min": 1e12,
+        "max": 1e25,
+        "step": 1e17,
+        "decimals": 4,
+        "scientific": True,
+    },
+    {
+        "id": "Tn",
+        "label": "Neutral Gas Temp Tn (K)",
+        "unit": "K",
+        "default_start": 300.0,
+        "default_end": 800.0,
+        "default_n": 5,
+        "min": 1.0,
+        "max": 10000.0,
+        "step": 50.0,
+        "decimals": 1,
+        "scientific": False,
+    },
+    {
+        "id": "grid_1_V",
+        "label": "Grid 1 DC Voltage (V)",
+        "unit": "V",
+        "default_start": 800.0,
+        "default_end": 1600.0,
+        "default_n": 5,
+        "min": -5000.0,
+        "max": 15000.0,
+        "step": 100.0,
+        "decimals": 1,
+        "scientific": False,
+    },
+    {
+        "id": "grid_2_V",
+        "label": "Grid 2 DC Voltage (V)",
+        "unit": "V",
+        "default_start": -400.0,
+        "default_end": -100.0,
+        "default_n": 5,
+        "min": -5000.0,
+        "max": 5000.0,
+        "step": 50.0,
+        "decimals": 1,
+        "scientific": False,
+    },
+    {
+        "id": "Te",
+        "label": "Neutralizer Electron Temp Te (eV)",
+        "unit": "eV",
+        "default_start": 1.0,
+        "default_end": 5.0,
+        "default_n": 5,
+        "min": 0.1,
+        "max": 100.0,
+        "step": 0.5,
+        "decimals": 2,
+        "scientific": False,
+    },
+]
+
+
+class SweepSettingsDialog(QDialog):
+    """
+    Dialog allowing the user to configure a parametric sweep across multiple scenarios.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Parametric Sweep Configuration")
+        self.setMinimumWidth(480)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        info_lbl = QLabel(
+            "<b>Parametric Sweep Simulation</b><br>"
+            "Automatically simulate multiple scenarios sequentially without manually editing parameters. "
+            "Scenarios transition automatically once <b>Steady State</b> is reached."
+        )
+        info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("color: #1e293b; background: #f8fafc; padding: 8px; border: 1px solid #e2e8f0; border-radius: 4px;")
+        layout.addWidget(info_lbl)
+
+        # ── Group 1: Parameter & Range ────────────────────────────────
+        gb_param = QGroupBox("1. Parameter & Sweep Range")
+        form_param = QFormLayout(gb_param)
+        form_param.setLabelAlignment(Qt.AlignRight)
+
+        self.combo_param = QComboBox()
+        for pdef in SWEEP_PARAMETERS:
+            self.combo_param.addItem(pdef["label"], pdef["id"])
+        self.combo_param.currentIndexChanged.connect(self._on_param_changed)
+        form_param.addRow("Quantity to Sweep:", self.combo_param)
+
+        self.spin_start = QDoubleSpinBox()
+        self.spin_start.setRange(-1e9, 1e25)
+        self.spin_start.setDecimals(4)
+        form_param.addRow("Start Value:", self.spin_start)
+
+        self.spin_end = QDoubleSpinBox()
+        self.spin_end.setRange(-1e9, 1e25)
+        self.spin_end.setDecimals(4)
+        form_param.addRow("End Value:", self.spin_end)
+
+        self.spin_n = QSpinBox()
+        self.spin_n.setRange(2, 100)
+        self.spin_n.setValue(5)
+        self.spin_n.valueChanged.connect(self._update_preview)
+        form_param.addRow("Number of Simulations:", self.spin_n)
+
+        self.combo_scale = QComboBox()
+        self.combo_scale.addItem("Linear Spacing", "linear")
+        self.combo_scale.addItem("Logarithmic Spacing", "log")
+        self.combo_scale.currentIndexChanged.connect(self._update_preview)
+        form_param.addRow("Spacing Mode:", self.combo_scale)
+
+        self.lbl_preview = QLabel()
+        self.lbl_preview.setStyleSheet("color: #475569; font-style: italic; font-size: 11px;")
+        form_param.addRow("Values Preview:", self.lbl_preview)
+
+        layout.addWidget(gb_param)
+
+        # ── Group 2: Steady-State Transition Criteria ─────────────────
+        gb_steady = QGroupBox("2. Steady-State Transition Criteria")
+        form_steady = QFormLayout(gb_steady)
+        form_steady.setLabelAlignment(Qt.AlignRight)
+
+        self.spin_window = QSpinBox()
+        self.spin_window.setRange(10, 500)
+        self.spin_window.setValue(50)
+        self.spin_window.setSuffix(" iterations")
+        form_steady.addRow("Rolling Window:", self.spin_window)
+
+        self.spin_thresh = QDoubleSpinBox()
+        self.spin_thresh.setRange(0.05, 20.0)
+        self.spin_thresh.setValue(1.0)
+        self.spin_thresh.setSingleStep(0.2)
+        self.spin_thresh.setSuffix(" %")
+        form_steady.addRow("Stationary Tolerance:", self.spin_thresh)
+
+        self.spin_max_iters = QSpinBox()
+        self.spin_max_iters.setRange(100, 100000)
+        self.spin_max_iters.setValue(5000)
+        self.spin_max_iters.setSingleStep(500)
+        self.spin_max_iters.setSuffix(" iterations")
+        self.spin_max_iters.setToolTip("Safeguard upper bound: if steady state is not reached within this count, a warning is recorded and the sweep proceeds.")
+        form_steady.addRow("Safeguard Max Iterations:", self.spin_max_iters)
+
+        self.spin_min_iters = QSpinBox()
+        self.spin_min_iters.setRange(10, 2000)
+        self.spin_min_iters.setValue(50)
+        self.spin_min_iters.setSuffix(" iterations")
+        form_steady.addRow("Min Iterations per Point:", self.spin_min_iters)
+
+        layout.addWidget(gb_steady)
+
+        # Buttons
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancel)
+
+        btn_start = QPushButton("Start Sweep")
+        btn_start.setStyleSheet("font-weight: bold; background-color: #7e22ce; color: white; padding: 6px 14px; border-radius: 4px;")
+        btn_start.clicked.connect(self.accept)
+        btn_box.addWidget(btn_start)
+
+        layout.addLayout(btn_box)
+
+        # Initialize with first parameter
+        self._on_param_changed()
+
+    def _on_param_changed(self):
+        idx = self.combo_param.currentIndex()
+        if idx < 0 or idx >= len(SWEEP_PARAMETERS):
+            return
+        pdef = SWEEP_PARAMETERS[idx]
+        unit = pdef.get("unit", "")
+        self.spin_start.setSuffix(f" {unit}" if unit else "")
+        self.spin_end.setSuffix(f" {unit}" if unit else "")
+
+        if pdef.get("scientific", False):
+            self.spin_start.setDecimals(4)
+            self.spin_end.setDecimals(4)
+            if self.combo_scale.findData("log") >= 0:
+                self.combo_scale.setCurrentIndex(self.combo_scale.findData("log"))
+        else:
+            self.spin_start.setDecimals(pdef.get("decimals", 2))
+            self.spin_end.setDecimals(pdef.get("decimals", 2))
+            self.combo_scale.setCurrentIndex(0)
+
+        self.spin_start.setValue(pdef.get("default_start", 2.0))
+        self.spin_end.setValue(pdef.get("default_end", 10.0))
+        self.spin_n.setValue(pdef.get("default_n", 5))
+        self._update_preview()
+
+    def _update_preview(self):
+        vals = self.get_values_array()
+        if len(vals) == 0:
+            self.lbl_preview.setText("—")
+            return
+        if len(vals) <= 6:
+            txt = ", ".join(f"{v:.3g}" for v in vals)
+        else:
+            txt = f"{vals[0]:.3g}, {vals[1]:.3g}, ... {vals[-1]:.3g} ({len(vals)} points)"
+        self.lbl_preview.setText(f"[{txt}]")
+
+    def get_values_array(self):
+        start = self.spin_start.value()
+        end = self.spin_end.value()
+        n = self.spin_n.value()
+        scale = self.combo_scale.currentData()
+        if scale == "log" and start > 0 and end > 0:
+            import numpy as np
+            return np.logspace(np.log10(start), np.log10(end), n)
+        else:
+            import numpy as np
+            return np.linspace(start, end, n)
+
+    def get_config(self):
+        idx = self.combo_param.currentIndex()
+        pdef = SWEEP_PARAMETERS[idx]
+        return {
+            "param_id": pdef["id"],
+            "param_label": pdef["label"],
+            "param_unit": pdef.get("unit", ""),
+            "start": self.spin_start.value(),
+            "end": self.spin_end.value(),
+            "n_sims": self.spin_n.value(),
+            "scale": self.combo_scale.currentData(),
+            "values": self.get_values_array().tolist(),
+            "window": self.spin_window.value(),
+            "threshold": self.spin_thresh.value(),
+            "max_iterations": self.spin_max_iters.value(),
+            "min_iterations": self.spin_min_iters.value(),
+        }
+
+
+class SweepResultsDialog(QDialog):
+    """
+    Pop-up dialog displaying results of a completed parametric sweep,
+    including clear flags/warnings if steady state was not reached,
+    and one-click CSV / JSON export.
+    """
+    def __init__(self, sweep_config, results, parent=None):
+        super().__init__(parent)
+        self.sweep_config = sweep_config
+        self.results = results
+        self.setWindowTitle("Parametric Sweep Results")
+        self.resize(880, 480)
+        self.setMinimumSize(700, 380)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Header with warning if any point failed steady state
+        param_label = sweep_config.get("param_label", "Parameter")
+        unconverged_count = sum(1 for r in results if not r.get("steady_state_reached", True))
+
+        header_box = QFrame()
+        header_box.setFrameShape(QFrame.StyledPanel)
+        h_layout = QVBoxLayout(header_box)
+        h_layout.setContentsMargins(10, 8, 10, 8)
+
+        title_lbl = QLabel(f"<b>Sweep Completed: {len(results)} Scenarios ({param_label})</b>")
+        title_lbl.setStyleSheet("font-size: 13px; color: #1e293b;")
+        h_layout.addWidget(title_lbl)
+
+        if unconverged_count > 0:
+            warn_lbl = QLabel(
+                f"⚠️ <b>WARNING: {unconverged_count} of {len(results)} scenarios did not reach steady state "
+                f"within the safeguard limit of {sweep_config.get('max_iterations', 5000)} iterations!</b>"
+            )
+            warn_lbl.setStyleSheet("color: #b91c1c; font-weight: bold; background: #fee2e2; padding: 4px 8px; border-radius: 4px;")
+            h_layout.addWidget(warn_lbl)
+        else:
+            ok_lbl = QLabel("✓ All scenarios successfully achieved steady-state condition.")
+            ok_lbl.setStyleSheet("color: #15803d; font-weight: bold; background: #dcfce7; padding: 4px 8px; border-radius: 4px;")
+            h_layout.addWidget(ok_lbl)
+
+        layout.addWidget(header_box)
+
+        # Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels([
+            "Scenario",
+            f"{param_label}",
+            "Steady State?",
+            "Iterations",
+            "Saddle V (V)",
+            "Divergence (°)",
+            "Exit Current (A)",
+            "Transparency",
+            "Total Energy (J)",
+        ])
+        self.table.setRowCount(len(results))
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        for row, res in enumerate(results):
+            scen_idx = res.get("scenario_idx", row + 1)
+            p_val = res.get("parameter_value", 0.0)
+            ss_reached = res.get("steady_state_reached", True)
+            iters = res.get("steady_iterations", 0)
+            saddle_v = res.get("saddle_potential_V", 0.0)
+            div = res.get("divergence_deg", 0.0)
+            i_exit = res.get("exit_ion_current_A", 0.0)
+            trans = res.get("transparency", 0.0)
+            e_tot = res.get("total_energy_J", 0.0)
+
+            ss_text = "✓ YES" if ss_reached else f"⚠️ NO (Max {res.get('max_iters_hit', 5000)})"
+
+            self.table.setItem(row, 0, QTableWidgetItem(f"Scenario {scen_idx}"))
+            self.table.setItem(row, 1, QTableWidgetItem(f"{p_val:.4g}"))
+
+            item_ss = QTableWidgetItem(ss_text)
+            if not ss_reached:
+                item_ss.setForeground(Qt.red)
+            else:
+                item_ss.setForeground(Qt.darkGreen)
+            self.table.setItem(row, 2, item_ss)
+
+            self.table.setItem(row, 3, QTableWidgetItem(f"{iters:,}"))
+            self.table.setItem(row, 4, QTableWidgetItem(f"{saddle_v:.2f}"))
+            self.table.setItem(row, 5, QTableWidgetItem(f"{div:.2f}"))
+            self.table.setItem(row, 6, QTableWidgetItem(f"{i_exit:.3e}"))
+            self.table.setItem(row, 7, QTableWidgetItem(f"{trans:.3f}"))
+            self.table.setItem(row, 8, QTableWidgetItem(f"{e_tot:.3e}"))
+
+        layout.addWidget(self.table, 1)
+
+        # Action Buttons
+        btn_row = QHBoxLayout()
+
+        btn_export_csv = QPushButton("Export Summary to CSV...")
+        btn_export_csv.setStyleSheet("font-weight: bold; padding: 6px 12px;")
+        btn_export_csv.clicked.connect(self._export_csv)
+        btn_row.addWidget(btn_export_csv)
+
+        btn_export_json = QPushButton("Export to JSON...")
+        btn_export_json.clicked.connect(self._export_json)
+        btn_row.addWidget(btn_export_json)
+
+        btn_row.addStretch()
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(btn_close)
+
+        layout.addLayout(btn_row)
+
+    def _export_csv(self):
+        import csv
+        fpath, _ = QFileDialog.getSaveFileName(self, "Export Sweep Results to CSV", "sweep_results.csv", "CSV Files (*.csv)")
+        if not fpath:
+            return
+
+        unconverged = [r for r in self.results if not r.get("steady_state_reached", True)]
+        param_label = self.sweep_config.get("param_label", "Parameter")
+
+        with open(fpath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["# PY-BEMCS Parametric Sweep Results"])
+            writer.writerow([f"# Swept Parameter: {param_label}"])
+            writer.writerow([f"# Total Scenarios: {len(self.results)}"])
+
+            if unconverged:
+                writer.writerow([
+                    f"# WARNING: {len(unconverged)} of {len(self.results)} scenarios DID NOT reach steady state "
+                    f"within the safeguard limit of {self.sweep_config.get('max_iterations', 5000)} iterations!"
+                ])
+                for r in unconverged:
+                    writer.writerow([f"# WARNING Scenario {r.get('scenario_idx')}: stopped at {r.get('steady_iterations')} iters without convergence."])
+            else:
+                writer.writerow(["# Status: All scenarios achieved steady state."])
+
+            # Header row
+            writer.writerow([
+                "scenario_idx",
+                "parameter_id",
+                "parameter_label",
+                "parameter_value",
+                "steady_state_reached",
+                "warning_note",
+                "iterations",
+                "t_sim_us",
+                "saddle_potential_V",
+                "beam_divergence_deg",
+                "exit_ion_current_A",
+                "grid_transparency",
+                "total_energy_J",
+                "total_charge_C",
+                "field_energy_J",
+            ])
+
+            for r in self.results:
+                reached = r.get("steady_state_reached", True)
+                warn = "" if reached else f"WARNING: Max iterations ({r.get('max_iters_hit', 5000)}) reached without steady state"
+                writer.writerow([
+                    r.get("scenario_idx", ""),
+                    self.sweep_config.get("param_id", ""),
+                    param_label,
+                    r.get("parameter_value", ""),
+                    "YES" if reached else "NO",
+                    warn,
+                    r.get("steady_iterations", ""),
+                    r.get("t_sim_us", ""),
+                    r.get("saddle_potential_V", ""),
+                    r.get("divergence_deg", ""),
+                    r.get("exit_ion_current_A", ""),
+                    r.get("transparency", ""),
+                    r.get("total_energy_J", ""),
+                    r.get("total_charge_C", ""),
+                    r.get("field_energy_J", ""),
+                ])
+
+        QMessageBox.information(self, "Export Complete", f"Sweep results successfully saved to:\n{fpath}")
+
+    def _export_json(self):
+        import json
+        fpath, _ = QFileDialog.getSaveFileName(self, "Export Sweep Results to JSON", "sweep_results.json", "JSON Files (*.json)")
+        if not fpath:
+            return
+
+        unconverged_count = sum(1 for r in self.results if not r.get("steady_state_reached", True))
+        data = {
+            "metadata": {
+                "software": "PY-BEMCS",
+                "sweep_config": self.sweep_config,
+                "total_scenarios": len(self.results),
+                "unconverged_count": unconverged_count,
+                "warning": (
+                    f"WARNING: {unconverged_count} scenarios did not reach steady state before hitting the safeguard limit of {self.sweep_config.get('max_iterations', 5000)} iterations!"
+                    if unconverged_count > 0 else None
+                ),
+            },
+            "results": self.results,
+        }
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        QMessageBox.information(self, "Export Complete", f"Sweep results successfully saved to:\n{fpath}")
+
 
 

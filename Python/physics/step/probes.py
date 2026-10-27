@@ -30,6 +30,8 @@ def step_midhole_probe(sim, ctx: StepContext):
     min_pot = float(sim.V[y_idx, x_idx])
     sim.min_pot = min_pot
     sim.saddle_point_potential = min_pot
+    if hasattr(sim, 'potential_history'):
+        sim.potential_history.append(min_pot)
     ctx.min_pot = min_pot
 
 

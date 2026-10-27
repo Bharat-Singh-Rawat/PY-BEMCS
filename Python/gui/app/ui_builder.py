@@ -39,6 +39,11 @@ class UIBuilderMixin:
         gui_action.triggered.connect(self.open_gui_settings)
         settings_menu.addAction(gui_action)
 
+        sweep_action = QAction("⚡ Sweep...", self)
+        sweep_action.setToolTip("Configure and start an automated parametric sweep across scenarios")
+        sweep_action.triggered.connect(self.open_sweep_dialog)
+        settings_menu.addAction(sweep_action)
+
         settings_menu.addSeparator()
 
         open_action = QAction("Open Config JSON...", self)
@@ -111,6 +116,10 @@ class UIBuilderMixin:
         field_action = QAction("⚡ Field Diagnostics (Ex, Ey, Quiver)...", self)
         field_action.triggered.connect(self.open_field_window)
         diag_menu.addAction(field_action)
+
+        steady_state_action = QAction("⚖️ Steady state...", self)
+        steady_state_action.triggered.connect(self.open_steady_state_window)
+        diag_menu.addAction(steady_state_action)
 
         self.lbl_active_config = QLabel(f"  Config: {self.current_config_name}  ")
         self.lbl_active_config.setStyleSheet(
@@ -242,6 +251,23 @@ class UIBuilderMixin:
         self.btn_reset_timer.setStyleSheet("padding: 2px 8px; font-size: 11px;")
         self.btn_reset_timer.clicked.connect(self.reset_simulation_timer)
         top_bar_layout.addWidget(self.btn_reset_timer)
+
+        self.lbl_sweep_badge = QLabel("Sweep mode active")
+        self.lbl_sweep_badge.setVisible(False)
+        self.lbl_sweep_badge.setStyleSheet(
+            "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
+            "border: 1px solid #c084fc; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        top_bar_layout.addWidget(self.lbl_sweep_badge)
+
+        self.btn_stop_sweep = QPushButton("Stop Sweep")
+        self.btn_stop_sweep.setVisible(False)
+        self.btn_stop_sweep.setStyleSheet(
+            "background-color: #fee2e2; color: #b91c1c; font-weight: bold; "
+            "border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        self.btn_stop_sweep.clicked.connect(self.stop_sweep)
+        top_bar_layout.addWidget(self.btn_stop_sweep)
 
         top_bar_layout.addStretch()
 
