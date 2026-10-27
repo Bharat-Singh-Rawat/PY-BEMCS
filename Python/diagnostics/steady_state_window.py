@@ -272,12 +272,21 @@ class SteadyStateWindow(QDialog):
         mode_key = self.combo_mode.itemData(mode_idx) or "rel_change"
         thresh = self.spin_thresh.value()
 
-        raw_data = self._get_raw_series(sim, app)
-        if not raw_data:
-            return
-
         self.ax.clear()
         self.ax.grid(True, linestyle="--", alpha=0.45)
+
+        raw_data = self._get_raw_series(sim, app)
+        max_series_len = max([len(v) for v in raw_data.values()] or [0]) if raw_data else 0
+        if not raw_data or max_series_len <= 1:
+            self.lbl_status_icon.setText("⚪")
+            self.lbl_status_text.setText(f"Awaiting simulation data (needs ≥ {window} iterations)...")
+            self.lbl_summary_stats.setText(f"Iter: {getattr(sim, 'iteration', 0)}")
+            mode_desc = self.combo_mode.currentText()
+            self.ax.set_title(f"Steady-State Variation across {window} Iterations — Awaiting Data", fontsize=10, fontweight="bold")
+            self.ax.set_xlabel("Simulation Iteration", fontsize=9)
+            self.ax.set_ylabel("Variation (%)", fontsize=9)
+            self.canvas.draw_idle()
+            return
 
         # Threshold band
         if mode_key in ("abs_change", "p2p_spread"):

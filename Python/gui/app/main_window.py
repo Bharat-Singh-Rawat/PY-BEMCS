@@ -49,6 +49,8 @@ class DigitalTwinApp(
         self.config = load_json_config(self.current_config_path)
         self.sim = DigitalTwinSimulator()
         self.sim_isRunning = False
+        self._sim_run_id = 0
+        self._pending_snap = None
 
         self.iter_history = []
         self.ebs_history  = []

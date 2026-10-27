@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import os
 import tempfile
 import csv
@@ -230,6 +231,110 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertFalse(self.win.is_sweep_active)
         self.assertFalse(self.win.btn_stop_sweep.isVisible())
         self.assertIn("stopped", self.win.lbl_sweep_badge.text())
+
+    def test_build_domain_clears_graphs_and_zeroes_initial_conditions(self):
+        # Populate artificial histories and graph lines as if simulation ran to 400 iters
+        self.win.iter_history = list(range(1, 401))
+        self.win.ebs_history = [-600.0] * 400
+        self.win.div_history = [12.0] * 400
+        self.win.line_ebs.set_data(self.win.iter_history, self.win.ebs_history)
+        self.win.line_div.set_data(self.win.iter_history, self.win.div_history)
+        self.win.sim.iteration = 400
+        self.win.sim.num_p = 500
+
+        # Execute build_domain (with patched warning popup to prevent blocking modal)
+        with patch('PyQt5.QtWidgets.QMessageBox.warning'):
+            self.win.build_domain()
+
+        # Check initial conditions are zero
+        self.assertEqual(self.win.sim.iteration, 0)
+        self.assertEqual(self.win.sim.num_p, 0)
+        self.assertEqual(len(self.win.sim.energy_history_tot), 0)
+        self.assertEqual(len(self.win.sim.charge_history_q_net), 0)
+
+        # Check histories and graph lines are clear
+        self.assertEqual(len(self.win.iter_history), 0)
+        self.assertEqual(len(self.win.ebs_history), 0)
+        self.assertEqual(len(self.win.div_history), 0)
+        self.assertEqual(len(self.win.line_ebs.get_xdata()), 0)
+        self.assertEqual(len(self.win.line_div.get_xdata()), 0)
+
+        # Verify that a stale snapshot from previous run_id is discarded
+        stale_snap = {
+            'run_id': self.win._sim_run_id - 1,
+            'iteration': 400,
+            'min_pot': -600.0,
+            'current_div': 12.0,
+            'current_div_mid': 12.0,
+        }
+        self.win._on_step_result(stale_snap)
+        self.assertEqual(len(self.win.iter_history), 0, "Stale snapshot should be discarded!")
+
+        # Verify that backward jumps in iteration clear histories rather than connecting back
+        self.win.iter_history = [400]
+        self.win.ebs_history = [-600.0]
+        self.win.div_history = [12.0]
+        # Simulate arrival of step 1 from a new run
+        snap_step1 = {
+            'params': {},
+            'remeshed': False,
+            'min_pot': -550.0,
+            'current_div': 11.0,
+            'current_div_mid': 11.0,
+            'T_grids': [],
+            'trans_last_frame': 0.8,
+            'transparency': 0.8,
+            'iteration': 1,
+            'dt': 1e-9,
+            'num_p': 10,
+            'num_e': 10,
+            'exit_vx_mean': 1e4,
+            'exit_v_mean': 1e4,
+            'exit_energy_mean_eV': 1000.0,
+            'exit_count_step': 5,
+            'exit_ion_current_step': 0.01,
+            'exit_ion_current_avg': 0.01,
+            'transmitted_ions_step': 5,
+            'total_active_cells': 20,
+            'low_ppc_cells': 2,
+            'injection_enabled': True,
+            'has_active_particles': True,
+            'run_id': self.win._sim_run_id,
+            'prim_xy': np.empty((0, 2)),
+            'cex_xy': np.empty((0, 2)),
+            'elec_xy': np.empty((0, 2)),
+            'e_prim_eV': np.empty(0),
+            'e_cex_eV': np.empty(0),
+            'perf_monitor': None,
+            'X': self.win.sim.X,
+            'Y': self.win.sim.Y,
+            'V': self.win.sim.V,
+            'damage_map': self.win.sim.damage_map,
+            'Tmap': None,
+            'isBound': self.win.sim.isBound,
+            'mask_grids': [],
+            'x_coords': self.win.sim.x_coords,
+            'y_coords': self.win.sim.y_coords,
+            'p_isCEX': np.empty(0, dtype=bool),
+            'p_vx': np.empty(0),
+            'p_vy': np.empty(0),
+            'e_x': np.empty(0),
+            'e_vx': np.empty(0),
+            'e_vy': np.empty(0),
+            'm_ion': self.win.sim.m_ion,
+            'm_e': self.win.sim.m_e,
+            'q': self.win.sim.q,
+            'Lx': self.win.sim.Lx,
+            'Ly': self.win.sim.Ly,
+            'dx': self.win.sim.dx,
+            'dy': self.win.sim.dy,
+            'nx': self.win.sim.nx,
+            'ny': self.win.sim.ny,
+        }
+        self.win._process_snap(snap_step1)
+        # Should now have only iteration 1, not [400, 1]!
+        self.assertEqual(self.win.iter_history, [1])
+        self.assertEqual(self.win.div_history, [11.0])
 
 
 if __name__ == "__main__":

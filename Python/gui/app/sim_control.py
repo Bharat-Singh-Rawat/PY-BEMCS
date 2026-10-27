@@ -91,7 +91,7 @@ class SimControlMixin:
             self.sim_isRunning = True
             self._resume_simulation_timer()
             self.btn_toggle.setText("PAUSE BEAM")
-            self._sim_worker.start_sim(self.get_params())
+            self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
         else:
             self.sim_isRunning = False
             self._sim_worker.pause()
@@ -103,6 +103,8 @@ class SimControlMixin:
         self._sim_worker.pause()
         if self._sim_worker.isRunning():
             self._sim_worker.wait(5000)
+        self._sim_run_id = getattr(self, '_sim_run_id', 0) + 1
+        self._pending_snap = None
         self._sim_worker._last_damage_version = -1
         self._sim_worker._last_damage_copy = None
         self.sim_isRunning = False
@@ -134,6 +136,12 @@ class SimControlMixin:
         if hasattr(self, 'chk_record'):
             self.chk_record.setChecked(False)
             self.chk_record.setText("Record Frames (0)")
+        if hasattr(self, 'div_scrollbar'):
+            self.div_scrollbar.blockSignals(True)
+            self.div_scrollbar.setMaximum(0)
+            self.div_scrollbar.setValue(0)
+            self.div_scrollbar.blockSignals(False)
+            self._div_live_mode = True
 
         self.lbl_status.setText("Building Multi-Grid Domain...")
         QApplication.processEvents()

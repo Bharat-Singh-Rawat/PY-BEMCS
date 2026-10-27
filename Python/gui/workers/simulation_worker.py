@@ -57,15 +57,17 @@ class SimulationWorker(QThread):
         self.sim = sim
         self._params = {}
         self._running = False
-        self._lock = threading.Lock()   # protects _params / _running
+        self._run_id = 0
+        self._lock = threading.Lock()   # protects _params / _running / _run_id
         self._last_damage_version = -1   # tracks when damage_map changed
         self._last_damage_copy = None    # last copied damage_map
 
     # ---- control interface (called from GUI thread) ----
-    def start_sim(self, params):
-        """Begin or resume the simulation loop with the given *params*."""
+    def start_sim(self, params, run_id=0):
+        """Begin or resume the simulation loop with the given *params* and *run_id*."""
         with self._lock:
             self._params = params
+            self._run_id = run_id
             self._running = True
         if not self.isRunning():
             self.start()            # QThread.start()
@@ -97,6 +99,7 @@ class SimulationWorker(QThread):
                 if not self._running:
                     break
                 params = self._params.copy()  # shallow copy is fine (values are immutable / lists)
+                run_id = self._run_id
 
             # ----- Heavy computation (runs off the GUI thread) -----
             try:
@@ -289,6 +292,7 @@ class SimulationWorker(QThread):
                 'perf_monitor': self.sim._perf_monitor,
                 # params echo-back
                 'params':     params,
+                'run_id':     run_id,
             }
 
             self.step_done.emit(snap)

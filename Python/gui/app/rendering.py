@@ -103,33 +103,25 @@ class RenderingMixin:
         if getattr(self, 'steady_state_window', None) and self.steady_state_window.isVisible():
             self.steady_state_window.update_plot(self.sim, self)
 
+        self.iter_history = []
+        self.ebs_history = []
+        self.div_history = []
+        self.div_mid_history = []
+        self.line_ebs.set_data([], [])
+        self.line_div.set_data([], [])
+        if hasattr(self, 'line_div_mid'):
+            self.line_div_mid.set_data([], [])
+
         v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
         if v_init_saddle is not None:
-            self.iter_history = [0]
-            self.ebs_history = [v_init_saddle]
-            self.div_history = [0.0]
-            self.div_mid_history = [0.0]
-            self.line_ebs.set_data(self.iter_history, self.ebs_history)
-            self.line_div.set_data(self.iter_history, self.div_history)
-            if hasattr(self, 'line_div_mid'):
-                self.line_div_mid.set_data(self.iter_history, self.div_mid_history)
             pad = max(20.0, abs(v_init_saddle) * 0.1)
             self.ax_ebs.set_xlim(0, 100)
             self.ax_ebs.set_ylim(v_init_saddle - pad, v_init_saddle + pad)
-            self.ax_div.set_xlim(0, 100)
-            self.ax_div.set_ylim(0, 45)
         else:
-            self.iter_history = []
-            self.ebs_history = []
-            self.div_history = []
-            self.div_mid_history = []
-            self.line_ebs.set_data([], [])
-            self.line_div.set_data([], [])
-            if hasattr(self, 'line_div_mid'):
-                self.line_div_mid.set_data([], [])
             self.ax_ebs.set_xlim(0, 100)
-            self.ax_div.set_xlim(0, 100)
-            self.ax_div.set_ylim(0, 45)
+            self.ax_ebs.set_ylim(-100, 100)
+        self.ax_div.set_xlim(0, 100)
+        self.ax_div.set_ylim(0, 45)
         self._update_div_plot_visibility()
 
         self.line_groove.set_data([], [])
@@ -157,6 +149,11 @@ class RenderingMixin:
 
     def _on_step_result(self, snap):
         """Process a single simulation step result on the GUI thread."""
+        expected_run_id = getattr(self, '_sim_run_id', 0)
+        if snap.get('run_id', expected_run_id) != expected_run_id:
+            # Discard stale snapshot emitted from a previous simulation run / prior to build_domain
+            return
+
         if self._gui_busy:
             self._pending_snap = snap
             return
@@ -174,7 +171,10 @@ class RenderingMixin:
             self._gui_busy = False
 
             if self._pending_snap is not None:
-                QTimer.singleShot(0, lambda: self._on_step_result(self._pending_snap))
+                if self._pending_snap.get('run_id', expected_run_id) == expected_run_id:
+                    QTimer.singleShot(0, lambda: self._on_step_result(self._pending_snap))
+                else:
+                    self._pending_snap = None
 
     def _process_snap(self, snap):
         """Inner body of _on_step_result."""
@@ -285,6 +285,28 @@ class RenderingMixin:
             ptcl_data = self.sim.get_particle_kinematics()
             if ptcl_data.size > 0:
                 self.tracking_buffer.append(ptcl_data)
+
+        # Safeguard against non-monotonic step indices across scenario transitions:
+        # If iteration resets or jumps backwards, clear all histories immediately
+        if self.iter_history and snap['iteration'] <= self.iter_history[-1]:
+            self.iter_history.clear()
+            self.ebs_history.clear()
+            self.div_history.clear()
+            self.div_mid_history.clear()
+            self.time_history.clear()
+            self.transparency_history.clear()
+            self.transparency3_history.clear()
+            self.ion_current_exit_history.clear()
+            self.ion_current_exit_avg_history.clear()
+            self.transmitted_ions_history.clear()
+            self.active_cells_history.clear()
+            self.low_ppc_cells_history.clear()
+            for i in self.T_histories:
+                self.T_histories[i].clear()
+            if hasattr(self, 'substep_history_iter'):
+                self.substep_history_iter.clear()
+                self.substep_history_ion.clear()
+                self.substep_history_e.clear()
 
         self.iter_history.append(snap['iteration'])
         if not hasattr(self, 'substep_history_iter'):
