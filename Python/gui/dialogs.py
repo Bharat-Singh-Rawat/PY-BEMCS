@@ -3,6 +3,7 @@ Modal configuration dialogs for PY-BEMCS.
 Includes Beam Species, Grid Material, Advanced Physics/Mesh, and GUI Settings dialogs.
 """
 import math
+import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QValidator
 from PyQt5.QtWidgets import (
@@ -1537,8 +1538,8 @@ class SweepResultsDialog(QDialog):
         self.sweep_config = sweep_config
         self.results = results
         self.setWindowTitle("Parametric Sweep Results")
-        self.resize(880, 480)
-        self.setMinimumSize(700, 380)
+        self.resize(1020, 500)
+        self.setMinimumSize(800, 400)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -1572,15 +1573,17 @@ class SweepResultsDialog(QDialog):
 
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(11)
         self.table.setHorizontalHeaderLabels([
             "Scenario",
             f"{param_label}",
             "Steady State?",
             "Iterations",
             "Saddle V (V)",
-            "Divergence (°)",
+            "Divergence Grid Exit (°)",
+            "Divergence 2nd Plane (°)",
             "Exit Current (A)",
+            "Perveance Fraction",
             "Transparency",
             "Total Energy (J)",
         ])
@@ -1599,8 +1602,16 @@ class SweepResultsDialog(QDialog):
             ss_reached = res.get("steady_state_reached", True)
             iters = res.get("steady_iterations", 0)
             saddle_v = res.get("saddle_potential_V", 0.0)
-            div = res.get("divergence_deg", 0.0)
+            div = res.get("divergence_deg", res.get("divergence_grid_deg", 0.0))
+            div_2nd = res.get("divergence_2nd_plane_deg")
+            if div_2nd is None:
+                div_2nd = res.get("divergence_plane2_deg")
+            if div_2nd is None:
+                div_2nd = res.get("divergence_mid_deg", 0.0)
             i_exit = res.get("exit_ion_current_A", 0.0)
+            perv_frac = res.get("perveance_fraction")
+            if perv_frac is None:
+                perv_frac = res.get("P_fraction")
             trans = res.get("transparency", 0.0)
             e_tot = res.get("total_energy_J", 0.0)
 
@@ -1619,10 +1630,15 @@ class SweepResultsDialog(QDialog):
 
             self.table.setItem(row, 3, QTableWidgetItem(f"{iters:,}"))
             self.table.setItem(row, 4, QTableWidgetItem(f"{saddle_v:.2f}"))
-            self.table.setItem(row, 5, QTableWidgetItem(f"{div:.2f}"))
-            self.table.setItem(row, 6, QTableWidgetItem(f"{i_exit:.3e}"))
-            self.table.setItem(row, 7, QTableWidgetItem(f"{trans:.3f}"))
-            self.table.setItem(row, 8, QTableWidgetItem(f"{e_tot:.3e}"))
+            div_str = f"{div:.2f}" if (isinstance(div, (int, float)) and np.isfinite(div)) else str(div)
+            self.table.setItem(row, 5, QTableWidgetItem(div_str))
+            div_2nd_str = f"{div_2nd:.2f}" if (isinstance(div_2nd, (int, float)) and np.isfinite(div_2nd)) else str(div_2nd)
+            self.table.setItem(row, 6, QTableWidgetItem(div_2nd_str))
+            self.table.setItem(row, 7, QTableWidgetItem(f"{i_exit:.3e}"))
+            perv_frac_str = f"{perv_frac:.4f}" if (isinstance(perv_frac, (int, float)) and np.isfinite(perv_frac)) else ("N/A" if perv_frac is None else str(perv_frac))
+            self.table.setItem(row, 8, QTableWidgetItem(perv_frac_str))
+            self.table.setItem(row, 9, QTableWidgetItem(f"{trans:.3f}"))
+            self.table.setItem(row, 10, QTableWidgetItem(f"{e_tot:.3e}"))
 
         layout.addWidget(self.table, 1)
 
@@ -1711,7 +1727,11 @@ class SweepResultsDialog(QDialog):
                 "t_sim_us",
                 "saddle_potential_V",
                 "beam_divergence_deg",
+                "beam_divergence_2nd_plane_deg",
                 "exit_ion_current_A",
+                "perveance_effective",
+                "perveance_max",
+                "perveance_fraction",
                 "grid_transparency",
                 "total_energy_J",
                 "total_charge_C",
@@ -1731,6 +1751,20 @@ class SweepResultsDialog(QDialog):
                     val_str = format_sci_value(val)
                 else:
                     val_str = val
+                div_val = r.get("divergence_deg", r.get("divergence_grid_deg", ""))
+                div_2nd_val = r.get("divergence_2nd_plane_deg")
+                if div_2nd_val is None:
+                    div_2nd_val = r.get("divergence_plane2_deg")
+                if div_2nd_val is None:
+                    div_2nd_val = r.get("divergence_mid_deg", "")
+
+                p_eff = r.get("perveance_effective", r.get("Peffective", ""))
+                p_max = r.get("perveance_max", r.get("Pmax", ""))
+                p_frac = r.get("perveance_fraction", r.get("P_fraction", ""))
+                p_eff_str = f"{p_eff:.4e}" if (isinstance(p_eff, (int, float)) and np.isfinite(p_eff)) else str(p_eff)
+                p_max_str = f"{p_max:.4e}" if (isinstance(p_max, (int, float)) and np.isfinite(p_max)) else str(p_max)
+                p_frac_str = f"{p_frac:.4f}" if (isinstance(p_frac, (int, float)) and np.isfinite(p_frac)) else str(p_frac)
+
                 writer.writerow([
                     r.get("scenario_idx", ""),
                     self.sweep_config.get("param_id", ""),
@@ -1741,8 +1775,12 @@ class SweepResultsDialog(QDialog):
                     r.get("steady_iterations", ""),
                     r.get("t_sim_us", ""),
                     r.get("saddle_potential_V", ""),
-                    r.get("divergence_deg", ""),
+                    div_val,
+                    div_2nd_val,
                     r.get("exit_ion_current_A", ""),
+                    p_eff_str,
+                    p_max_str,
+                    p_frac_str,
                     r.get("transparency", ""),
                     r.get("total_energy_J", ""),
                     r.get("total_charge_C", ""),

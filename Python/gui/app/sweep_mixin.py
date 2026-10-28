@@ -177,9 +177,25 @@ class SweepMixin:
         q_net = sim.charge_history_q_net[-1] if hasattr(sim, 'charge_history_q_net') and sim.charge_history_q_net else 0.0
         fe = sim.energy_history_fe[-1] if hasattr(sim, 'energy_history_fe') and sim.energy_history_fe else 0.0
         saddle_v = sim.min_pot if hasattr(sim, 'min_pot') else (self.ebs_history[-1] if self.ebs_history else 0.0)
-        div = self.div_history[-1] if self.div_history else 0.0
+        div = 0.0
+        if self.div_history:
+            finite_div = [d for d in self.div_history if np.isfinite(d)]
+            div = finite_div[-1] if finite_div else (0.0 if np.isnan(self.div_history[-1]) else self.div_history[-1])
+        elif hasattr(sim, 'current_div') and np.isfinite(sim.current_div):
+            div = sim.current_div
+
+        div_plane2 = 0.0
+        div_mid_hist = getattr(self, 'div_mid_history', None)
+        if div_mid_hist:
+            finite_div2 = [d for d in div_mid_hist if np.isfinite(d)]
+            div_plane2 = finite_div2[-1] if finite_div2 else (0.0 if np.isnan(div_mid_hist[-1]) else div_mid_hist[-1])
+        elif hasattr(sim, 'current_div_mid') and np.isfinite(sim.current_div_mid):
+            div_plane2 = sim.current_div_mid
+
         i_exit = self.ion_current_exit_history[-1] if self.ion_current_exit_history else 0.0
         trans = self.transparency_history[-1] if self.transparency_history else 0.0
+
+        p_eff, p_max, perv_frac = self._compute_perveance_metrics(i_exit)
 
         result_row = {
             "scenario_idx": scenario_idx,
@@ -190,13 +206,112 @@ class SweepMixin:
             "t_sim_us": float(t_sim_us),
             "saddle_potential_V": float(saddle_v),
             "divergence_deg": float(div),
+            "divergence_2nd_plane_deg": float(div_plane2),
+            "divergence_plane2_deg": float(div_plane2),
             "exit_ion_current_A": float(i_exit),
+            "perveance_effective": float(p_eff),
+            "Peffective": float(p_eff),
+            "perveance_max": float(p_max),
+            "Pmax": float(p_max),
+            "perveance_fraction": float(perv_frac),
+            "P_fraction": float(perv_frac),
             "transparency": float(trans),
             "total_energy_J": float(e_tot),
             "total_charge_C": float(q_net),
             "field_energy_J": float(fe),
         }
         self.sweep_results.append(result_row)
+
+    def _compute_perveance_metrics(self, i_exit):
+        """
+        Calculates effective perveance (from measured exit current and total acceleration voltage),
+        theoretical maximum Child-Langmuir perveance (from physical constants and grid geometry),
+        and perveance fraction (ratio of effective to theoretical maximum perveance).
+
+        Returns:
+            tuple: (p_effective, p_max, perveance_fraction)
+        """
+        if not np.isfinite(i_exit) or i_exit < 0.0:
+            i_exit = 0.0
+
+        sim = getattr(self, 'sim', None)
+        grids = getattr(sim, 'grids', None)
+        if not grids and hasattr(self, 'get_params'):
+            try:
+                grids = self.get_params().get('grids', [])
+            except Exception:
+                grids = []
+
+        v_screen = 0.0
+        v_accel = 0.0
+        gap_mm = 1.0
+        t_screen_mm = 0.5
+        r_screen_mm = 1.0
+
+        if grids and len(grids) > 0:
+            v_screen = float(grids[0].get('V', 0.0))
+            gap_mm = float(grids[0].get('gap', 1.0))
+            t_screen_mm = float(grids[0].get('t', 0.5))
+            r_screen_mm = float(grids[0].get('r', 1.0))
+            if len(grids) > 1:
+                v_accel = float(grids[1].get('V', 0.0))
+        elif hasattr(self, 'inputs'):
+            if 'Vs' in self.inputs:
+                v_screen = float(self.inputs['Vs'].value())
+            if 'Va' in self.inputs:
+                v_accel = float(self.inputs['Va'].value())
+            if 'gap' in self.inputs:
+                gap_mm = float(self.inputs['gap'].value())
+            if 'ts' in self.inputs:
+                t_screen_mm = float(self.inputs['ts'].value())
+            elif 't' in self.inputs:
+                t_screen_mm = float(self.inputs['t'].value())
+            if 'rs' in self.inputs:
+                r_screen_mm = float(self.inputs['rs'].value())
+            elif 'r' in self.inputs:
+                r_screen_mm = float(self.inputs['r'].value())
+
+        # Total acceleration voltage between screen and accelerator grids
+        v_total = max(v_screen - v_accel, 0.0)
+
+        # Measured effective perveance: Peffective = I_exit / (V_total^1.5)
+        if v_total > 0.0 and i_exit > 0.0:
+            p_eff = float(i_exit / (v_total ** 1.5))
+        else:
+            p_eff = 0.0
+
+        # Physical constants
+        # Child-Langmuir space-charge limited current perveance limit using Goebel & Katz
+        # equivalent acceleration length: l_e = sqrt((l_g + t_s)^2 + r_s^2) = sqrt((l_g + t_s)^2 + d_s^2 / 4)
+        # where l_g is grid separation, t_s is screen thickness, and r_s is screen hole radius.
+        # P_max = (4 * eps_0 / 9) * sqrt(2 * q / m_i) * (A / l_e^2)
+        eps_0 = 8.8541878128e-12  # F/m
+        q = float(getattr(sim, 'q_ion', 1.602e-19))
+        m_i = float(getattr(sim, 'm_ion', 131.293 * 1.6605e-27))
+        if q <= 0.0 or m_i <= 0.0:
+            q = 1.602e-19
+            m_i = 131.293 * 1.6605e-27
+
+        l_g = max(gap_mm * 1e-3, 1e-6)       # inter-grid separation in meters
+        t_s = max(t_screen_mm * 1e-3, 0.0)    # screen grid thickness in meters
+        r_s = max(r_screen_mm * 1e-3, 1e-6)   # screen aperture radius in meters
+        l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
+
+        # Cross-sectional injection / extraction area in m^2
+        last_area = getattr(sim, '_last_injection_area', None)
+        if last_area is not None and last_area > 0.0:
+            area = float(last_area)
+        else:
+            area = max(r_screen_mm * 1e-3 * 1e-3, 1e-8)
+
+        p_max = float((4.0 * eps_0 / 9.0) * np.sqrt(2.0 * q / m_i) * (area / l_e_sq))
+
+        if p_max > 0.0 and np.isfinite(p_eff):
+            perv_frac = float(p_eff / p_max)
+        else:
+            perv_frac = 0.0
+
+        return p_eff, p_max, perv_frac
 
     def advance_sweep_scenario(self):
         """Transitions the simulator to the next scenario in the sweep."""

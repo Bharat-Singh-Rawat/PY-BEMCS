@@ -65,7 +65,11 @@ class TestSweepDialogs(unittest.TestCase):
                 "t_sim_us": 1.2,
                 "saddle_potential_V": -650.0,
                 "divergence_deg": 12.3,
+                "divergence_2nd_plane_deg": 10.1,
                 "exit_ion_current_A": 0.045,
+                "perveance_effective": 1.2e-6,
+                "perveance_max": 5.0e-6,
+                "perveance_fraction": 0.24,
                 "transparency": 0.82,
                 "total_energy_J": 1.2e-3,
                 "total_charge_C": 1.1e-9,
@@ -80,7 +84,11 @@ class TestSweepDialogs(unittest.TestCase):
                 "t_sim_us": 25.0,
                 "saddle_potential_V": -620.0,
                 "divergence_deg": 14.1,
+                "divergence_2nd_plane_deg": 11.5,
                 "exit_ion_current_A": 0.041,
+                "perveance_effective": 1.1e-6,
+                "perveance_max": 5.0e-6,
+                "perveance_fraction": 0.22,
                 "transparency": 0.79,
                 "total_energy_J": 1.5e-3,
                 "total_charge_C": 1.4e-9,
@@ -90,12 +98,23 @@ class TestSweepDialogs(unittest.TestCase):
 
         dlg = SweepResultsDialog(cfg, mock_results)
         self.assertEqual(dlg.table.rowCount(), 2)
+        self.assertEqual(dlg.table.columnCount(), 11)
 
         # Check table contents
         item_ss1 = dlg.table.item(0, 2)
         item_ss2 = dlg.table.item(1, 2)
         self.assertIn("YES", item_ss1.text())
         self.assertIn("NO", item_ss2.text())
+
+        # Check divergence columns in table (grid exit and 2nd plane)
+        self.assertEqual(dlg.table.item(0, 5).text(), "12.30")
+        self.assertEqual(dlg.table.item(0, 6).text(), "10.10")
+        self.assertEqual(dlg.table.item(1, 5).text(), "14.10")
+        self.assertEqual(dlg.table.item(1, 6).text(), "11.50")
+
+        # Check Perveance Fraction column (col 8)
+        self.assertEqual(dlg.table.item(0, 8).text(), "0.2400")
+        self.assertEqual(dlg.table.item(1, 8).text(), "0.2200")
 
         # Test CSV export content directly
         with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".csv") as tmp:
@@ -137,9 +156,38 @@ class TestSweepDialogs(unittest.TestCase):
             self.assertIn("\t", txt_content)
             self.assertIn("WARNING", txt_content)
             self.assertIn("5000", txt_content)
+            self.assertIn("beam_divergence_deg", txt_content)
+            self.assertIn("beam_divergence_2nd_plane_deg", txt_content)
+            self.assertIn("perveance_effective", txt_content)
+            self.assertIn("perveance_max", txt_content)
+            self.assertIn("perveance_fraction", txt_content)
+            self.assertIn("0.2400", txt_content)
+            self.assertIn("0.2200", txt_content)
+            self.assertIn("10.1", txt_content)
+            self.assertIn("11.5", txt_content)
         finally:
             if os.path.exists(tmp_txt_path):
                 os.remove(tmp_txt_path)
+
+        # Test JSON export content
+        with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".json") as tmp_json:
+            tmp_json_path = tmp_json.name
+
+        try:
+            dlg._write_json(tmp_json_path, notify=False)
+            import json
+            with open(tmp_json_path, "r", encoding="utf-8") as f:
+                json_data = json.load(f)
+            self.assertEqual(json_data["results"][0]["divergence_deg"], 12.3)
+            self.assertEqual(json_data["results"][0]["divergence_2nd_plane_deg"], 10.1)
+            self.assertEqual(json_data["results"][1]["divergence_2nd_plane_deg"], 11.5)
+            self.assertEqual(json_data["results"][0]["perveance_fraction"], 0.24)
+            self.assertEqual(json_data["results"][1]["perveance_fraction"], 0.22)
+            self.assertEqual(json_data["results"][0]["perveance_effective"], 1.2e-6)
+            self.assertEqual(json_data["results"][0]["perveance_max"], 5.0e-6)
+        finally:
+            if os.path.exists(tmp_json_path):
+                os.remove(tmp_json_path)
 
         dlg.close()
 
@@ -213,6 +261,81 @@ class TestSweepDialogs(unittest.TestCase):
                 os.remove(tmp_path)
         res_dlg.close()
 
+    def test_sweep_divergence_second_plane_output(self):
+        cfg = {
+            "param_id": "grid_2_V",
+            "param_label": "Accel Grid Voltage (V)",
+            "param_unit": "V",
+            "max_iterations": 2000,
+        }
+        res = [
+            {
+                "scenario_idx": 1,
+                "parameter_value": -200.0,
+                "steady_state_reached": True,
+                "steady_iterations": 150,
+                "saddle_potential_V": -620.0,
+                "divergence_deg": 15.2,
+                "divergence_2nd_plane_deg": 11.4,
+                "exit_ion_current_A": 0.048,
+                "transparency": 0.81,
+                "total_energy_J": 1.1e-3,
+            },
+            {
+                "scenario_idx": 2,
+                "parameter_value": -300.0,
+                "steady_state_reached": True,
+                "steady_iterations": 160,
+                "saddle_potential_V": -650.0,
+                "divergence_deg": 13.8,
+                "divergence_plane2_deg": 10.2,  # test alternative key fallback
+                "exit_ion_current_A": 0.050,
+                "transparency": 0.83,
+                "total_energy_J": 1.2e-3,
+            },
+            {
+                "scenario_idx": 3,
+                "parameter_value": -400.0,
+                "steady_state_reached": True,
+                "steady_iterations": 170,
+                "saddle_potential_V": -680.0,
+                "divergence_deg": 12.5,
+                # scenario without 2nd plane key to test fallback
+                "exit_ion_current_A": 0.052,
+                "transparency": 0.85,
+                "total_energy_J": 1.3e-3,
+            },
+        ]
+        dlg = SweepResultsDialog(cfg, res)
+        self.assertEqual(dlg.table.columnCount(), 11)
+        self.assertEqual(dlg.table.horizontalHeaderItem(5).text(), "Divergence Grid Exit (°)")
+        self.assertEqual(dlg.table.horizontalHeaderItem(6).text(), "Divergence 2nd Plane (°)")
+        self.assertEqual(dlg.table.horizontalHeaderItem(8).text(), "Perveance Fraction")
+
+        # Verify values in table
+        self.assertEqual(dlg.table.item(0, 5).text(), "15.20")
+        self.assertEqual(dlg.table.item(0, 6).text(), "11.40")
+        self.assertEqual(dlg.table.item(1, 5).text(), "13.80")
+        self.assertEqual(dlg.table.item(1, 6).text(), "10.20")
+        self.assertEqual(dlg.table.item(2, 5).text(), "12.50")
+        self.assertEqual(dlg.table.item(2, 6).text(), "0.00")
+
+        # Test CSV export
+        with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".csv") as tmp:
+            tmp_path = tmp.name
+        try:
+            dlg._write_tabular(tmp_path, is_txt=False, notify=False)
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("beam_divergence_deg,beam_divergence_2nd_plane_deg", content)
+            self.assertIn("perveance_effective,perveance_max,perveance_fraction", content)
+            self.assertIn("15.2,11.4", content)
+            self.assertIn("13.8,10.2", content)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        dlg.close()
+
 
 class TestSweepMixinAppIntegration(unittest.TestCase):
     @classmethod
@@ -269,6 +392,8 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.sim.energy_history_tot = [1e-3] * 60
         self.win.sim.charge_history_q_net = [1e-9] * 60
         self.win.sim.potential_history = [-700.0] * 60
+        self.win.div_history = [12.5] * 60
+        self.win.div_mid_history = [9.4] * 60
 
         # Check steady state should detect stationarity and record result
         self.win.check_sweep_steady_state()
@@ -276,6 +401,11 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertEqual(len(self.win.sweep_results), 1)
         self.assertTrue(self.win.sweep_results[0]["steady_state_reached"])
         self.assertEqual(self.win.sweep_results[0]["parameter_value"], 2.0)
+        self.assertEqual(self.win.sweep_results[0]["divergence_deg"], 12.5)
+        self.assertEqual(self.win.sweep_results[0]["divergence_2nd_plane_deg"], 9.4)
+        self.assertIn("perveance_effective", self.win.sweep_results[0])
+        self.assertIn("perveance_max", self.win.sweep_results[0])
+        self.assertIn("perveance_fraction", self.win.sweep_results[0])
         self.assertEqual(self.win.sweep_current_idx, 1)
 
         # Now simulate scenario 2 hitting safeguard 5000 iterations without convergence
@@ -405,6 +535,58 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         # Should now have only iteration 1, not [400, 1]!
         self.assertEqual(self.win.iter_history, [1])
         self.assertEqual(self.win.div_history, [11.0])
+
+    def test_perveance_computation_metrics(self):
+        # Configure known grid geometry and voltage
+        # Screen grid: 1100 V, gap: 1.0 mm, hole radius: 1.0 mm
+        # Accel grid: -200 V
+        # Total voltage = 1300 V
+        self.win.sim.grids = [
+            {'V': 1100.0, 't': 0.5, 'gap': 1.0, 'r': 1.0, 'cham': 0.0},
+            {'V': -200.0, 't': 0.5, 'gap': 1.0, 'r': 0.6, 'cham': 0.0},
+        ]
+        self.win.sim._last_injection_area = 1.0e-6  # 1 mm^2 in m^2
+        self.win.sim.q_ion = 1.602e-19
+        self.win.sim.m_ion = 131.293 * 1.6605e-27
+
+        i_exit = 5.0e-5  # 0.05 mA exit current (typical single aperture)
+        p_eff, p_max, perv_frac = self.win._compute_perveance_metrics(i_exit)
+
+        v_tot = 1300.0
+        expected_p_eff = 5.0e-5 / (v_tot ** 1.5)
+        eps_0 = 8.8541878128e-12
+        # Goebel & Katz equivalent length: l_e^2 = (l_g + t_s)^2 + r_s^2
+        l_e_sq = (1.0e-3 + 0.5e-3) ** 2 + (1.0e-3) ** 2
+        expected_p_max = (4.0 * eps_0 / 9.0) * np.sqrt(2.0 * self.win.sim.q_ion / self.win.sim.m_ion) * (1.0e-6 / l_e_sq)
+        expected_frac = expected_p_eff / expected_p_max
+
+        self.assertAlmostEqual(p_eff, expected_p_eff, places=12)
+        self.assertAlmostEqual(p_max, expected_p_max, places=12)
+        self.assertAlmostEqual(perv_frac, expected_frac, places=6)
+        self.assertTrue(0.0 < perv_frac < 1.0)
+
+    def test_perveance_edge_cases(self):
+        self.win.sim.grids = [
+            {'V': 100.0, 'gap': 1.0, 'r': 1.0},
+            {'V': 200.0, 'gap': 1.0, 'r': 1.0},  # V_total <= 0
+        ]
+        p_eff, p_max, perv_frac = self.win._compute_perveance_metrics(0.05)
+        self.assertEqual(p_eff, 0.0)
+        self.assertEqual(perv_frac, 0.0)
+        self.assertGreater(p_max, 0.0)
+
+        # Zero or negative exit current
+        self.win.sim.grids = [
+            {'V': 1000.0, 'gap': 1.0, 'r': 1.0},
+            {'V': -200.0, 'gap': 1.0, 'r': 1.0},
+        ]
+        p_eff_zero, _, perv_frac_zero = self.win._compute_perveance_metrics(0.0)
+        self.assertEqual(p_eff_zero, 0.0)
+        self.assertEqual(perv_frac_zero, 0.0)
+
+        p_eff_nan, _, perv_frac_nan = self.win._compute_perveance_metrics(float('nan'))
+        self.assertEqual(p_eff_nan, 0.0)
+        self.assertEqual(perv_frac_nan, 0.0)
 
 
 if __name__ == "__main__":
