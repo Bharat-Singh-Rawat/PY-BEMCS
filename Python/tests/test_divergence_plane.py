@@ -71,7 +71,8 @@ class TestDivergencePlane(unittest.TestCase):
         self.assertEqual(win.line_div_mid.get_linestyle(), "-")
 
         # Test limits calculation and domain build
-        win.build_domain()
+        with patch.object(QMessageBox, "warning"):
+            win.build_domain()
         self.assertIsNotNone(win.line_div_plane)
         self.assertIn(win.line_div_plane, win.ax_live.lines)
         self.assertEqual(win.line_div_plane.get_linestyle(), ":")

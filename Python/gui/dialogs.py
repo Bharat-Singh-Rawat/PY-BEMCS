@@ -4,6 +4,7 @@ Includes Beam Species, Grid Material, Advanced Physics/Mesh, and GUI Settings di
 """
 import math
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QValidator
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QFormLayout, QDoubleSpinBox, QSpinBox, QPushButton,
@@ -1267,6 +1268,67 @@ SWEEP_PARAMETERS = [
 ]
 
 
+def format_sci_value(val):
+    """Format physical numerical values cleanly in scientific notation (e.g., 1e16) without redundant zeros."""
+    if not isinstance(val, (int, float)):
+        return str(val)
+    s = f"{val:.4g}"
+    if "e+" in s:
+        return s.replace("e+", "e")
+    elif "e-" in s:
+        parts = s.split("e-")
+        return f"{parts[0]}e-{int(parts[1])}"
+    elif "e" not in s and (abs(val) >= 1e4 or (0 < abs(val) <= 1e-3)):
+        return f"{val:.3e}".replace("e+0", "e").replace("e+", "e")
+    return s
+
+
+class SweepParamSpinBox(QDoubleSpinBox):
+    """
+    QDoubleSpinBox supporting both standard decimal display and clean
+    scientific notation (e.g. 1e16 instead of 10000000000000000.0000)
+    for high-magnitude physical quantities like plasma and neutral gas densities.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.scientific = False
+
+    def textFromValue(self, value):
+        if self.scientific:
+            return format_sci_value(value)
+        return super().textFromValue(value)
+
+    def valueFromText(self, text):
+        if self.scientific:
+            clean = text.replace(self.suffix(), "").strip()
+            try:
+                return float(clean)
+            except Exception:
+                return 0.0
+        return super().valueFromText(text)
+
+    def validate(self, text, pos):
+        if self.scientific:
+            clean = text.replace(self.suffix(), "").strip()
+            if clean in ("", "-", "+", ".", "e", "E", "-e", "+e"):
+                return (QValidator.Intermediate, text, pos)
+            low = clean.lower()
+            if low.endswith("e") or low.endswith("e+") or low.endswith("e-"):
+                try:
+                    prefix = low.rstrip("e+-")
+                    if prefix:
+                        float(prefix)
+                    return (QValidator.Intermediate, text, pos)
+                except ValueError:
+                    return (QValidator.Invalid, text, pos)
+            try:
+                float(clean.replace("E", "e"))
+                return (QValidator.Acceptable, text, pos)
+            except ValueError:
+                return (QValidator.Invalid, text, pos)
+        return super().validate(text, pos)
+
+
 class SweepSettingsDialog(QDialog):
     """
     Dialog allowing the user to configure a parametric sweep across multiple scenarios.
@@ -1300,14 +1362,16 @@ class SweepSettingsDialog(QDialog):
         self.combo_param.currentIndexChanged.connect(self._on_param_changed)
         form_param.addRow("Quantity to Sweep:", self.combo_param)
 
-        self.spin_start = QDoubleSpinBox()
+        self.spin_start = SweepParamSpinBox()
         self.spin_start.setRange(-1e9, 1e25)
         self.spin_start.setDecimals(4)
+        self.spin_start.valueChanged.connect(self._update_preview)
         form_param.addRow("Start Value:", self.spin_start)
 
-        self.spin_end = QDoubleSpinBox()
+        self.spin_end = SweepParamSpinBox()
         self.spin_end.setRange(-1e9, 1e25)
         self.spin_end.setDecimals(4)
+        self.spin_end.valueChanged.connect(self._update_preview)
         form_param.addRow("End Value:", self.spin_end)
 
         self.spin_n = QSpinBox()
@@ -1389,7 +1453,14 @@ class SweepSettingsDialog(QDialog):
         self.spin_start.setSuffix(f" {unit}" if unit else "")
         self.spin_end.setSuffix(f" {unit}" if unit else "")
 
-        if pdef.get("scientific", False):
+        is_sci = pdef.get("scientific", False)
+        self.spin_start.scientific = is_sci
+        self.spin_end.scientific = is_sci
+
+        self.spin_start.setSingleStep(pdef.get("step", 0.5))
+        self.spin_end.setSingleStep(pdef.get("step", 0.5))
+
+        if is_sci:
             self.spin_start.setDecimals(4)
             self.spin_end.setDecimals(4)
             if self.combo_scale.findData("log") >= 0:
@@ -1409,10 +1480,19 @@ class SweepSettingsDialog(QDialog):
         if len(vals) == 0:
             self.lbl_preview.setText("—")
             return
+        idx = self.combo_param.currentIndex()
+        pdef = SWEEP_PARAMETERS[idx] if 0 <= idx < len(SWEEP_PARAMETERS) else {}
+        is_sci = pdef.get("scientific", False)
+
+        def fmt_v(v):
+            if is_sci or abs(v) >= 1e4 or (0 < abs(v) <= 1e-3):
+                return format_sci_value(v)
+            return f"{v:.3g}"
+
         if len(vals) <= 6:
-            txt = ", ".join(f"{v:.3g}" for v in vals)
+            txt = ", ".join(fmt_v(v) for v in vals)
         else:
-            txt = f"{vals[0]:.3g}, {vals[1]:.3g}, ... {vals[-1]:.3g} ({len(vals)} points)"
+            txt = f"{fmt_v(vals[0])}, {fmt_v(vals[1])}, ... {fmt_v(vals[-1])} ({len(vals)} points)"
         self.lbl_preview.setText(f"[{txt}]")
 
     def get_values_array(self):
@@ -1508,6 +1588,11 @@ class SweepResultsDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
 
+        param_id = sweep_config.get("param_id", "")
+        is_sci = param_id in ("n0_plasma", "n0") or any(
+            p.get("scientific", False) for p in SWEEP_PARAMETERS if p["id"] == param_id
+        )
+
         for row, res in enumerate(results):
             scen_idx = res.get("scenario_idx", row + 1)
             p_val = res.get("parameter_value", 0.0)
@@ -1522,7 +1607,8 @@ class SweepResultsDialog(QDialog):
             ss_text = "✓ YES" if ss_reached else f"⚠️ NO (Max {res.get('max_iters_hit', 5000)})"
 
             self.table.setItem(row, 0, QTableWidgetItem(f"Scenario {scen_idx}"))
-            self.table.setItem(row, 1, QTableWidgetItem(f"{p_val:.4g}"))
+            p_text = format_sci_value(p_val) if (is_sci or abs(p_val) >= 1e4 or (0 < abs(p_val) <= 1e-3)) else f"{p_val:.4g}"
+            self.table.setItem(row, 1, QTableWidgetItem(p_text))
 
             item_ss = QTableWidgetItem(ss_text)
             if not ss_reached:
@@ -1632,14 +1718,24 @@ class SweepResultsDialog(QDialog):
                 "field_energy_J",
             ])
 
+            param_id = self.sweep_config.get("param_id", "")
+            is_sci = param_id in ("n0_plasma", "n0") or any(
+                p.get("scientific", False) for p in SWEEP_PARAMETERS if p["id"] == param_id
+            )
+
             for r in self.results:
                 reached = r.get("steady_state_reached", True)
                 warn = "" if reached else f"WARNING: Max iterations ({r.get('max_iters_hit', 5000)}) reached without steady state"
+                val = r.get("parameter_value", "")
+                if is_sci and isinstance(val, (int, float)):
+                    val_str = format_sci_value(val)
+                else:
+                    val_str = val
                 writer.writerow([
                     r.get("scenario_idx", ""),
                     self.sweep_config.get("param_id", ""),
                     param_label,
-                    r.get("parameter_value", ""),
+                    val_str,
                     "YES" if reached else "NO",
                     warn,
                     r.get("steady_iterations", ""),

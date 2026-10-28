@@ -7,7 +7,7 @@ steady-state condition checks, scenario transitions, and results collection.
 import numpy as np
 from PyQt5.QtWidgets import QMessageBox
 
-from ..dialogs import SweepSettingsDialog, SweepResultsDialog
+from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value
 from diagnostics.metrics import compute_rolling_variation
 
 
@@ -39,12 +39,17 @@ class SweepMixin:
         total_scenarios = len(config["values"])
         param_label = config["param_label"]
         first_val = config["values"][0]
+        first_val_str = (
+            format_sci_value(first_val)
+            if (config.get("param_id") in ("n0_plasma", "n0") or abs(first_val) >= 1e4 or (0 < abs(first_val) <= 1e-3))
+            else f"{first_val:.3g}"
+        )
 
         # Update Top Bar Badge & Button
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setVisible(True)
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode active [1/{total_scenarios} | {first_val:.3g} {config['param_unit']}]"
+                f"⚡ Sweep mode active [1/{total_scenarios} | {first_val_str} {config['param_unit']}]"
             )
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(True)
@@ -115,8 +120,13 @@ class SweepMixin:
 
         # Update live badge text
         if hasattr(self, 'lbl_sweep_badge'):
+            cur_val_str = (
+                format_sci_value(cur_val)
+                if (cfg.get("param_id") in ("n0_plasma", "n0") or abs(cur_val) >= 1e4 or (0 < abs(cur_val) <= 1e-3))
+                else f"{cur_val:.3g}"
+            )
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val:.3g} {cfg['param_unit']} ({scenario_iters:,} iters)]"
+                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {cfg['param_unit']} ({scenario_iters:,} iters)]"
             )
 
         # Need at least min_iters and window steps

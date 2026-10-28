@@ -143,6 +143,76 @@ class TestSweepDialogs(unittest.TestCase):
 
         dlg.close()
 
+    def test_density_scientific_notation_in_sweep_dialogs(self):
+        # 1. Test SweepSettingsDialog when plasma density is selected
+        dlg = SweepSettingsDialog()
+        idx_plasma = dlg.combo_param.findData("n0_plasma")
+        dlg.combo_param.setCurrentIndex(idx_plasma)
+
+        self.assertTrue(dlg.spin_start.scientific)
+        self.assertTrue(dlg.spin_end.scientific)
+
+        # Start value should format as 1e16 without all zeros
+        dlg.spin_start.setValue(1e16)
+        dlg.spin_end.setValue(2.5e16)
+        start_txt = dlg.spin_start.text()
+        end_txt = dlg.spin_end.text()
+
+        self.assertIn("1e16", start_txt)
+        self.assertNotIn("0000000000000000", start_txt)
+        self.assertIn("2.5e16", end_txt)
+
+        # Preview label should also use clean scientific notation
+        self.assertIn("1e16", dlg.lbl_preview.text())
+        self.assertNotIn("0000000000000000", dlg.lbl_preview.text())
+
+        # 2. Test Neutral Gas Density selection
+        idx_n0 = dlg.combo_param.findData("n0")
+        dlg.combo_param.setCurrentIndex(idx_n0)
+        self.assertTrue(dlg.spin_start.scientific)
+        dlg.spin_start.setValue(1e17)
+        self.assertIn("1e17", dlg.spin_start.text())
+        self.assertNotIn("00000000000000000", dlg.spin_start.text())
+        dlg.close()
+
+        # 3. Test SweepResultsDialog table display with density in scientific notation
+        cfg_density = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density n0_plasma (m⁻³)",
+            "param_unit": "m⁻³",
+            "max_iterations": 5000,
+        }
+        res = [
+            {
+                "scenario_idx": 1,
+                "parameter_value": 1e16,
+                "steady_state_reached": True,
+                "steady_iterations": 100,
+                "saddle_potential_V": -600.0,
+                "divergence_deg": 10.0,
+                "exit_ion_current_A": 0.05,
+                "transparency": 0.85,
+                "total_energy_J": 1e-3,
+            }
+        ]
+        res_dlg = SweepResultsDialog(cfg_density, res)
+        table_val_txt = res_dlg.table.item(0, 1).text()
+        self.assertEqual(table_val_txt, "1e16")
+        self.assertNotIn("0000000000000000", table_val_txt)
+
+        with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".csv") as tmp:
+            tmp_path = tmp.name
+        try:
+            res_dlg._write_tabular(tmp_path, is_txt=False, notify=False)
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                csv_txt = f.read()
+            self.assertIn("1e16", csv_txt)
+            self.assertNotIn("10000000000000000", csv_txt)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        res_dlg.close()
+
 
 class TestSweepMixinAppIntegration(unittest.TestCase):
     @classmethod
