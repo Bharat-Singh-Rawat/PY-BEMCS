@@ -34,6 +34,8 @@ class ConfigMixin:
             "V_plasma_offset":  20.0,
             "m_e_ratio":      1000.0,
             "entire_bulk_plasma": False,  # default: presheath mode
+            "enforce_efield_mesh_limit": True,
+            "max_efield_jump": 0.10,
             "dx_over_debye": 0.8,
             r"\deltax/debye_length": 0.8,
             "dt_ns": 0.50,
@@ -247,6 +249,8 @@ class ConfigMixin:
             "m_e_ratio": adv.get("m_e_ratio", 1000.0),
             "entire_bulk_plasma": bool(adv.get("entire_bulk_plasma", False)),
             "use_json_mesh_zones": bool(adv.get("use_json_mesh_zones", False)),
+            "enforce_efield_mesh_limit": bool(adv.get("enforce_efield_mesh_limit", True)),
+            "max_efield_jump": float(adv.get("max_efield_jump", 0.10)),
             "dx_over_debye": float(val_dx_debye),
             r"\deltax/debye_length": float(val_dx_debye),
             "dt_ns": float(val_dt_ns),
@@ -436,6 +440,10 @@ class ConfigMixin:
             adv_cfg["entire_bulk_plasma"] = bool(adv_params["entire_bulk_plasma"])
         if "use_json_mesh_zones" in adv_params:
             adv_cfg["use_json_mesh_zones"] = bool(adv_params["use_json_mesh_zones"])
+        if "enforce_efield_mesh_limit" in adv_params:
+            adv_cfg["enforce_efield_mesh_limit"] = bool(adv_params["enforce_efield_mesh_limit"])
+        if "max_efield_jump" in adv_params:
+            adv_cfg["max_efield_jump"] = float(adv_params["max_efield_jump"])
         if "dx_over_debye" in adv_params:
             adv_cfg["dx_over_debye"] = float(adv_params["dx_over_debye"])
         if "dt_ns" in adv_params:

@@ -8,7 +8,11 @@ from scipy.sparse.linalg import factorized
 from ..backend import (
     _NP_FP, _GPU_POISSON, cp, cp_sp, cp_splu
 )
-from ..mesh_utils import estimate_automatic_mesh_zones
+from ..mesh_utils import (
+    estimate_automatic_mesh_zones,
+    compute_efield_constrained_spacing,
+    evaluate_mesh_efield_variation,
+)
 
 
 class DomainMixin:
@@ -164,12 +168,41 @@ class DomainMixin:
             self.recommended_upstream_gap_mm = 0.75 * screen_r
 
         ratio_debye = params.get(r"\deltax/debye_length", params.get("dx_over_debye", None))
-        if ratio_debye is not None:
-            _lambda_D_m = np.sqrt(self.eps0 * Te_up * self.q / (n0_n * self.q**2))
-            _lambda_D_mm = _lambda_D_m * 1e3
-            _dxy_mm = float(ratio_debye) * _lambda_D_mm
-            self.dx = _dxy_mm
-            self.dy = _dxy_mm
+        enforce_efield = bool(params.get("enforce_efield_mesh_limit", True))
+        max_jump_allowed = float(params.get("max_efield_jump", 0.10))
+
+        is_refining = getattr(self, "_efield_refinement_active", False)
+        _dxy_mm = getattr(self, "_original_dxy_mm", None)
+
+        if not is_refining:
+            if ratio_debye is not None:
+                _lambda_D_m = np.sqrt(self.eps0 * Te_up * self.q / (n0_n * self.q**2))
+                _lambda_D_mm = _lambda_D_m * 1e3
+                _dxy_mm = float(ratio_debye) * _lambda_D_mm
+                self._original_dxy_mm = _dxy_mm
+                if enforce_efield and grids:
+                    dx_efield, dy_efield = compute_efield_constrained_spacing(
+                        grids=grids,
+                        n0=n0_n,
+                        Te_up=Te_up,
+                        ratio_debye=float(ratio_debye),
+                        max_rel_jump=max_jump_allowed,
+                    )
+                    self.dx = min(_dxy_mm, dx_efield)
+                    self.dy = min(_dxy_mm, dy_efield)
+                else:
+                    self.dx = _dxy_mm
+                    self.dy = _dxy_mm
+            elif enforce_efield and grids:
+                dx_efield, dy_efield = compute_efield_constrained_spacing(
+                    grids=grids,
+                    n0=n0_n,
+                    Te_up=Te_up,
+                    ratio_debye=1.0,
+                    max_rel_jump=max_jump_allowed,
+                )
+                self.dx = min(self.dx, dx_efield)
+                self.dy = min(self.dy, dy_efield)
 
         user_gap = float(params.get('upstream_gap_mm', 0.0))
         upstream_gap = user_gap if user_gap > 0.0 else self.recommended_upstream_gap_mm
@@ -285,7 +318,8 @@ class DomainMixin:
                 grids=grids,
                 upstream_gap_mm=self.upstream_gap_mm,
                 Lx=self.Lx,
-                dx0=self.dx
+                dx0=self.dx,
+                max_rel_jump=max_jump_allowed,
             )
 
         self.zone_configs = zone_configs
@@ -300,7 +334,7 @@ class DomainMixin:
         self.dx_min = float(np.min(self.dx_cells))
         self.dx_max = float(np.max(self.dx_cells))
 
-        self.ny = int(self.Ly / self.dy) + 1
+        self.ny = max(12, int(self.Ly / self.dy) + 1)
         self.dy = self.Ly / (self.ny - 1)
         self.ypts = np.linspace(0, self.Ly, self.ny)
         self.y_coords = self.ypts
@@ -463,6 +497,37 @@ class DomainMixin:
             self.Tmap[self.isBound] = 300.0
         self.build_sparse_matrix()
         self.recalc_poisson(iterations=30 if not preserve_state else 10, params=params)
+
+        # Stage 2: Electric field jump evaluation & pre-flight adaptive refinement
+        if enforce_efield and grids:
+            max_jump_x, max_jump_y, compliant = evaluate_mesh_efield_variation(
+                self.Ex, self.Ey, is_bound=self.isBound, max_rel_jump=max_jump_allowed
+            )
+            self.last_max_efield_jump_x = max_jump_x
+            self.last_max_efield_jump_y = max_jump_y
+            self.last_efield_jump_compliant = compliant
+
+            # Only adapt when cell spacing was constrained by geometry/E-field (low-density regime)
+            orig_dxy = getattr(self, "_original_dxy_mm", None)
+            is_low_density = (ratio_debye is not None and orig_dxy is not None and (orig_dxy > self.dx * 1.05)) or (ratio_debye is None)
+            if not compliant and is_low_density and not getattr(self, "_efield_refinement_active", False):
+                refine_x = min(2.5, max(1.0, 1.25 * max_jump_x / max_jump_allowed))
+                refine_y = min(2.5, max(1.0, 1.25 * max_jump_y / max_jump_allowed))
+                if refine_x > 1.10 or refine_y > 1.10:
+                    print(
+                        f"[Mesh E-Field] Cell-to-cell jump (x: {max_jump_x*100:.1f}%, y: {max_jump_y*100:.1f}%) "
+                        f"exceeds target {max_jump_allowed*100:.0f}%. Adapting mesh (refine_x={refine_x:.2f}, refine_y={refine_y:.2f})."
+                    )
+                    self._efield_refinement_active = True
+                    self.dx = self.dx / refine_x
+                    self.dy = self.dy / refine_y
+                    self.build_domain(params, preserve_state=preserve_state)
+                    self._efield_refinement_active = False
+                    return
+        else:
+            self.last_max_efield_jump_x = 0.0
+            self.last_max_efield_jump_y = 0.0
+            self.last_efield_jump_compliant = True
 
         self.grids = grids
         if hasattr(self, 'grid_x_starts') and len(self.grid_x_starts) > 1:

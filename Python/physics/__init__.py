@@ -17,6 +17,8 @@ from .kernels_cpu import (
 from .mesh_utils import (
     compute_debye_upstream_gap,
     estimate_automatic_mesh_zones,
+    compute_efield_constrained_spacing,
+    evaluate_mesh_efield_variation,
 )
 from .simulator import DigitalTwinSimulator
 
@@ -24,6 +26,8 @@ __all__ = [
     "DigitalTwinSimulator",
     "compute_debye_upstream_gap",
     "estimate_automatic_mesh_zones",
+    "compute_efield_constrained_spacing",
+    "evaluate_mesh_efield_variation",
     "accumulate_rho_cpu",
     "push_particles_boris_cpu",
     "accumulate_rho_taichi",

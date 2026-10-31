@@ -3,42 +3,38 @@
     "mass_amu": 131.293,
     "charge_state": 1
   },
-
   "grid_material": {
     "preset": "Molybdenum"
   },
-
   "advanced_settings": {
     "V_plasma_offset": 20.0,
-    "m_e_ratio": 1000.0
+    "m_e_ratio": 1000.0,
+    "enforce_efield_mesh_limit": true,
+    "max_efield_jump": 0.1
   },
-
   "mesh_zones": {
     "presheath_factor": 1.0,
     "optics_factor": 2.0,
     "plume_factor": 4.0
   },
-
   "simulation": {
-    "n0_plasma": 7.72926180e17,
+    "n0_plasma": 7.7292618e+17,
     "Te_up": 8.5,
     "Ti": 0.03446931259896,
     "Tn": 400.0,
-    "n0": 5.271628e18,
+    "n0": 5.271628e+18,
     "Accel": 0.5,
     "Thresh": 10000.0,
     "sim_mode": "Thermal",
     "geometry": "half_hole",
     "target_ppc": 200
   },
-
   "rf_co_extraction": {
     "rf_enable": false,
     "rf_grid_idx": 0,
     "rf_freq": 13.56,
     "rf_amp": 500.0
   },
-
   "neutralizer": {
     "neut_rate": 30,
     "neut_match_ion": false,
@@ -46,7 +42,6 @@
     "neut_x": 10.0,
     "neut_r": 1.5
   },
-
   "grids": [
     {
       "V": 1300.0,
@@ -70,14 +65,12 @@
       "cham": 0.0
     }
   ],
-
   "cross_sections": {
     "cx_file": "",
     "see_file": "",
     "custom_file": "",
     "spline_smoothing": 0.0
   },
-
   "terminal_output": {
     "grid_temperatures": true,
     "beam_divergence": true,
@@ -86,21 +79,19 @@
     "iteration_time": true
   },
   "discharge_chamber": {
-  "radius_m": 0.02,
-  "length_m": 0.10,
-  "n_cusp": 4,
-  "pitch_mm": 3.0
+    "radius_m": 0.02,
+    "length_m": 0.1,
+    "n_cusp": 4,
+    "pitch_mm": 3.0
   },
-
   "grid_transparency": {
-  "beta_i": 0.7,
-  "beta_g": 0.5
+    "beta_i": 0.7,
+    "beta_g": 0.5
   },
-
   "power_and_flow": {
-  "B": 0.05,
-  "massflow_in": 2.18e-7,
-  "Pw": 45.0,
-  "Te_0": 3
+    "B": 0.05,
+    "massflow_in": 2.18e-07,
+    "Pw": 45.0,
+    "Te_0": 3
   }
 }

@@ -220,6 +220,22 @@ class AdvancedSettingsDialog(QDialog):
         self.form.addRow(r"\deltax/debye_length =", spin_dx)
         self.inputs["dx_over_debye"] = spin_dx
 
+        raw_jump = current_params.get("max_efield_jump", 0.10)
+        jump_pct = float(raw_jump * 100.0 if raw_jump <= 1.0 else raw_jump)
+        self.spin_max_efield_jump = QDoubleSpinBox()
+        self.spin_max_efield_jump.setRange(1.0, 50.0)
+        self.spin_max_efield_jump.setDecimals(1)
+        self.spin_max_efield_jump.setSingleStep(1.0)
+        self.spin_max_efield_jump.setValue(jump_pct)
+        self.spin_max_efield_jump.setSuffix(" %")
+        self.spin_max_efield_jump.setToolTip(
+            "Maximum allowable relative electric field change (|ΔE| / E) between adjacent cells.\n"
+            "Default: 10.0%. When plasma density is low, this limits cell size so electric field gradients\n"
+            "across the inter-grid gap remain smooth and well-resolved."
+        )
+        self.form.addRow("Max Cell ΔE Jump:", self.spin_max_efield_jump)
+        self.inputs["max_efield_jump"] = self.spin_max_efield_jump
+
         val_dt_ns = current_params.get("dt_ns", current_params.get("dt", 5e-10) * 1e9)
         add_spin("dt_ns", "Time Step (dt, ns):", 0.001, 100.0, float(val_dt_ns), decimals=3, step=0.05)
 
@@ -261,6 +277,16 @@ class AdvancedSettingsDialog(QDialog):
         )
         layout.addWidget(self.chk_json_zones)
 
+        # —- Enforce E-Field Gradient Mesh Limit —-
+        self.chk_efield_limit = QCheckBox("Enforce E-Field Gradient Mesh Limit")
+        self.chk_efield_limit.setChecked(bool(current_params.get("enforce_efield_mesh_limit", True)))
+        self.chk_efield_limit.setToolTip(
+            "When checked (recommended): prevents cells from becoming excessively coarse when plasma density is low.\n"
+            "Bounds cell sizes to keep electric field variation between neighboring cells within the specified threshold.\n"
+            "Eliminates singular matrix crashes and spurious particle deflection at low plasma densities."
+        )
+        layout.addWidget(self.chk_efield_limit)
+
         layout.addLayout(self.form)
 
         btn_box = QHBoxLayout()
@@ -277,6 +303,9 @@ class AdvancedSettingsDialog(QDialog):
         result = {k: v.value() for k, v in self.inputs.items()}
         result["entire_bulk_plasma"] = self.chk_bulk.isChecked()
         result["use_json_mesh_zones"] = self.chk_json_zones.isChecked()
+        result["enforce_efield_mesh_limit"] = self.chk_efield_limit.isChecked()
+        if "max_efield_jump" in result:
+            result["max_efield_jump"] = result["max_efield_jump"] / 100.0
         if "dx_over_debye" in result:
             result[r"\deltax/debye_length"] = result["dx_over_debye"]
             result["deltax_debye_length"] = result["dx_over_debye"]
