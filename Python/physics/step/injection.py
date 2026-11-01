@@ -45,13 +45,16 @@ def step_inject(sim, ctx: StepContext):
             screen_r = grids[0]['r']
             pitch_inj = params.get('pitch_mm', 0.0)
             if geometry == 'two_holes':
-                h1 = min(2.5 * screen_r, sim.Ly - sim.dy) - max(sim.dy, 0.5 * screen_r)
-                h2 = (min(2.5 * screen_r + pitch_inj, sim.Ly - sim.dy)
-                      - max(sim.dy, 0.5 * screen_r + pitch_inj))
-                inj_height_mm = max(h1, 0.0) + max(h2, 0.0)
+                hcs = getattr(sim, 'hole_centers', None)
+                yc0 = hcs[0] if hcs and len(hcs) > 0 else 0.5 * (screen_r + pitch_inj)
+                yc1 = hcs[1] if hcs and len(hcs) > 1 else 1.5 * (screen_r + pitch_inj)
+                h1 = max(0.0, min(yc0 + screen_r, sim.Ly - sim.dy) - max(sim.dy, yc0 - screen_r))
+                h2 = max(0.0, min(yc1 + screen_r, sim.Ly - sim.dy) - max(sim.dy, yc1 - screen_r))
+                inj_height_mm = h1 + h2
             elif geometry == 'one_hole':
-                inj_height_mm = (min(2.5 * screen_r, sim.Ly - sim.dy)
-                                 - max(sim.dy, 0.5 * screen_r))
+                hcs = getattr(sim, 'hole_centers', None)
+                yc = hcs[0] if hcs and len(hcs) > 0 else 0.5 * sim.Ly
+                inj_height_mm = max(0.0, min(yc + screen_r, sim.Ly - sim.dy) - max(sim.dy, yc - screen_r))
             else:
                 inj_height_mm = min(screen_r, sim.Ly - sim.dy)
         else:
@@ -75,19 +78,22 @@ def step_inject(sim, ctx: StepContext):
             screen_r = grids[0]['r']
             pitch_inj = params.get('pitch_mm', 0.0)
             if geometry == 'two_holes':
+                hcs = getattr(sim, 'hole_centers', None)
+                yc0 = hcs[0] if hcs and len(hcs) > 0 else 0.5 * (screen_r + pitch_inj)
+                yc1 = hcs[1] if hcs and len(hcs) > 1 else 1.5 * (screen_r + pitch_inj)
                 span_limits = np.array([
-                    [max(sim.dy, 0.5 * screen_r),
-                     min(2.5 * screen_r, sim.Ly - sim.dy)],
-                    [max(sim.dy, 0.5 * screen_r + pitch_inj),
-                     min(2.5 * screen_r + pitch_inj, sim.Ly - sim.dy)],
+                    [max(sim.dy, yc0 - screen_r), min(yc0 + screen_r, sim.Ly - sim.dy)],
+                    [max(sim.dy, yc1 - screen_r), min(yc1 + screen_r, sim.Ly - sim.dy)],
                 ], dtype=_NP_FP)
                 which_hole = np.random.randint(0, 2, size=num_inject)
                 y_lo  = span_limits[which_hole, 0]
                 y_hi  = span_limits[which_hole, 1]
                 new_y = (y_lo + (y_hi - y_lo) * np.random.rand(num_inject)).astype(_NP_FP)
             elif geometry == 'one_hole':
-                ylow  = max(sim.dy, 0.5 * screen_r)
-                yhigh = min(2.5 * screen_r, sim.Ly - sim.dy)
+                hcs = getattr(sim, 'hole_centers', None)
+                yc = hcs[0] if hcs and len(hcs) > 0 else 0.5 * sim.Ly
+                ylow  = max(sim.dy, yc - screen_r)
+                yhigh = min(yc + screen_r, sim.Ly - sim.dy)
                 new_y = np.random.uniform(ylow, yhigh, num_inject).astype(_NP_FP)
             else:
                 ylow  = 0.0

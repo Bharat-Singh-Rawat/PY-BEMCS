@@ -182,6 +182,12 @@ class SimControlMixin:
         self.inputs["upstream_gap_mm"].setValue(round(gap_used, 3))
         self.inputs["upstream_gap_mm"].blockSignals(False)
 
+        if hasattr(self.sim, 'hole_boundary_dist_mm') and "hole_boundary_dist_mm" in self.inputs:
+            hdist_used = self.sim.hole_boundary_dist_mm
+            self.inputs["hole_boundary_dist_mm"].blockSignals(True)
+            self.inputs["hole_boundary_dist_mm"].setValue(round(hdist_used, 3))
+            self.inputs["hole_boundary_dist_mm"].blockSignals(False)
+
         if hasattr(self.sim, 'grid_x_ends') and self.sim.grid_x_ends:
             _x_exit = self.sim.grid_x_ends[-1]
             _neut_auto = round(_x_exit + 0.9 * (self.sim.Lx - _x_exit), 3)

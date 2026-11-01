@@ -138,6 +138,11 @@ def parse_config(config_path='config.json'):
     params['Thresh'] = sim_cfg.get('Thresh', 10000.0)
     params['sim_mode'] = sim_cfg.get('sim_mode', 'Both')
     params['geometry'] = sim_cfg.get('geometry', 'half_hole')
+    if 'hole_boundary_dist_mm' in sim_cfg:
+        params['hole_boundary_dist_mm'] = sim_cfg['hole_boundary_dist_mm']
+    dc = config.get('discharge_chamber', {})
+    params['pitch_mm'] = dc.get('pitch_mm', 3.0)
+    params['discharge_chamber'] = dc
     params['target_ppc'] = sim_cfg.get('target_ppc', 40.0)
 
     # --- RF co-extraction ---

@@ -185,6 +185,12 @@ class UIBuilderMixin:
 
         self.grids_layout.insertWidget(self.grids_layout.count() - 1, gb)
 
+        if idx == 1:
+            spin_r.valueChanged.connect(lambda _: (
+                getattr(self, '_update_debye_gap', lambda: None)(),
+                getattr(self, '_update_hole_boundary_dist', lambda: None)()
+            ))
+
         self.grid_widgets.append({
             "gb": gb, "V": spin_v, "t": spin_t, "gap": spin_gap,
             "r": spin_r, "cham": spin_cham
@@ -315,6 +321,27 @@ class UIBuilderMixin:
             "After 'Build Domain' the value actually used is displayed here."
         )
 
+        # Hole-to-boundary distance (distance from hole center to top/down boundary)
+        row_bound, self.inputs["hole_boundary_dist_mm"] = self.create_input(
+            "Hole-Boundary (mm):", 0.0, 50.0, 0.05, 3
+        )
+        self.btn_reset_hole_bound = QPushButton("Auto")
+        self.btn_reset_hole_bound.setToolTip("Reset to default distance: 0.5 × (r_screen + pitch)")
+        self.btn_reset_hole_bound.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self.btn_reset_hole_bound.clicked.connect(self.reset_hole_boundary_dist)
+        row_bound.addWidget(self.btn_reset_hole_bound)
+        control_layout.addLayout(row_bound)
+        self.inputs["hole_boundary_dist_mm"].setToolTip(
+            "Distance between the center of the hole and the top (or down) domain boundary [mm].\n\n"
+            "Default = 0.5 × (r_screen + pitch).\n"
+            "Determines domain transverse height (Ly):\n"
+            "  • half_hole: Ly = d\n"
+            "  • one_hole:  Ly = 2 × d (hole centered)\n"
+            "  • two_holes: Ly = 4 × d (two unit cells)\n\n"
+            "Set to 0 to auto-track the default based on screen radius and pitch."
+        )
+        self.inputs["hole_boundary_dist_mm"].valueChanged.connect(self._on_hole_boundary_dist_changed)
+
         btn_layout = QHBoxLayout()
         btn_add = QPushButton("+ Add Grid")
         btn_rem = QPushButton("- Remove Grid")
@@ -375,10 +402,11 @@ class UIBuilderMixin:
         self.combo_geometry = QComboBox()
         self.combo_geometry.addItems(["half_hole", "one_hole", "two_holes"])
         self.combo_geometry.setToolTip(
-            "half_hole  — half-pitch symmetry, hole at y=0 (fastest, default)\n"
-            "one_hole   — full single-aperture domain, hole centred at y=1.5*r\n"
-            "two_holes  — full dual-aperture domain, two holes one pitch apart"
+            "half_hole  — half-pitch symmetry, Ly = 0.5*(r_screen + pitch), hole at y=0 (fastest, default)\n"
+            "one_hole   — full single-aperture domain, Ly = r_screen + pitch, hole centered\n"
+            "two_holes  — dual unit-cell domain, Ly = 2*(r_screen + pitch), two holes"
         )
+        self.combo_geometry.currentIndexChanged.connect(self._on_geometry_changed)
         control_layout.addWidget(self.combo_geometry)
 
         row, self.inputs["inj_time_µs"] = self.create_input(

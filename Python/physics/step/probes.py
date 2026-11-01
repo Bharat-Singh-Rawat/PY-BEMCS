@@ -13,7 +13,7 @@ def step_midhole_probe(sim, ctx: StepContext):
 
     if not hole_centers:
         if grids and geometry in ('one_hole', 'two_holes'):
-            hole_centers = [1.5 * grids[0]['r']]
+            hole_centers = [0.5 * getattr(sim, 'Ly', 3.0)] if geometry == 'one_hole' else [0.25 * getattr(sim, 'Ly', 3.0), 0.75 * getattr(sim, 'Ly', 3.0)]
         else:
             hole_centers = [0.0]
 

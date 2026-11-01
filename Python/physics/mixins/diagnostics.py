@@ -34,7 +34,7 @@ class DiagnosticsMixin:
         hole_centers = getattr(self, 'hole_centers', None)
         if not hole_centers:
             if hasattr(self, 'grids') and self.grids and geometry in ('one_hole', 'two_holes'):
-                y_c = 1.5 * self.grids[0]['r']
+                y_c = 0.5 * getattr(self, 'Ly', 3.0) if geometry == 'one_hole' else 0.25 * getattr(self, 'Ly', 3.0)
             else:
                 y_c = 0.0
         else:

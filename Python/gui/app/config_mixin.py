@@ -57,6 +57,12 @@ class ConfigMixin:
         self._last_auto_gap = _auto_gap
         self.inputs["upstream_gap_mm"].setValue(_auto_gap)
 
+        _default_pitch = getattr(self, "pitch_mm", 3.0)
+        _auto_hdist = round(0.5 * (_default_screen_r + _default_pitch), 3)
+        self._last_auto_hole_boundary_dist = _auto_hdist
+        if "hole_boundary_dist_mm" in self.inputs:
+            self.inputs["hole_boundary_dist_mm"].setValue(_auto_hdist)
+
         self.chk_neut_match_ion.setChecked(False)
         self.inputs["neut_rate"].setValue(30.0)
         self.inputs["neut_rate"].setEnabled(True)
@@ -130,15 +136,69 @@ class ConfigMixin:
 
         pitch = getattr(self, "pitch_mm", 3.0)
 
+        hdist = 0.0
+        if hasattr(self, 'inputs') and "hole_boundary_dist_mm" in self.inputs:
+            hdist = self.inputs["hole_boundary_dist_mm"].value()
+        if hdist <= 0.0:
+            hdist = 0.5 * (screen_r + pitch)
+
         if geom == "two_holes":
-            auto_Ly = screen_r + 2.0 * screen_r + pitch
+            auto_Ly = 4.0 * hdist
         elif geom == "one_hole":
-            auto_Ly = 3.0 * screen_r
+            auto_Ly = 2.0 * hdist
         else:  # half_hole
-            auto_Ly = 0.5 * screen_r + 0.30 * pitch
+            auto_Ly = hdist
 
         auto_Ly = round(auto_Ly, 3)
         return auto_Lx, auto_Ly
+
+    def _on_hole_boundary_dist_changed(self, val):
+        """Update domain size and advanced parameters when Hole-Boundary distance is adjusted."""
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
+
+    def _on_geometry_changed(self, idx):
+        """Update domain size when geometry mode is changed."""
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
+
+    def reset_hole_boundary_dist(self):
+        """Reset Hole-Boundary distance to default 0.5 * (screen_r + pitch)."""
+        screen_r = 0.80
+        if hasattr(self, 'grid_widgets') and self.grid_widgets:
+            screen_r = self.grid_widgets[0]["r"].value()
+        elif hasattr(self, 'config') and self.config and "grids" in self.config and self.config["grids"]:
+            screen_r = float(self.config["grids"][0].get("r", 0.80))
+        pitch = getattr(self, "pitch_mm", 3.0)
+        auto_hdist = round(0.5 * (screen_r + pitch), 3)
+        self._last_auto_hole_boundary_dist = auto_hdist
+        if "hole_boundary_dist_mm" in self.inputs:
+            self.inputs["hole_boundary_dist_mm"].blockSignals(True)
+            self.inputs["hole_boundary_dist_mm"].setValue(auto_hdist)
+            self.inputs["hole_boundary_dist_mm"].blockSignals(False)
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
+
+    def _update_hole_boundary_dist(self):
+        """Auto-update the Hole-Boundary spinbox when screen grid radius or pitch changes, if not user overridden."""
+        if not hasattr(self, '_last_auto_hole_boundary_dist') or "hole_boundary_dist_mm" not in self.inputs:
+            return
+        current = round(self.inputs["hole_boundary_dist_mm"].value(), 3)
+        if abs(current - self._last_auto_hole_boundary_dist) > 0.001:
+            return  # user manually edited it
+        screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+        pitch = getattr(self, "pitch_mm", 3.0)
+        new_hdist = round(0.5 * (screen_r + pitch), 3)
+        self._last_auto_hole_boundary_dist = new_hdist
+        self.inputs["hole_boundary_dist_mm"].blockSignals(True)
+        self.inputs["hole_boundary_dist_mm"].setValue(new_hdist)
+        self.inputs["hole_boundary_dist_mm"].blockSignals(False)
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
 
     def _on_neut_match_toggled(self, state):
         """Enable or disable manual neutralizer injection rate when matched to ion rate."""
@@ -343,6 +403,16 @@ class ConfigMixin:
         self.cs_store = load_cross_sections_from_config(config)
         self.pitch_mm = config.get("discharge_chamber", {}).get("pitch_mm", 3.0)
 
+        # Handle hole_boundary_dist_mm:
+        _screen_r = grids[0]["r"] if grids else 0.80
+        if "hole_boundary_dist_mm" in sim:
+            _hdist_val = float(sim["hole_boundary_dist_mm"])
+        else:
+            _hdist_val = round(0.5 * (_screen_r + self.pitch_mm), 3)
+        self._last_auto_hole_boundary_dist = _hdist_val
+        if "hole_boundary_dist_mm" in self.inputs:
+            self.inputs["hole_boundary_dist_mm"].setValue(_hdist_val)
+
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         if "Lx" in adv:
             self.adv_params["Lx"] = adv["Lx"]
@@ -475,6 +545,8 @@ class ConfigMixin:
         sim_cfg["Thresh"] = float(inputs["Thresh"].value()) if "Thresh" in inputs else float(sim_cfg.get("Thresh", 1e6))
         sim_cfg["sim_mode"] = str(self.combo_mode.currentText()) if hasattr(self, "combo_mode") else str(sim_cfg.get("sim_mode", "Thermal"))
         sim_cfg["geometry"] = str(self.combo_geometry.currentText()) if hasattr(self, "combo_geometry") else str(sim_cfg.get("geometry", "half_hole"))
+        if "hole_boundary_dist_mm" in inputs and inputs["hole_boundary_dist_mm"].value() > 0:
+            sim_cfg["hole_boundary_dist_mm"] = float(inputs["hole_boundary_dist_mm"].value())
         if "target_ppc" in inputs:
             sim_cfg["target_ppc"] = float(inputs["target_ppc"].value())
         if "inj_time_µs" in inputs and inputs["inj_time_µs"].value() > 0:

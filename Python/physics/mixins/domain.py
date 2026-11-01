@@ -277,14 +277,26 @@ class DomainMixin:
 
         if grids:
             screen_r = grids[0]['r']
-            if geometry == 'two_holes':
-                grid_Ly = screen_r + 2.0 * screen_r + pitch
-            elif geometry == 'one_hole':
-                grid_Ly = 3.0 * screen_r
+            pitch = params.get("pitch_mm", params.get("discharge_chamber", {}).get("pitch_mm", 0.0) if isinstance(params.get("discharge_chamber"), dict) else 0.0)
+            if not pitch:
+                pitch = 3.0
+
+            user_hdist = params.get('hole_boundary_dist_mm', params.get('hole_to_boundary_mm', 0.0))
+            if user_hdist is not None and float(user_hdist) > 0.0:
+                d_bound = float(user_hdist)
             else:
-                grid_Ly = 0.5 * screen_r + 0.30 * pitch
+                d_bound = 0.5 * (screen_r + pitch)
+            self.hole_boundary_dist_mm = d_bound
+
+            if geometry == 'two_holes':
+                grid_Ly = 4.0 * d_bound
+            elif geometry == 'one_hole':
+                grid_Ly = 2.0 * d_bound
+            else:
+                grid_Ly = d_bound
         else:
             grid_Ly = 3.0
+            self.hole_boundary_dist_mm = 1.5
 
         user_Ly = params.get('Ly', None)
         if user_Ly is not None and float(user_Ly) > 0:
@@ -426,11 +438,17 @@ class DomainMixin:
 
         if grids:
             screen_r = grids[0]['r']
+            pitch = params.get("pitch_mm", params.get("discharge_chamber", {}).get("pitch_mm", 0.0) if isinstance(params.get("discharge_chamber"), dict) else 0.0)
+            if not pitch:
+                pitch = 3.0
+            d_bound = getattr(self, 'hole_boundary_dist_mm', 0.5 * (screen_r + pitch))
             if geometry == 'two_holes':
-                y_c1 = 1.5 * screen_r
-                hole_centers = [y_c1, y_c1 + pitch]
+                if abs(self.Ly - 4.0 * d_bound) < 1e-4:
+                    hole_centers = [d_bound, 3.0 * d_bound]
+                else:
+                    hole_centers = [0.25 * self.Ly, 0.75 * self.Ly]
             elif geometry == 'one_hole':
-                hole_centers = [1.5 * screen_r]
+                hole_centers = [0.5 * self.Ly]
             else:
                 hole_centers = [0.0]
         else:
@@ -449,11 +467,12 @@ class DomainMixin:
 
             if abs(delta) > 1e-6:
                 if geometry == 'two_holes':
-                    y_web = 1.5 * screen_r + 0.5 * pitch
-                    eta = np.clip(1.0 - np.abs(self.Y - y_web) / max(pitch * 0.5, 1e-6), 0.0, 1.0)
+                    y_web = 0.5 * (hole_centers[0] + hole_centers[1]) if len(hole_centers) >= 2 else self.Ly * 0.5
+                    w_half = 0.5 * abs(hole_centers[1] - hole_centers[0]) if len(hole_centers) >= 2 else max(pitch * 0.5, 1e-6)
+                    eta = np.clip(1.0 - np.abs(self.Y - y_web) / max(w_half, 1e-6), 0.0, 1.0)
                     dxbow = delta * eta ** 2
                 elif geometry == 'one_hole':
-                    y_mid = 1.5 * screen_r
+                    y_mid = hole_centers[0] if hole_centers else self.Ly * 0.5
                     eta = np.clip(1.0 - np.abs(self.Y - y_mid) / max(self.Ly * 0.5, 1e-6), 0.0, 1.0)
                     dxbow = delta * eta ** 2
                 else:
