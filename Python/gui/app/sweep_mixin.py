@@ -7,7 +7,8 @@ steady-state condition checks, scenario transitions, and results collection.
 import numpy as np
 from PyQt5.QtWidgets import QMessageBox
 
-from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value
+from ..dialogs import SweepSettingsDialog, SweepResultsDialog, ParallelSweepProgressDialog, format_sci_value
+from ..workers import ParallelSweepWorker
 from diagnostics.metrics import compute_rolling_variation
 
 
@@ -36,9 +37,16 @@ class SweepMixin:
         self.sweep_current_idx = 0
         self.is_sweep_active = True
 
-        total_scenarios = len(config["values"])
-        param_label = config["param_label"]
-        first_val = config["values"][0]
+        total_scenarios = len(config.get("values", []))
+        param_label = config.get("param_label", "Parameter")
+        use_parallel = config.get("parallel", False) and total_scenarios > 0
+
+        if use_parallel:
+            n_cores = int(config.get("n_cores", 8))
+            self._start_parallel_sweep(config, n_cores)
+            return
+
+        first_val = config["values"][0] if total_scenarios > 0 else 0.0
         first_val_str = (
             format_sci_value(first_val)
             if (config.get("param_id") in ("n0_plasma", "n0") or abs(first_val) >= 1e4 or (0 < abs(first_val) <= 1e-3))
@@ -69,6 +77,77 @@ class SweepMixin:
         if not getattr(self, 'sim_isRunning', False):
             self.toggle_sim()
 
+    def _start_parallel_sweep(self, config, n_cores):
+        """Launch parallel multi-core sweep using ProcessPoolExecutor."""
+        total_scenarios = len(config.get("values", []))
+        param_label = config.get("param_label", "Parameter")
+
+        # Pause live simulator if currently running
+        if getattr(self, 'sim_isRunning', False):
+            self.toggle_sim()
+
+        # Update Top Bar Badge & Button
+        if hasattr(self, 'lbl_sweep_badge'):
+            self.lbl_sweep_badge.setVisible(True)
+            self.lbl_sweep_badge.setText(
+                f"⚡ Parallel Sweep [{n_cores} cores | 0/{total_scenarios} Done]"
+            )
+            self.lbl_sweep_badge.setStyleSheet(
+                "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
+                "border: 1px solid #d8b4fe; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+        if hasattr(self, 'btn_stop_sweep'):
+            self.btn_stop_sweep.setVisible(True)
+
+        if hasattr(self, 'lbl_status'):
+            self.lbl_status.setText(
+                f"Starting Parallel Multi-Core Sweep: {param_label} ({total_scenarios} scenarios on {n_cores} cores)..."
+            )
+
+        base_params = self.get_params() if hasattr(self, 'get_params') else {}
+
+        self.parallel_sweep_worker = ParallelSweepWorker(config, base_params, n_cores=n_cores, parent=self)
+        self.parallel_sweep_dlg = ParallelSweepProgressDialog(config, n_cores=n_cores, parent=self)
+
+        self.parallel_sweep_worker.progress_updated.connect(self.parallel_sweep_dlg.update_progress)
+        self.parallel_sweep_worker.progress_updated.connect(self._on_parallel_progress_updated)
+        self.parallel_sweep_worker.scenario_completed.connect(self._on_parallel_scenario_completed)
+        self.parallel_sweep_worker.sweep_finished.connect(self._on_parallel_sweep_finished)
+        self.parallel_sweep_worker.sweep_error.connect(self._on_parallel_sweep_error)
+
+        self.parallel_sweep_dlg.rejected.connect(self.stop_sweep)
+
+        self.parallel_sweep_worker.start()
+        self.parallel_sweep_dlg.show()
+
+    def _on_parallel_progress_updated(self, completed, total, status_text):
+        if hasattr(self, 'lbl_sweep_badge'):
+            n_cores = getattr(self.parallel_sweep_worker, 'n_cores', '') if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker else ''
+            core_str = f"{n_cores} cores | " if n_cores else ""
+            self.lbl_sweep_badge.setText(
+                f"⚡ Parallel Sweep [{core_str}{completed}/{total} Done]"
+            )
+        if hasattr(self, 'lbl_status'):
+            self.lbl_status.setText(status_text)
+
+    def _on_parallel_scenario_completed(self, result_row, completed, total):
+        self.sweep_results.append(result_row)
+
+    def _on_parallel_sweep_finished(self, results):
+        self.sweep_results = results
+        if hasattr(self, 'parallel_sweep_dlg') and self.parallel_sweep_dlg is not None:
+            try:
+                self.parallel_sweep_dlg.rejected.disconnect(self.stop_sweep)
+            except Exception:
+                pass
+            self.parallel_sweep_dlg.accept()
+            self.parallel_sweep_dlg = None
+        self.finish_sweep()
+
+    def _on_parallel_sweep_error(self, error_msg):
+        self.stop_sweep()
+        QMessageBox.critical(self, "Parallel Sweep Error", f"An error occurred during multi-core sweep:\n{error_msg}")
+
     def _apply_sweep_value(self, param_id, value):
         """Applies a target parameter value to the GUI inputs and simulator."""
         if param_id == "Te_up" and "Te_up" in self.inputs:
@@ -96,6 +175,10 @@ class SweepMixin:
         """
         if not getattr(self, 'is_sweep_active', False) or self.sweep_config is None:
             return
+
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            if self.parallel_sweep_worker.isRunning():
+                return
 
         sim = getattr(self, 'sim', None)
         if sim is None:
@@ -333,6 +416,21 @@ class SweepMixin:
     def stop_sweep(self):
         """User cancels active sweep early."""
         self.is_sweep_active = False
+
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            if self.parallel_sweep_worker.isRunning():
+                self.parallel_sweep_worker.cancel()
+            self.parallel_sweep_worker = None
+
+        if hasattr(self, 'parallel_sweep_dlg') and self.parallel_sweep_dlg is not None:
+            if self.parallel_sweep_dlg.isVisible():
+                try:
+                    self.parallel_sweep_dlg.rejected.disconnect(self.stop_sweep)
+                except Exception:
+                    pass
+                self.parallel_sweep_dlg.reject()
+            self.parallel_sweep_dlg = None
+
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setText("Sweep mode stopped")
             self.lbl_sweep_badge.setStyleSheet(

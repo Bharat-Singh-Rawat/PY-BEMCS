@@ -2,6 +2,7 @@
 Modal configuration dialogs for PY-BEMCS.
 Includes Beam Species, Grid Material, Advanced Physics/Mesh, and GUI Settings dialogs.
 """
+import os
 import math
 import numpy as np
 from PyQt5.QtCore import Qt
@@ -11,7 +12,8 @@ from PyQt5.QtWidgets import (
     QFormLayout, QDoubleSpinBox, QSpinBox, QPushButton,
     QCheckBox, QGroupBox, QButtonGroup, QRadioButton,
     QMessageBox, QScrollArea, QWidget, QFrame,
-    QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog
+    QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
+    QProgressBar
 )
 from .workers.simulation_worker import SimulationWorker
 
@@ -1456,6 +1458,47 @@ class SweepSettingsDialog(QDialog):
 
         layout.addWidget(gb_steady)
 
+        # ── Group 3: Parallel Execution & CPU Cores ───────────────────
+        total_cpus = os.cpu_count() or 16
+        default_cores = max(1, total_cpus // 2)
+
+        gb_parallel = QGroupBox("3. Parallel Multi-Core Execution")
+        form_parallel = QFormLayout(gb_parallel)
+        form_parallel.setLabelAlignment(Qt.AlignRight)
+
+        self.chk_parallel = QCheckBox("Enable Multi-Core Parallel Execution (Process Pool)")
+        self.chk_parallel.setChecked(True)
+        self.chk_parallel.setToolTip(
+            "Execute scenarios concurrently across multiple CPU cores to maximize throughput (bypasses Python's GIL)."
+        )
+        self.chk_parallel.stateChanged.connect(self._toggle_parallel_options)
+        form_parallel.addRow("Parallel Mode:", self.chk_parallel)
+
+        cores_layout = QHBoxLayout()
+        cores_layout.setSpacing(6)
+
+        self.spin_cores = QSpinBox()
+        self.spin_cores.setRange(1, total_cpus)
+        self.spin_cores.setValue(default_cores)
+        self.spin_cores.setSuffix(f" cores (Total: {total_cpus})")
+        self.spin_cores.setToolTip("Number of worker CPU cores to use for concurrent scenario execution.")
+        cores_layout.addWidget(self.spin_cores, 1)
+
+        self.btn_half_cores = QPushButton(f"Set to Half ({default_cores})")
+        self.btn_half_cores.setToolTip(f"Select half of available CPU cores ({default_cores}) for optimal balance")
+        self.btn_half_cores.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        self.btn_half_cores.clicked.connect(lambda: self.spin_cores.setValue(default_cores))
+        cores_layout.addWidget(self.btn_half_cores, 0)
+
+        self.btn_max_cores = QPushButton(f"Max ({total_cpus})")
+        self.btn_max_cores.setToolTip(f"Select all available CPU cores ({total_cpus})")
+        self.btn_max_cores.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        self.btn_max_cores.clicked.connect(lambda: self.spin_cores.setValue(total_cpus))
+        cores_layout.addWidget(self.btn_max_cores, 0)
+
+        form_parallel.addRow("CPU Cores to Use:", cores_layout)
+        layout.addWidget(gb_parallel)
+
         # Buttons
         btn_box = QHBoxLayout()
         btn_box.addStretch()
@@ -1473,6 +1516,12 @@ class SweepSettingsDialog(QDialog):
 
         # Initialize with first parameter
         self._on_param_changed()
+
+    def _toggle_parallel_options(self, state):
+        enabled = bool(state)
+        self.spin_cores.setEnabled(enabled)
+        self.btn_half_cores.setEnabled(enabled)
+        self.btn_max_cores.setEnabled(enabled)
 
     def _on_param_changed(self):
         idx = self.combo_param.currentIndex()
@@ -1553,7 +1602,80 @@ class SweepSettingsDialog(QDialog):
             "threshold": self.spin_thresh.value(),
             "max_iterations": self.spin_max_iters.value(),
             "min_iterations": self.spin_min_iters.value(),
+            "parallel": self.chk_parallel.isChecked(),
+            "n_cores": self.spin_cores.value(),
         }
+
+
+class ParallelSweepProgressDialog(QDialog):
+    """
+    Progress dialog displayed during parallel multi-core sweep runs.
+    Shows real-time progress bar, completed scenario stats, and cancellation button.
+    """
+    def __init__(self, sweep_config: dict, n_cores: int, parent=None):
+        super().__init__(parent)
+        self.sweep_config = sweep_config
+        self.n_cores = n_cores
+        total_scenarios = len(sweep_config.get("values", []))
+        param_label = sweep_config.get("param_label", "Parameter")
+
+        self.setWindowTitle("Parallel Parametric Sweep")
+        self.setMinimumWidth(500)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        title_lbl = QLabel(f"<b>Running Multi-Core Sweep:</b> {param_label}")
+        title_lbl.setStyleSheet("font-size: 13px; color: #1e293b;")
+        layout.addWidget(title_lbl)
+
+        self.lbl_info = QLabel(
+            f"Simulating <b>{total_scenarios} scenarios</b> concurrently across <b>{n_cores} CPU cores</b>.<br>"
+            "Bypasses Python's GIL to maximize physical hardware throughput."
+        )
+        self.lbl_info.setStyleSheet("color: #475569; font-size: 11px;")
+        layout.addWidget(self.lbl_info)
+
+        self.pbar = QProgressBar()
+        self.pbar.setRange(0, total_scenarios)
+        self.pbar.setValue(0)
+        self.pbar.setFormat(f"%p% (0/{total_scenarios} Scenarios Done)")
+        self.pbar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                text-align: center;
+                height: 24px;
+                font-weight: bold;
+                background-color: #f8fafc;
+            }
+            QProgressBar::chunk {
+                background-color: #7e22ce;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(self.pbar)
+
+        self.lbl_status = QLabel("Initializing worker processes...")
+        self.lbl_status.setStyleSheet("font-family: monospace; font-size: 11px; color: #64748b;")
+        layout.addWidget(self.lbl_status)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        self.btn_cancel = QPushButton("Stop Sweep")
+        self.btn_cancel.setStyleSheet(
+            "background-color: #fee2e2; color: #b91c1c; font-weight: bold; padding: 6px 14px; border-radius: 4px;"
+        )
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(self.btn_cancel)
+        layout.addLayout(btn_box)
+
+    def update_progress(self, completed: int, total: int, status_text: str):
+        self.pbar.setValue(completed)
+        self.pbar.setFormat(f"%p% ({completed}/{total} Scenarios Done)")
+        self.lbl_status.setText(status_text)
 
 
 class SweepResultsDialog(QDialog):
