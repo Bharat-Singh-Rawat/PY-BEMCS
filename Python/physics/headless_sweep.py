@@ -7,10 +7,39 @@ without GUI dependencies, bypassing Python's GIL.
 
 import os
 import copy
+import pickle
 import numpy as np
 
 from physics.simulator import DigitalTwinSimulator
 from diagnostics.metrics import compute_rolling_variation
+
+
+def write_scenario_state(state_file: str, data: dict):
+    """Atomically write scenario display snapshot to disk for real-time GUI tracking."""
+    if not state_file:
+        return
+    tmp_path = state_file + f".{os.getpid()}.tmp"
+    try:
+        with open(tmp_path, 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, state_file)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+def read_scenario_state(state_file: str):
+    """Read scenario display snapshot from disk."""
+    if not state_file or not os.path.exists(state_file):
+        return None
+    try:
+        with open(state_file, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        return None
 
 
 def apply_sweep_param_to_dict(base_params: dict, param_id: str, value: float) -> dict:
@@ -104,6 +133,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     base_params = payload["base_params"]
     steady_config = payload["steady_config"]
     cancel_file = payload.get("cancel_file")
+    status_dict = payload.get("status_dict")
+    state_file = payload.get("state_file")
 
     # Apply parameter variation
     scenario_params = apply_sweep_param_to_dict(base_params, param_id, parameter_value)
@@ -120,12 +151,81 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     steady_reached = False
     max_hit = False
 
+    prim_xy = np.empty((0, 2), dtype=np.float32)
+    e_prim = np.empty(0, dtype=np.float32)
+
+    init_state = {
+        "status": "running",
+        "iter": 0,
+        "max_iters": max_iters,
+        "parameter_value": parameter_value,
+        "steady_state_reached": False,
+        "t_sim_us": 0.0,
+        "div": 0.0,
+        "div_mid": 0.0,
+        "exit_ion_current_A": 0.0,
+        "transparency": 0.0,
+        "prim_xy": prim_xy,
+        "e_prim_eV": e_prim,
+    }
+    if status_dict is not None:
+        status_dict[scenario_idx] = init_state
+    if state_file:
+        write_scenario_state(state_file, init_state)
+
     while True:
         if cancel_file and (scenario_iters % 5 == 0) and os.path.exists(cancel_file):
             break
 
         sim.step(scenario_params)
         scenario_iters += 1
+
+        if (status_dict is not None or state_file is not None) and scenario_iters % 10 == 0:
+            try:
+                num_p = getattr(sim, 'num_p', 0)
+                if num_p > 0 and hasattr(sim, 'p_x') and hasattr(sim, 'p_y'):
+                    n_samp = min(num_p, 1500)
+                    step_samp = max(1, num_p // n_samp)
+                    idx_s = slice(0, num_p, step_samp)
+                    px = sim.p_x[idx_s] * 1e3
+                    py = sim.p_y[idx_s] * 1e3
+                    prim_xy = np.column_stack((px, py)).astype(np.float32)
+                    if hasattr(sim, 'p_vx') and hasattr(sim, 'p_vy'):
+                        vx = sim.p_vx[idx_s]
+                        vy = sim.p_vy[idx_s]
+                        vz = sim.p_vz[idx_s] if hasattr(sim, 'p_vz') else 0.0
+                        m_i = getattr(sim, 'm_ion', 131.293 * 1.6605e-27)
+                        q_i = getattr(sim, 'q_ion', 1.602e-19)
+                        e_prim = (0.5 * m_i * (vx**2 + vy**2 + vz**2) / max(q_i, 1e-25)).astype(np.float32)
+            except Exception:
+                pass
+
+            t_us = (scenario_iters * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
+            div_c = float(getattr(sim, 'current_div', 0.0))
+            if not np.isfinite(div_c): div_c = 0.0
+            div_m = float(getattr(sim, 'current_div_mid', 0.0))
+            if not np.isfinite(div_m): div_m = 0.0
+            i_step_c = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
+            trans_c = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
+
+            run_state = {
+                "status": "running",
+                "iter": scenario_iters,
+                "max_iters": max_iters,
+                "parameter_value": parameter_value,
+                "steady_state_reached": False,
+                "t_sim_us": float(t_us),
+                "div": div_c,
+                "div_mid": div_m,
+                "exit_ion_current_A": i_step_c,
+                "transparency": trans_c,
+                "prim_xy": prim_xy,
+                "e_prim_eV": e_prim,
+            }
+            if status_dict is not None:
+                status_dict[scenario_idx] = run_state
+            if state_file:
+                write_scenario_state(state_file, run_state)
 
         if scenario_iters >= max_iters:
             max_hit = True
@@ -176,7 +276,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         injection_area=getattr(sim, '_last_injection_area', None)
     )
 
-    return {
+    res_row = {
         "scenario_idx": scenario_idx,
         "parameter_value": parameter_value,
         "steady_state_reached": bool(steady_reached),
@@ -199,3 +299,29 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "total_charge_C": float(q_net),
         "field_energy_J": float(fe),
     }
+
+    done_state = {
+        "status": "done",
+        "iter": scenario_iters,
+        "max_iters": max_iters,
+        "parameter_value": parameter_value,
+        "steady_state_reached": bool(steady_reached),
+        "t_sim_us": float(t_sim_us),
+        "div": div,
+        "div_mid": div_plane2,
+        "exit_ion_current_A": i_exit,
+        "perveance_effective": float(p_eff),
+        "perveance_max": float(p_max),
+        "perveance_fraction": float(perv_frac),
+        "transparency": float(trans),
+        "prim_xy": prim_xy,
+        "e_prim_eV": e_prim,
+        "result_row": res_row,
+    }
+
+    if status_dict is not None:
+        status_dict[scenario_idx] = done_state
+    if state_file:
+        write_scenario_state(state_file, done_state)
+
+    return res_row

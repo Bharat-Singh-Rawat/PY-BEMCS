@@ -270,6 +270,18 @@ class UIBuilderMixin:
         )
         top_bar_layout.addWidget(self.lbl_sweep_badge)
 
+        self.combo_sweep_scenario = QComboBox()
+        self.combo_sweep_scenario.setVisible(False)
+        self.combo_sweep_scenario.setMinimumWidth(280)
+        self.combo_sweep_scenario.setToolTip("Select an ongoing or completed sweep scenario to inspect its live state")
+        self.combo_sweep_scenario.setStyleSheet(
+            "QComboBox { background-color: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; "
+            "border-radius: 4px; padding: 2px 8px; font-weight: bold; font-size: 11px; } "
+            "QComboBox::drop-down { border-left: 1px solid #cbd5e1; width: 18px; }"
+        )
+        self.combo_sweep_scenario.currentIndexChanged.connect(self._on_sweep_scenario_selected)
+        top_bar_layout.addWidget(self.combo_sweep_scenario)
+
         self.btn_stop_sweep = QPushButton("Stop Sweep")
         self.btn_stop_sweep.setVisible(False)
         self.btn_stop_sweep.setStyleSheet(

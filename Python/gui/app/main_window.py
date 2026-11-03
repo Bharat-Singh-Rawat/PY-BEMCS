@@ -182,10 +182,7 @@ class DigitalTwinApp(
             self.parallel_sweep_worker = None
             try:
                 worker.cancel()
-                worker.wait(500)
-                if worker.isRunning():
-                    worker.terminate()
-                    worker.wait(500)
+                worker.wait(2000)
             except Exception:
                 pass
 
@@ -212,6 +209,11 @@ class DigitalTwinApp(
         self.sim_isRunning = False
 
         # 3. Stop timers
+        if hasattr(self, 'sweep_monitor_timer') and self.sweep_monitor_timer is not None:
+            try:
+                self.sweep_monitor_timer.stop()
+            except Exception:
+                pass
         if hasattr(self, 'duration_clock_timer') and self.duration_clock_timer is not None:
             try:
                 self.duration_clock_timer.stop()

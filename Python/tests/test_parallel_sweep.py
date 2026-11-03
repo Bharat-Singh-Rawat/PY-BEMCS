@@ -172,10 +172,11 @@ class TestParallelSweepWorkerExecution(unittest.TestCase):
         results_collected = []
         progress_events = []
 
+        finished_results = []
         loop = QEventLoop()
         worker.scenario_completed.connect(lambda row, c, t: results_collected.append(row))
         worker.progress_updated.connect(lambda c, t, s: progress_events.append((c, t, s)))
-        worker.sweep_finished.connect(lambda res: loop.quit())
+        worker.sweep_finished.connect(lambda res: (finished_results.extend(res), loop.quit()))
         worker.sweep_error.connect(lambda err: loop.quit())
 
         worker.start()
@@ -183,9 +184,10 @@ class TestParallelSweepWorkerExecution(unittest.TestCase):
 
         self.assertEqual(len(results_collected), 2)
         self.assertGreater(len(progress_events), 0)
-        # Results should be sorted by scenario_idx
-        self.assertEqual(results_collected[0]["scenario_idx"], 1)
-        self.assertEqual(results_collected[1]["scenario_idx"], 2)
+        self.assertEqual(sorted([r["scenario_idx"] for r in results_collected]), [1, 2])
+        self.assertEqual(len(finished_results), 2)
+        self.assertEqual(finished_results[0]["scenario_idx"], 1)
+        self.assertEqual(finished_results[1]["scenario_idx"], 2)
 
 
 class TestSweepMixinParallelAppIntegration(unittest.TestCase):
@@ -197,6 +199,7 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
 
     def setUp(self):
         self.win = DigitalTwinApp()
+        self.win.inputs["neut_x"].setValue(5.0)
 
     def tearDown(self):
         if hasattr(self.win, '_sim_worker') and self.win._sim_worker.isRunning():
@@ -222,10 +225,13 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
             "min_iterations": 10,
         }
 
+        self.win.build_domain()
         self.win.start_sweep(cfg)
         self.assertTrue(self.win.is_sweep_active)
         self.assertIsNotNone(self.win.parallel_sweep_worker)
-        self.assertIsNotNone(self.win.parallel_sweep_dlg)
+        self.assertIsNotNone(self.win.combo_sweep_scenario)
+        self.assertFalse(self.win.combo_sweep_scenario.isHidden())
+        self.assertEqual(self.win.combo_sweep_scenario.count(), 2)
         self.assertFalse(self.win.lbl_sweep_badge.isHidden())
         self.assertIn("Parallel Sweep", self.win.lbl_sweep_badge.text())
 
@@ -234,6 +240,54 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
         self.assertFalse(self.win.is_sweep_active)
         self.assertIsNone(self.win.parallel_sweep_worker)
         self.assertEqual(self.win.lbl_sweep_badge.text(), "Sweep mode stopped")
+
+    def test_scenario_dropdown_switch_updates_canvas(self):
+        cfg = {
+            "param_id": "Te_up",
+            "param_label": "Upstream Electron Temp Te_up (eV)",
+            "param_unit": "eV",
+            "values": [2.0, 4.0, 6.0],
+            "parallel": True,
+            "n_cores": 2,
+            "window": 10,
+            "threshold": 5.0,
+            "max_iterations": 15,
+            "min_iterations": 10,
+        }
+        self.win.build_domain()
+        self.win.start_sweep(cfg)
+        self.assertEqual(self.win.combo_sweep_scenario.count(), 3)
+
+        # Manually inject mock scenario status
+        pts1 = np.array([[1.0, 0.5], [2.0, 0.6]], dtype=np.float32)
+        pts2 = np.array([[3.0, 0.8], [4.0, 0.9]], dtype=np.float32)
+        mock_status = {
+            1: {"status": "done", "iter": 120, "prim_xy": pts1, "e_prim_eV": np.array([10.0, 12.0]), "t_sim_us": 1.2, "div": 8.5},
+            2: {"status": "running", "iter": 60, "prim_xy": pts2, "e_prim_eV": np.array([15.0, 18.0]), "t_sim_us": 0.6, "div": 11.2},
+            3: {"status": "queued", "iter": 0},
+        }
+        self.win._sweep_status_dict = mock_status
+        if self.win.parallel_sweep_worker:
+            self.win.parallel_sweep_worker.final_status_dict = dict(mock_status)
+            for s_idx, st in mock_status.items():
+                sf = self.win.parallel_sweep_worker.state_files.get(s_idx)
+                if sf:
+                    from physics.headless_sweep import write_scenario_state
+                    write_scenario_state(sf, st)
+
+        # 1. Switch to Scenario 1
+        self.win.combo_sweep_scenario.setCurrentIndex(0)
+        self.win._on_sweep_scenario_selected(0)
+        np.testing.assert_allclose(self.win.scat_prim.get_offsets(), pts1)
+        self.assertIn("Scenario 1", self.win.lblTime.text())
+
+        # 2. Switch to Scenario 2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._on_sweep_scenario_selected(1)
+        np.testing.assert_allclose(self.win.scat_prim.get_offsets(), pts2)
+        self.assertIn("Scenario 2", self.win.lblTime.text())
+
+        self.win.stop_sweep()
 
     def test_close_event_prompt_when_sweep_running(self):
         from PyQt5.QtGui import QCloseEvent

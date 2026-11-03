@@ -6,6 +6,7 @@ steady-state condition checks, scenario transitions, and results collection.
 
 import numpy as np
 from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QTimer
 
 from ..dialogs import SweepSettingsDialog, SweepResultsDialog, ParallelSweepProgressDialog, format_sci_value
 from ..workers import ParallelSweepWorker
@@ -78,7 +79,7 @@ class SweepMixin:
             self.toggle_sim()
 
     def _start_parallel_sweep(self, config, n_cores):
-        """Launch parallel multi-core sweep using ProcessPoolExecutor."""
+        """Launch parallel multi-core sweep using ProcessPoolExecutor and top-bar scenario selector."""
         total_scenarios = len(config.get("values", []))
         param_label = config.get("param_label", "Parameter")
 
@@ -96,29 +97,179 @@ class SweepMixin:
                 "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
                 "border: 1px solid #d8b4fe; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
             )
+
+        # Initialize and display top-bar scenario selector dropdown
+        if hasattr(self, 'combo_sweep_scenario'):
+            self.combo_sweep_scenario.blockSignals(True)
+            self.combo_sweep_scenario.clear()
+            for idx, val in enumerate(config.get("values", [])):
+                val_str = (
+                    format_sci_value(val)
+                    if (config.get("param_id") in ("n0_plasma", "n0") or abs(val) >= 1e4 or (0 < abs(val) <= 1e-3))
+                    else f"{val:.3g}"
+                )
+                unit_str = f" {config.get('param_unit', '')}" if config.get('param_unit') else ""
+                self.combo_sweep_scenario.addItem(f"Scenario {idx + 1}: {config.get('param_id', 'param')} = {val_str}{unit_str}  [⏳ Queued]")
+            self.combo_sweep_scenario.setCurrentIndex(0)
+            self.combo_sweep_scenario.blockSignals(False)
+            self.combo_sweep_scenario.setVisible(True)
+
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(True)
 
         if hasattr(self, 'lbl_status'):
             self.lbl_status.setText(
-                f"Starting Parallel Multi-Core Sweep: {param_label} ({total_scenarios} scenarios on {n_cores} cores)..."
+                f"Running Parallel Sweep: {param_label} ({total_scenarios} scenarios on {n_cores} cores). Switch active views via top dropdown."
             )
 
         base_params = self.get_params() if hasattr(self, 'get_params') else {}
 
         self.parallel_sweep_worker = ParallelSweepWorker(config, base_params, n_cores=n_cores, parent=self)
-        self.parallel_sweep_dlg = ParallelSweepProgressDialog(config, n_cores=n_cores, parent=self)
 
-        self.parallel_sweep_worker.progress_updated.connect(self.parallel_sweep_dlg.update_progress)
         self.parallel_sweep_worker.progress_updated.connect(self._on_parallel_progress_updated)
         self.parallel_sweep_worker.scenario_completed.connect(self._on_parallel_scenario_completed)
         self.parallel_sweep_worker.sweep_finished.connect(self._on_parallel_sweep_finished)
         self.parallel_sweep_worker.sweep_error.connect(self._on_parallel_sweep_error)
 
-        self.parallel_sweep_dlg.rejected.connect(self.stop_sweep)
+        # Start live GUI monitor timer to sync top-bar dropdown items and active canvas view
+        if not hasattr(self, 'sweep_monitor_timer') or self.sweep_monitor_timer is None:
+            self.sweep_monitor_timer = QTimer(self)
+            self.sweep_monitor_timer.timeout.connect(self._on_sweep_monitor_tick)
+        self.sweep_monitor_timer.start(150)
 
         self.parallel_sweep_worker.start()
-        self.parallel_sweep_dlg.show()
+
+    def _on_sweep_monitor_tick(self):
+        """Periodic tick to update dropdown labels and render active scenario view."""
+        self._update_sweep_scenario_combo_items()
+        if hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario is not None:
+            active_idx = self.combo_sweep_scenario.currentIndex()
+            if active_idx >= 0:
+                self._render_sweep_scenario_snapshot(active_idx + 1)
+
+    def _on_sweep_scenario_selected(self, index):
+        """User switched scenario in top dropdown: immediately refresh canvas."""
+        if index < 0:
+            return
+        self._render_sweep_scenario_snapshot(index + 1)
+
+    def _update_sweep_scenario_combo_items(self):
+        """Update top-bar scenario dropdown items with real-time status and iteration count."""
+        if not hasattr(self, 'combo_sweep_scenario') or self.sweep_config is None:
+            return
+
+        cfg = self.sweep_config
+        values = cfg.get("values", [])
+        param_id = cfg.get("param_id", "")
+        param_unit = cfg.get("param_unit", "")
+
+        status_dict = {}
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            status_dict = self.parallel_sweep_worker.get_status_dict()
+        if hasattr(self, '_sweep_status_dict') and self._sweep_status_dict:
+            status_dict.update(self._sweep_status_dict)
+
+        current_idx = self.combo_sweep_scenario.currentIndex()
+        self.combo_sweep_scenario.blockSignals(True)
+        try:
+            for idx, val in enumerate(values):
+                scen_num = idx + 1
+                info = status_dict.get(scen_num, {})
+                status = info.get("status", "queued")
+                scen_iter = info.get("iter", 0)
+
+                val_str = (
+                    format_sci_value(val)
+                    if (param_id in ("n0_plasma", "n0") or abs(val) >= 1e4 or (0 < abs(val) <= 1e-3))
+                    else f"{val:.3g}"
+                )
+                unit_str = f" {param_unit}" if param_unit else ""
+
+                if status == "running":
+                    tag = f"[▶ Running - {scen_iter} iters]"
+                elif status == "done":
+                    tag = f"[✔ Done - {scen_iter} iters]"
+                elif status == "stopped":
+                    tag = f"[⏹ Stopped]"
+                else:
+                    tag = "[⏳ Queued]"
+
+                item_text = f"Scenario {scen_num}: {param_id} = {val_str}{unit_str}  {tag}"
+
+                if idx < self.combo_sweep_scenario.count():
+                    if self.combo_sweep_scenario.itemText(idx) != item_text:
+                        self.combo_sweep_scenario.setItemText(idx, item_text)
+                else:
+                    self.combo_sweep_scenario.addItem(item_text)
+
+            if current_idx >= 0 and current_idx < self.combo_sweep_scenario.count():
+                self.combo_sweep_scenario.setCurrentIndex(current_idx)
+        finally:
+            self.combo_sweep_scenario.blockSignals(False)
+
+    def _render_sweep_scenario_snapshot(self, scenario_idx):
+        """Render the chosen sweep scenario's particle data and physical observables on the canvas."""
+        status_dict = {}
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            status_dict = self.parallel_sweep_worker.get_status_dict()
+        if hasattr(self, '_sweep_status_dict') and self._sweep_status_dict:
+            status_dict.update(self._sweep_status_dict)
+
+        info = status_dict.get(scenario_idx)
+        if not info:
+            return
+
+        # 1. Update primary ion particles
+        prim_xy = info.get("prim_xy")
+        e_prim_eV = info.get("e_prim_eV")
+        if prim_xy is not None and len(prim_xy) > 0 and hasattr(self, 'scat_prim') and self.scat_prim is not None:
+            self.scat_prim.set_offsets(prim_xy)
+            if e_prim_eV is not None and len(e_prim_eV) > 0:
+                self.scat_prim.set_array(e_prim_eV)
+                e_min = float(np.min(e_prim_eV))
+                e_max = float(np.max(e_prim_eV))
+                if e_max <= e_min:
+                    e_max = e_min + 1.0
+                self.scat_prim.set_clim(e_min, e_max)
+
+        # Clear CEX and electrons on sweep view if not tracked
+        if hasattr(self, 'scat_cex') and self.scat_cex is not None:
+            self.scat_cex.set_offsets(np.empty((0, 2)))
+        if hasattr(self, 'scat_elec') and self.scat_elec is not None:
+            self.scat_elec.set_offsets(np.empty((0, 2)))
+
+        # 2. Update status and metrics labels
+        t_us = info.get("t_sim_us", 0.0)
+        scenario_iter = info.get("iter", 0)
+        div = info.get("div", 0.0)
+        div_mid = info.get("div_mid", 0.0)
+        i_exit = info.get("exit_ion_current_A", 0.0)
+        trans = info.get("transparency", 0.0)
+        status_tag = info.get("status", "unknown").upper()
+        p_eff = info.get("perveance_effective", 0.0)
+
+        if hasattr(self, 'lblTime'):
+            self.lblTime.setText(f"t_sim: {t_us:.2f} µs | Scenario {scenario_idx} [{status_tag}]")
+
+        if hasattr(self, 'lblTransparency'):
+            self.lblTransparency.setText(
+                f"Transparency: {trans:.3f}\n"
+                f"Divergence Exit: {div:.2f}°\n"
+                f"Divergence Plane 2: {div_mid:.2f}°\n"
+                f"Exit I_ion: {i_exit * 1e3:.3f} mA\n"
+                f"Peffective: {p_eff:.3e}\n"
+                f"Iteration: {scenario_iter:,}"
+            )
+
+        if hasattr(self, 'lbl_top_sim_time'):
+            self.lbl_top_sim_time.setText(f"Scenario {scenario_idx} | Plasma: {t_us:.2f} µs | Iter: {scenario_iter:,}")
+
+        if hasattr(self, 'lblPerfPtcls'):
+            num_pts = len(prim_xy) if prim_xy is not None else 0
+            self.lblPerfPtcls.setText(f"Display Ions: {num_pts:,} | State: {status_tag}")
+
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
@@ -132,9 +283,12 @@ class SweepMixin:
 
     def _on_parallel_scenario_completed(self, result_row, completed, total):
         self.sweep_results.append(result_row)
+        self._update_sweep_scenario_combo_items()
 
     def _on_parallel_sweep_finished(self, results):
         self.sweep_results = results
+        if hasattr(self, 'sweep_monitor_timer') and self.sweep_monitor_timer is not None:
+            self.sweep_monitor_timer.stop()
         if hasattr(self, 'parallel_sweep_dlg') and self.parallel_sweep_dlg is not None:
             try:
                 self.parallel_sweep_dlg.rejected.disconnect(self.stop_sweep)
@@ -417,6 +571,9 @@ class SweepMixin:
         """User cancels active sweep early."""
         self.is_sweep_active = False
 
+        if hasattr(self, 'sweep_monitor_timer') and self.sweep_monitor_timer is not None:
+            self.sweep_monitor_timer.stop()
+
         if hasattr(self, 'parallel_sweep_dlg') and self.parallel_sweep_dlg is not None:
             dlg = self.parallel_sweep_dlg
             self.parallel_sweep_dlg = None
@@ -434,10 +591,7 @@ class SweepMixin:
             self.parallel_sweep_worker = None
             try:
                 worker.cancel()
-                worker.wait(500)
-                if worker.isRunning():
-                    worker.terminate()
-                    worker.wait(500)
+                worker.wait(2000)
             except Exception:
                 pass
 
@@ -456,9 +610,14 @@ class SweepMixin:
         if hasattr(self, 'lbl_status'):
             self.lbl_status.setText("Parametric sweep cancelled by user.")
 
+        self._update_sweep_scenario_combo_items()
+
     def finish_sweep(self):
         """Called when all scenarios have completed."""
         self.is_sweep_active = False
+
+        if hasattr(self, 'sweep_monitor_timer') and self.sweep_monitor_timer is not None:
+            self.sweep_monitor_timer.stop()
 
         if getattr(self, 'sim_isRunning', False):
             self.toggle_sim()
@@ -472,8 +631,10 @@ class SweepMixin:
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(False)
 
+        self._update_sweep_scenario_combo_items()
+
         if hasattr(self, 'lbl_status'):
-            self.lbl_status.setText(f"Parametric sweep completed ({len(self.sweep_results)} scenarios).")
+            self.lbl_status.setText(f"Parametric sweep completed ({len(self.sweep_results)} scenarios). Use the dropdown to inspect any scenario.")
 
         # Open Results dialog
         self.sweep_results_dialog = SweepResultsDialog(self.sweep_config, self.sweep_results, self)
