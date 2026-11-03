@@ -99,6 +99,7 @@ class DigitalTwinApp(
         self.tracking_buffer = []
         self.iedf_window = None
         self.ppc_window  = None
+        self.density_window = None
         self.phys_window = None
         self.charge_window = None
         self.perf_window = None

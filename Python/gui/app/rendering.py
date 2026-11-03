@@ -88,6 +88,10 @@ class RenderingMixin:
             self.ax_temp.set_xlim(0, self.sim.Lx)
             self.ax_temp.set_ylim(0, self.sim.Ly)
 
+        if self.ppc_window and self.ppc_window.isVisible():
+            self.ppc_window.update_plot(self.sim)
+        if getattr(self, 'density_window', None) and self.density_window.isVisible():
+            self.density_window.update_plot(self.sim)
         if self.phys_window and self.phys_window.isVisible():
             self.phys_window.update_plot(self.sim)
         if self.charge_window and self.charge_window.isVisible():
@@ -266,6 +270,8 @@ class RenderingMixin:
             self._last_diag_t = now
             if self.ppc_window and self.ppc_window.isVisible():
                 self.ppc_window.update_plot(self.sim)
+            if getattr(self, 'density_window', None) and self.density_window.isVisible():
+                self.density_window.update_plot(self.sim)
             if self.phys_window and self.phys_window.isVisible():
                 self.phys_window.update_plot(self.sim)
             if self.charge_window and self.charge_window.isVisible():
@@ -307,6 +313,8 @@ class RenderingMixin:
                 self.substep_history_iter.clear()
                 self.substep_history_ion.clear()
                 self.substep_history_e.clear()
+            if getattr(self, 'density_window', None):
+                self.density_window.reset_accumulator()
 
         self.iter_history.append(snap['iteration'])
         if not hasattr(self, 'substep_history_iter'):

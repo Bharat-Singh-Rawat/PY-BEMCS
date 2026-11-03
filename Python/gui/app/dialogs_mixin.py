@@ -19,6 +19,7 @@ from diagnostics import (
     CrossSectionViewerWindow,
     IEDFWindow,
     PPCWindow,
+    DensityWindow,
     PhysicalConstraintsWindow,
     TotalChargeMonitorWindow,
     PerformanceMonitorWindow,
@@ -162,6 +163,16 @@ class DialogsMixin:
         self.ppc_window.activateWindow()
         if hasattr(self, 'sim'):
             self.ppc_window.update_plot(self.sim)
+
+    def open_density_window(self):
+        """Open Plasma & Particle Density Diagnostics window."""
+        if getattr(self, 'density_window', None) is None:
+            self.density_window = DensityWindow(self)
+        self.density_window.show()
+        self.density_window.raise_()
+        self.density_window.activateWindow()
+        if hasattr(self, 'sim') and self.sim is not None:
+            self.density_window.update_plot(self.sim)
 
     def open_phys_window(self):
         """Open Total Energy and Physical Constraints monitor window."""

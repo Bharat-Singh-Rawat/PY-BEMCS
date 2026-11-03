@@ -10,6 +10,7 @@ from .metrics import compute_energy_budget, compute_charge_budget, compute_rolli
 from .cs_viewer_window import CrossSectionViewerWindow
 from .iedf_window import IEDFWindow
 from .ppc_window import PPCWindow
+from .density_window import DensityWindow
 from .energy_window import PhysicalConstraintsWindow, TotalEnergyWindow
 from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
 from .perf_window import PerformanceMonitorWindow
@@ -26,6 +27,7 @@ __all__ = [
     "CrossSectionViewerWindow",
     "IEDFWindow",
     "PPCWindow",
+    "DensityWindow",
     "PhysicalConstraintsWindow",
     "TotalEnergyWindow",
     "TotalChargeMonitorWindow",

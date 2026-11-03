@@ -24,6 +24,138 @@ class DiagnosticsMixin:
             return self.current_ppc_map.astype(np.float64)
         return np.zeros((self.ny, self.nx), dtype=np.float64)
 
+    def get_density_map(self, species: str = 'ions') -> np.ndarray:
+        """
+        Compute and return the 2D spatial number density map [m^-3] of shape (ny, nx).
+        Supported species:
+          - 'ions' or 'total_ions': all active macro-ions (primary + CEX)
+          - 'primary' or 'primary_ions': primary non-CEX ions only
+          - 'cex' or 'cex_ions': charge-exchange ions only
+          - 'electrons' or 'electron': total electrons (kinetic + Boltzmann fluid)
+          - 'kinetic_electrons': kinetic electron macroparticles only
+          - 'boltzmann_electrons': fluid/Boltzmann continuum electrons only
+        """
+        cvol = getattr(self, 'cell_vol_2d', None)
+        if cvol is None or cvol.shape != (self.ny, self.nx):
+            if hasattr(self, 'cell_vol_1d') and len(self.cell_vol_1d) == self.nx:
+                cvol = np.tile(self.cell_vol_1d, (self.ny, 1))
+            else:
+                cvol = np.full((self.ny, self.nx), (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3)
+
+        sp = species.lower().strip()
+
+        if sp in ('electrons', 'electron', 'kinetic_electrons', 'boltzmann_electrons'):
+            density = np.zeros((self.ny, self.nx), dtype=np.float64)
+
+            # 1. Kinetic electrons
+            if sp != 'boltzmann_electrons' and getattr(self, 'num_e', 0) > 0:
+                n_e = int(self.num_e)
+                ex = self.e_x[:n_e]
+                ey = self.e_y[:n_e]
+                ix = self._x_to_ix(ex)
+                iy = np.clip(np.round(ey / self.dy).astype(int), 0, self.ny - 1)
+                flat_idx = iy * self.nx + ix
+                counts = np.bincount(flat_idx, minlength=self.nx * self.ny).reshape((self.ny, self.nx))
+                density += (counts * self.macro_weight) / cvol
+
+            # 2. Boltzmann fluid electrons
+            if sp != 'kinetic_electrons' and hasattr(self, 'V') and self.V is not None and self.V.shape == (self.ny, self.nx):
+                grids = getattr(self, 'grids', [{'V': 1000}])
+                v_offset = getattr(self, 'V_plasma_offset', 20.0)
+                V_p = grids[0]['V'] + v_offset if grids else 1020.0
+                Te = getattr(self, 'Te_up', 3.0)
+                n0 = getattr(self, 'n0_plasma', 1e17)
+                bf = np.exp((np.minimum(self.V, V_p) - V_p) / max(Te, 1e-4))
+                density += n0 * bf
+
+            # Zero out density inside solid grid electrodes
+            if hasattr(self, 'isBound') and self.isBound is not None and self.isBound.shape == (self.ny, self.nx):
+                density[self.isBound] = 0.0
+
+            return density
+
+        # Ion species
+        density = np.zeros((self.ny, self.nx), dtype=np.float64)
+        n_p = int(getattr(self, 'num_p', 0))
+        if n_p == 0:
+            return density
+
+        px = self.p_x[:n_p]
+        py = self.p_y[:n_p]
+
+        if sp in ('cex', 'cex_ions'):
+            if not hasattr(self, 'p_isCEX'):
+                return density
+            mask = self.p_isCEX[:n_p]
+            px = px[mask]
+            py = py[mask]
+        elif sp in ('primary', 'primary_ions'):
+            if hasattr(self, 'p_isCEX'):
+                mask = ~self.p_isCEX[:n_p]
+                px = px[mask]
+                py = py[mask]
+
+        if len(px) == 0:
+            return density
+
+        ix = self._x_to_ix(px)
+        iy = np.clip(np.round(py / self.dy).astype(int), 0, self.ny - 1)
+        flat_idx = iy * self.nx + ix
+        counts = np.bincount(flat_idx, minlength=self.nx * self.ny).reshape((self.ny, self.nx))
+        density = (counts * self.macro_weight) / cvol
+
+        if hasattr(self, 'isBound') and self.isBound is not None and self.isBound.shape == (self.ny, self.nx):
+            density[self.isBound] = 0.0
+
+        return density
+
+    def get_divergence_plane_locations(self) -> tuple[float, float]:
+        """
+        Return (x1_exit_mm, x2_custom_mm) defining the two axial planes where divergence
+        and radial density profiles are evaluated.
+        """
+        if hasattr(self, 'grid_x_ends') and len(self.grid_x_ends) > 0:
+            x1 = float(self.grid_x_ends[-1])
+        else:
+            x1 = float(getattr(self, 'Lx', 20.0) * 0.5)
+
+        x2 = getattr(self, 'div_plane_x', None)
+        if x2 is None or not (x1 <= x2 <= getattr(self, 'Lx', 20.0)):
+            x2 = round(x1 + 0.5 * (getattr(self, 'Lx', 20.0) - x1), 3)
+
+        return float(x1), float(x2)
+
+    def get_radial_density_profile(self, x_plane_mm: float, species: str = 'ions', density_map: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return (y_coords_mm, density_profile_m3) along the radial direction at axial position x_plane_mm.
+        Uses linear interpolation between adjacent mesh columns for smooth profiles.
+        """
+        if density_map is None:
+            density_map = self.get_density_map(species=species)
+        y_coords = getattr(self, 'y_coords', getattr(self, 'ypts', None))
+        if y_coords is None:
+            y_coords = np.arange(self.ny) * self.dy
+
+        x_coords = getattr(self, 'x_coords', getattr(self, 'xpts', None))
+        x_clamped = float(np.clip(x_plane_mm, 0.0, getattr(self, 'Lx', 20.0)))
+
+        if x_coords is not None and len(x_coords) >= 2:
+            ix1 = int(np.searchsorted(x_coords, x_clamped))
+            ix1 = int(np.clip(ix1, 1, len(x_coords) - 1))
+            ix0 = ix1 - 1
+            x0 = x_coords[ix0]
+            x1 = x_coords[ix1]
+            if x1 > x0:
+                w = float(np.clip((x_clamped - x0) / (x1 - x0), 0.0, 1.0))
+                profile = (1.0 - w) * density_map[:, ix0] + w * density_map[:, ix1]
+            else:
+                profile = density_map[:, ix0]
+        else:
+            ix = self._x_to_ix(x_clamped) if hasattr(self, '_x_to_ix') else int(np.clip(round(x_clamped / self.dx), 0, self.nx - 1))
+            profile = density_map[:, ix]
+
+        return y_coords.copy(), profile.copy()
+
     def get_centerline_potential_profile(self):
         """
         Returns (x_coords_mm, V_centerline_V) along the axial direction through the center

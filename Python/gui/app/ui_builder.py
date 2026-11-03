@@ -101,6 +101,10 @@ class UIBuilderMixin:
         ppc_action.triggered.connect(self.open_ppc_window)
         diag_menu.addAction(ppc_action)
 
+        density_action = QAction("Density...", self)
+        density_action.triggered.connect(self.open_density_window)
+        diag_menu.addAction(density_action)
+
         phys_action = QAction("Total Energy ...", self)
         phys_action.triggered.connect(self.open_phys_window)
         diag_menu.addAction(phys_action)
