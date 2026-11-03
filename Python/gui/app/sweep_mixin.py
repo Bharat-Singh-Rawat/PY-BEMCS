@@ -417,19 +417,33 @@ class SweepMixin:
         """User cancels active sweep early."""
         self.is_sweep_active = False
 
-        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-            if self.parallel_sweep_worker.isRunning():
-                self.parallel_sweep_worker.cancel()
-            self.parallel_sweep_worker = None
-
         if hasattr(self, 'parallel_sweep_dlg') and self.parallel_sweep_dlg is not None:
-            if self.parallel_sweep_dlg.isVisible():
-                try:
-                    self.parallel_sweep_dlg.rejected.disconnect(self.stop_sweep)
-                except Exception:
-                    pass
-                self.parallel_sweep_dlg.reject()
+            dlg = self.parallel_sweep_dlg
             self.parallel_sweep_dlg = None
+            try:
+                dlg.rejected.disconnect(self.stop_sweep)
+            except Exception:
+                pass
+            try:
+                dlg.reject()
+            except Exception:
+                pass
+
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            worker = self.parallel_sweep_worker
+            self.parallel_sweep_worker = None
+            try:
+                worker.cancel()
+                worker.wait(500)
+                if worker.isRunning():
+                    worker.terminate()
+                    worker.wait(500)
+            except Exception:
+                pass
+
+        # If a sequential sweep was running the live simulator, pause it
+        if getattr(self, 'sim_isRunning', False):
+            self.toggle_sim()
 
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setText("Sweep mode stopped")

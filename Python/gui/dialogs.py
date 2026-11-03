@@ -1621,7 +1621,7 @@ class ParallelSweepProgressDialog(QDialog):
 
         self.setWindowTitle("Parallel Parametric Sweep")
         self.setMinimumWidth(500)
-        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.CustomizeWindowHint)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.CustomizeWindowHint)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -1668,9 +1668,29 @@ class ParallelSweepProgressDialog(QDialog):
         self.btn_cancel.setStyleSheet(
             "background-color: #fee2e2; color: #b91c1c; font-weight: bold; padding: 6px 14px; border-radius: 4px;"
         )
-        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_cancel.clicked.connect(self._on_stop_clicked)
         btn_box.addWidget(self.btn_cancel)
         layout.addLayout(btn_box)
+
+    def _on_stop_clicked(self):
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setText("Stopping...")
+        self.reject()
+
+    def closeEvent(self, event):
+        """Prompt confirmation when closing via the window cross while sweep is running."""
+        reply = QMessageBox.question(
+            self,
+            "Simulation Running",
+            "Attention: simulation is running. Are you sure you want to close the tab?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.reject()
+            event.accept()
+        else:
+            event.ignore()
 
     def update_progress(self, completed: int, total: int, status_text: str):
         self.pbar.setValue(completed)

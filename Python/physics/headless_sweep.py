@@ -103,6 +103,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     parameter_value = payload["parameter_value"]
     base_params = payload["base_params"]
     steady_config = payload["steady_config"]
+    cancel_file = payload.get("cancel_file")
 
     # Apply parameter variation
     scenario_params = apply_sweep_param_to_dict(base_params, param_id, parameter_value)
@@ -120,6 +121,9 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     max_hit = False
 
     while True:
+        if cancel_file and (scenario_iters % 5 == 0) and os.path.exists(cancel_file):
+            break
+
         sim.step(scenario_params)
         scenario_iters += 1
 

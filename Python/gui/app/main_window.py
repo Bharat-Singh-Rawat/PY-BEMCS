@@ -2,7 +2,7 @@
 DigitalTwinApp main window composed from modular UI and logic mixins.
 """
 import os
-from PyQt5.QtWidgets import QMainWindow
+from PyQt5.QtWidgets import QMainWindow, QMessageBox
 from PyQt5.QtCore import QTimer
 
 from physics_engine import DigitalTwinSimulator
@@ -159,3 +159,97 @@ class DigitalTwinApp(
         self._sim_worker = SimulationWorker(self.sim, parent=self)
         self._sim_worker.step_done.connect(self._on_step_result)
         self._sim_worker.sim_finished.connect(self._on_worker_finished)
+
+    def is_simulation_running(self):
+        """Check if any simulation is currently running (regular beam simulation or parametric sweep)."""
+        if getattr(self, 'sim_isRunning', False):
+            return True
+        if getattr(self, 'is_sweep_active', False):
+            return True
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            if self.parallel_sweep_worker.isRunning():
+                return True
+        if hasattr(self, '_sim_worker') and self._sim_worker is not None:
+            if self._sim_worker.isRunning() and getattr(self._sim_worker, 'running', False):
+                return True
+        return False
+
+    def _shutdown_background_tasks(self):
+        """Cleanly and forcibly terminate all background worker processes, threads, and timers."""
+        # 1. Cancel and kill parallel sweep workers and child processes
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            worker = self.parallel_sweep_worker
+            self.parallel_sweep_worker = None
+            try:
+                worker.cancel()
+                worker.wait(500)
+                if worker.isRunning():
+                    worker.terminate()
+                    worker.wait(500)
+            except Exception:
+                pass
+
+        if hasattr(self, 'parallel_sweep_dlg') and self.parallel_sweep_dlg is not None:
+            dlg = self.parallel_sweep_dlg
+            self.parallel_sweep_dlg = None
+            try:
+                dlg.reject()
+            except Exception:
+                pass
+
+        self.is_sweep_active = False
+
+        # 2. Stop regular simulation worker thread
+        if hasattr(self, '_sim_worker') and self._sim_worker is not None:
+            try:
+                self._sim_worker.pause()
+                self._sim_worker.wait(500)
+                if self._sim_worker.isRunning():
+                    self._sim_worker.terminate()
+                    self._sim_worker.wait(500)
+            except Exception:
+                pass
+        self.sim_isRunning = False
+
+        # 3. Stop timers
+        if hasattr(self, 'duration_clock_timer') and self.duration_clock_timer is not None:
+            try:
+                self.duration_clock_timer.stop()
+            except Exception:
+                pass
+        if hasattr(self, 'timer') and self.timer is not None:
+            try:
+                self.timer.stop()
+            except Exception:
+                pass
+
+        # 4. Close auxiliary diagnostic windows
+        for win_attr in (
+            'density_window', 'ebs_window', 'diag_window', 'iedf_window',
+            'ppc_window', 'phys_window', 'charge_window', 'perf_window',
+            'cs_viewer_window', 'mesh_window', 'field_window',
+            'steady_state_window', 'substep_window', 'sweep_results_dialog'
+        ):
+            w = getattr(self, win_attr, None)
+            if w is not None:
+                try:
+                    w.close()
+                except Exception:
+                    pass
+
+    def closeEvent(self, event):
+        """Prompt confirmation if simulation/sweep is running and safely shut down all workers."""
+        if self.is_simulation_running():
+            reply = QMessageBox.question(
+                self,
+                "Simulation Running",
+                "Attention: simulation is running. Are you sure you want to close the tab?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+
+        self._shutdown_background_tasks()
+        event.accept()

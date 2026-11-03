@@ -235,6 +235,83 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
         self.assertIsNone(self.win.parallel_sweep_worker)
         self.assertEqual(self.win.lbl_sweep_badge.text(), "Sweep mode stopped")
 
+    def test_close_event_prompt_when_sweep_running(self):
+        from PyQt5.QtGui import QCloseEvent
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.is_sweep_active = True
+        self.assertTrue(self.win.is_simulation_running())
+
+        # 1. User selects "No" -> event should be ignored
+        event_no = QCloseEvent()
+        with patch.object(QMessageBox, 'question', return_value=QMessageBox.No) as mock_q:
+            self.win.closeEvent(event_no)
+            self.assertFalse(event_no.isAccepted())
+            mock_q.assert_called_once()
+            call_text = mock_q.call_args[0][2]
+            self.assertIn("Attention: simulation is running", call_text)
+            self.assertIn("close the tab", call_text)
+
+        # 2. User selects "Yes" -> event should be accepted and background tasks shut down
+        event_yes = QCloseEvent()
+        with patch.object(QMessageBox, 'question', return_value=QMessageBox.Yes) as mock_q:
+            self.win.closeEvent(event_yes)
+            self.assertTrue(event_yes.isAccepted())
+            self.assertFalse(self.win.is_sweep_active)
+
+    def test_close_event_prompt_when_sim_running(self):
+        from PyQt5.QtGui import QCloseEvent
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.sim_isRunning = True
+        self.assertTrue(self.win.is_simulation_running())
+
+        event_no = QCloseEvent()
+        with patch.object(QMessageBox, 'question', return_value=QMessageBox.No) as mock_q:
+            self.win.closeEvent(event_no)
+            self.assertFalse(event_no.isAccepted())
+            mock_q.assert_called_once()
+
+        event_yes = QCloseEvent()
+        with patch.object(QMessageBox, 'question', return_value=QMessageBox.Yes) as mock_q:
+            self.win.closeEvent(event_yes)
+            self.assertTrue(event_yes.isAccepted())
+            self.assertFalse(self.win.sim_isRunning)
+
+    def test_close_event_no_prompt_when_idle(self):
+        from PyQt5.QtGui import QCloseEvent
+        from PyQt5.QtWidgets import QMessageBox
+
+        self.win.sim_isRunning = False
+        self.win.is_sweep_active = False
+        self.assertFalse(self.win.is_simulation_running())
+
+        event = QCloseEvent()
+        with patch.object(QMessageBox, 'question') as mock_q:
+            self.win.closeEvent(event)
+            mock_q.assert_not_called()
+            self.assertTrue(event.isAccepted())
+
+    def test_progress_dialog_close_event_prompt(self):
+        from PyQt5.QtGui import QCloseEvent
+        from PyQt5.QtWidgets import QMessageBox
+
+        cfg = {"param_id": "Te_up", "values": [2.0, 4.0]}
+        dlg = ParallelSweepProgressDialog(cfg, n_cores=2)
+
+        # 1. User says No
+        ev_no = QCloseEvent()
+        with patch.object(QMessageBox, 'question', return_value=QMessageBox.No) as mock_q:
+            dlg.closeEvent(ev_no)
+            self.assertFalse(ev_no.isAccepted())
+
+        # 2. User says Yes
+        ev_yes = QCloseEvent()
+        with patch.object(QMessageBox, 'question', return_value=QMessageBox.Yes) as mock_q:
+            dlg.closeEvent(ev_yes)
+            self.assertTrue(ev_yes.isAccepted())
+            self.assertEqual(dlg.result(), ParallelSweepProgressDialog.Rejected)
+
 
 if __name__ == "__main__":
     unittest.main()
