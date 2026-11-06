@@ -1426,6 +1426,13 @@ class SweepMixin:
         'Attention: all data will be lost. Would you like to save data untill now?'
         with options 'Yes', 'No, exit', 'Cancel'.
         """
+        if isinstance(confirm_choice, str):
+            choice = confirm_choice.strip().lower()
+            if choice not in ("yes", "no", "cancel"):
+                choice = None
+        else:
+            choice = None
+
         is_active_or_paused = (
             getattr(self, 'sweep_config', None) is not None
             or getattr(self, 'is_sweep_active', False)
@@ -1438,7 +1445,6 @@ class SweepMixin:
             or bool(getattr(self, '_sweep_status_dict', {}))
         )
 
-        choice = confirm_choice
         if choice is None and is_active_or_paused:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Exit Sweep")

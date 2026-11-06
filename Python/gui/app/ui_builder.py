@@ -317,7 +317,7 @@ class UIBuilderMixin:
             "background-color: #f1f5f9; color: #334155; font-weight: bold; "
             "border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
-        self.btn_exit_sweep.clicked.connect(self.exit_sweep)
+        self.btn_exit_sweep.clicked.connect(lambda: self.exit_sweep())
         top_bar_layout.addWidget(self.btn_exit_sweep)
 
         top_bar_layout.addStretch()

@@ -1047,13 +1047,22 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertTrue(self.win._sweep_stopped)
         self.assertFalse(self.win.is_sweep_active)
 
-        # 1. Trigger exit_sweep with Cancel simulated via QMessageBox
+        # 1. Trigger exit_sweep with Cancel simulated via QMessageBox (testing button click in UI)
         with patch('gui.app.sweep_mixin.QMessageBox.exec_') as mock_exec, \
              patch('gui.app.sweep_mixin.QMessageBox.clickedButton') as mock_clicked:
             mock_clicked.return_value = None  # Simulates pressing Cancel or closing dialog
-            self.win.exit_sweep()
+            self.win.btn_exit_sweep.click()
             mock_exec.assert_called_once()
             # Remains in stopped sweep mode
+            self.assertTrue(self.win._sweep_stopped)
+            self.assertFalse(self.win.btn_exit_sweep.isHidden())
+
+        # 1b. Trigger exit_sweep directly passing False (as Qt clicked(bool) would do)
+        with patch('gui.app.sweep_mixin.QMessageBox.exec_') as mock_exec, \
+             patch('gui.app.sweep_mixin.QMessageBox.clickedButton') as mock_clicked:
+            mock_clicked.return_value = None
+            self.win.exit_sweep(False)
+            mock_exec.assert_called_once()
             self.assertTrue(self.win._sweep_stopped)
             self.assertFalse(self.win.btn_exit_sweep.isHidden())
 
