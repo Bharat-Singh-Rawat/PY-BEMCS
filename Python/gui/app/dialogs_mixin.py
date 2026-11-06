@@ -38,7 +38,15 @@ class DialogsMixin:
         dialog = GUISettingsDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             new_limit = dialog.get_scatter_limit()
-            self._sim_worker._scatter_limit = new_limit
+            if hasattr(self, '_sim_worker') and self._sim_worker is not None:
+                self._sim_worker._scatter_limit = new_limit
+            self.scatter_limit = new_limit
+            if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+                self.parallel_sweep_worker.scatter_limit = new_limit
+            if hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario is not None and self.combo_sweep_scenario.isVisible():
+                cur_idx = self.combo_sweep_scenario.currentIndex()
+                if cur_idx >= 0:
+                    self._render_sweep_scenario_snapshot(cur_idx + 1)
 
             new_diag_ms = dialog.get_diag_interval_ms()
             self._DIAG_MIN_INTERVAL_MS = new_diag_ms

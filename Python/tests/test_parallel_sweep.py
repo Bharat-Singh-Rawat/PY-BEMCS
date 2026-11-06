@@ -139,6 +139,8 @@ class TestHeadlessSweepUtilities(unittest.TestCase):
         self.assertIn("divergence_2nd_plane_deg", res)
         self.assertIn("perveance_effective", res)
         self.assertIn("perveance_fraction", res)
+        self.assertIn("computation_time_s", res)
+        self.assertGreater(res["computation_time_s"], 0.0)
 
 
 class TestParallelSweepWorkerExecution(unittest.TestCase):
@@ -235,11 +237,47 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
         self.assertFalse(self.win.lbl_sweep_badge.isHidden())
         self.assertIn("Parallel Sweep", self.win.lbl_sweep_badge.text())
 
-        # Test early cancellation
+        # Test stop sweep pauses scenarios and keeps worker ready for resume
         self.win.stop_sweep()
         self.assertFalse(self.win.is_sweep_active)
-        self.assertIsNone(self.win.parallel_sweep_worker)
+        self.assertTrue(self.win._sweep_stopped)
+        self.assertIsNotNone(self.win.parallel_sweep_worker)
+        self.assertTrue(self.win.parallel_sweep_worker.is_scenario_paused(1))
+        self.assertTrue(self.win.parallel_sweep_worker.is_scenario_paused(2))
         self.assertEqual(self.win.lbl_sweep_badge.text(), "Sweep mode stopped")
+        self.assertFalse(self.win.btn_resume_sweep.isHidden())
+        self.assertEqual(self.win.btn_toggle.text(), "RESUME BEAM")
+        self.assertIn("Paused", self.win.combo_sweep_scenario.itemText(0))
+        self.assertIn("Paused", self.win.combo_sweep_scenario.itemText(1))
+
+        # Test resume via RESUME BEAM button (toggle_sim)
+        self.win.toggle_sim()
+        self.assertTrue(self.win.is_sweep_active)
+        self.assertFalse(self.win._sweep_stopped)
+        self.assertTrue(self.win.btn_resume_sweep.isHidden())
+        self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
+        self.assertFalse(self.win.btn_stop_sweep.isHidden())
+        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(1))
+        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(2))
+        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(0))
+        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(1))
+
+        # Test stop again and resume via resume_sweep_with_selected
+        self.win.stop_sweep()
+        self.assertTrue(self.win._sweep_stopped)
+        self.assertFalse(self.win.btn_resume_sweep.isHidden())
+        self.win.resume_sweep_with_selected()
+        self.assertTrue(self.win.is_sweep_active)
+        self.assertFalse(self.win._sweep_stopped)
+        self.assertTrue(self.win.btn_resume_sweep.isHidden())
+        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(1))
+        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(2))
+        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(0))
+        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(1))
+
+        # Test exit sweep cleans up worker
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertIsNone(self.win.parallel_sweep_worker)
 
     def test_scenario_dropdown_switch_updates_canvas(self):
         cfg = {
@@ -288,6 +326,7 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
         self.assertIn("Scenario 2", self.win.lblTime.text())
 
         self.win.stop_sweep()
+        self.win.exit_sweep(confirm_choice="no")
 
     def test_close_event_prompt_when_sweep_running(self):
         from PyQt5.QtGui import QCloseEvent
@@ -365,6 +404,184 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
             dlg.closeEvent(ev_yes)
             self.assertTrue(ev_yes.isAccepted())
             self.assertEqual(dlg.result(), ParallelSweepProgressDialog.Rejected)
+
+    def test_sweep_scenario_render_divergence_and_particles_custom_and_all_limits(self):
+        """Verify particles and divergence graphs update correctly under custom limit, All particles, and None."""
+        self.win.build_domain()
+
+        pts = np.array([[0.5, 0.2], [1.0, 0.4], [1.5, 0.6], [2.0, 0.8], [2.5, 1.0]], dtype=np.float32)
+        e_pts = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype=np.float32)
+        iter_hist = [10, 20, 30, 40, 50]
+        div_hist = [15.2, 14.1, 13.0, 12.5, 12.1]
+        div_mid_hist = [10.2, 9.8, 9.5, 9.1, 8.8]
+        ebs_hist = [-650.0, -640.0, -630.0, -625.0, -620.0]
+
+        mock_status = {
+            1: {
+                "status": "done",
+                "iter": 50,
+                "prim_xy": pts,
+                "e_prim_eV": e_pts,
+                "iter_history": iter_hist,
+                "div_history": div_hist,
+                "div_mid_history": div_mid_hist,
+                "ebs_history": ebs_hist,
+                "div": 12.1,
+                "div_mid": 8.8,
+                "t_sim_us": 1.5,
+                "Lx": 3.0,
+                "Ly": 3.0,
+            }
+        }
+        self.win._sweep_status_dict = mock_status
+
+        # 1. Custom limit = 3 particles
+        self.win.scatter_limit = 3
+        self.win._render_sweep_scenario_snapshot(1)
+        sampled = self.win.scat_prim.get_offsets()
+        self.assertEqual(len(sampled), 3)
+        # Verify sampled points are from original pts
+        for p in sampled:
+            self.assertTrue(any(np.allclose(p, orig) for orig in pts))
+
+        # Verify divergence graph was updated
+        div_x, div_y = self.win.line_div.get_data()
+        np.testing.assert_allclose(div_x, iter_hist)
+        np.testing.assert_allclose(div_y, div_hist)
+        div_mid_x, div_mid_y = self.win.line_div_mid.get_data()
+        np.testing.assert_allclose(div_mid_y, div_mid_hist)
+        ebs_x, ebs_y = self.win.line_ebs.get_data()
+        np.testing.assert_allclose(ebs_y, ebs_hist)
+
+        # 2. All particles (limit = 0)
+        self.win.scatter_limit = 0
+        self.win._render_sweep_scenario_snapshot(1)
+        self.assertEqual(len(self.win.scat_prim.get_offsets()), 5)
+        np.testing.assert_allclose(self.win.scat_prim.get_offsets(), pts)
+
+        # 3. None (limit = None -> hide all particles)
+        self.win.scatter_limit = None
+        self.win._render_sweep_scenario_snapshot(1)
+        self.assertEqual(len(self.win.scat_prim.get_offsets()), 0)
+
+    def test_extract_display_particles_units_and_limits(self):
+        """Verify extract_display_particles does not scale mm coords and obeys scatter_limit."""
+        from physics.headless_sweep import extract_display_particles
+
+        class DummySim:
+            num_p = 100
+            num_e = 50
+            p_x = np.linspace(0.1, 2.9, 100)  # already mm
+            p_y = np.linspace(0.1, 1.4, 100)
+            p_vx = np.full(100, 1000.0)
+            p_vy = np.zeros(100)
+            p_vz = np.zeros(100)
+            p_isCEX = np.zeros(100, dtype=bool)
+            p_isCEX[80:] = True  # 20 CEX ions
+            e_x = np.linspace(0.2, 2.8, 50)
+            e_y = np.linspace(0.2, 1.2, 50)
+            m_ion = 131.293 * 1.6605e-27
+            q_ion = 1.602e-19
+
+        sim = DummySim()
+
+        # All particles
+        prim_xy, e_prim, cex_xy, e_cex, elec_xy = extract_display_particles(sim, scatter_limit=0)
+        self.assertEqual(len(prim_xy), 80)
+        self.assertEqual(len(cex_xy), 20)
+        self.assertEqual(len(elec_xy), 50)
+        # Verify coordinates are in mm (< 3.0), NOT multiplied by 1e3
+        self.assertTrue(np.all(prim_xy[:, 0] <= 3.0))
+        self.assertTrue(np.all(prim_xy[:, 0] >= 0.0))
+
+        # Custom limit = 20
+        prim_xy_lim, _, cex_xy_lim, _, elec_xy_lim = extract_display_particles(sim, scatter_limit=20)
+        self.assertLessEqual(len(prim_xy_lim) + len(cex_xy_lim), 20)
+        self.assertLessEqual(len(elec_xy_lim), 20)
+
+        # Limit = None (hide all)
+        prim_xy_none, _, cex_xy_none, _, elec_xy_none = extract_display_particles(sim, scatter_limit=None)
+        self.assertEqual(len(prim_xy_none), 0)
+        self.assertEqual(len(cex_xy_none), 0)
+        self.assertEqual(len(elec_xy_none), 0)
+
+    def test_newly_injected_particles_preserved_during_subsampling(self):
+        """Verify newly injected particles at the array tail are not truncated away."""
+        from physics.headless_sweep import extract_display_particles
+
+        class InjectedSim:
+            num_p = 500
+            num_e = 0
+            p_x = np.linspace(1.0, 3.0, 500)
+            p_x[480:] = 0.03  # newest 20 particles at injection boundary
+            p_y = np.full(500, 0.5)
+            p_vx = np.full(500, 1000.0)
+            p_vy = np.zeros(500)
+            p_vz = np.zeros(500)
+            p_isCEX = np.zeros(500, dtype=bool)
+            m_ion = 131.293 * 1.6605e-27
+            q = 1.602e-19
+
+        sim = InjectedSim()
+        found_injected = False
+        for _ in range(20):
+            prim_xy, _, _, _, _ = extract_display_particles(sim, scatter_limit=50)
+            if np.any(prim_xy[:, 0] <= 0.05):
+                found_injected = True
+                break
+        self.assertTrue(found_injected, "Newly injected particles at array tail must be sampled, not cut off")
+
+    def test_contour_cleanup_on_scenario_switch_prevents_fog(self):
+        """Verify switching scenarios in tent menu cleanly removes old contours so only 1 ContourSet remains."""
+        import matplotlib.contour
+        self.win.build_domain()
+        cfg = {
+            "param_id": "grid_1_V",
+            "values": [800.0, 1200.0],
+            "parallel": True,
+            "n_cores": 2,
+        }
+        self.win.save_sweep_settings(cfg)
+
+        # Render scenario 1 snapshot
+        self.win._on_sweep_scenario_selected(0)
+        c_count_1 = sum(1 for c in self.win.ax_live.collections if isinstance(c, matplotlib.contour.ContourSet))
+        self.assertEqual(c_count_1, 1)
+
+        # Switch to scenario 2 snapshot
+        self.win._on_sweep_scenario_selected(1)
+        c_count_2 = sum(1 for c in self.win.ax_live.collections if isinstance(c, matplotlib.contour.ContourSet))
+        self.assertEqual(c_count_2, 1, "Switching scenario must remove previous contour and not accumulate yellow fog")
+
+        # Switch back to scenario 1
+        self.win._on_sweep_scenario_selected(0)
+        c_count_3 = sum(1 for c in self.win.ax_live.collections if isinstance(c, matplotlib.contour.ContourSet))
+        self.assertEqual(c_count_3, 1)
+
+    def test_parallel_sweep_worker_pause_and_resume_state(self):
+        """Verify ParallelSweepWorker pause_scenario and resume_scenario update in-memory and disk states correctly."""
+        cfg = {
+            "param_id": "grid_1_V",
+            "values": [900.0, 1100.0],
+            "parallel": True,
+            "n_cores": 2,
+        }
+        worker = ParallelSweepWorker(cfg, self.win.get_params(), n_cores=2)
+
+        # Scenario 1 initially not paused
+        self.assertFalse(worker.is_scenario_paused(1))
+
+        # Pause Scenario 1
+        worker.pause_scenario(1)
+        self.assertTrue(worker.is_scenario_paused(1))
+        self.assertEqual(worker.get_status_dict()[1]["status"], "paused")
+
+        # Resume Scenario 1
+        worker.resume_scenario(1)
+        self.assertFalse(worker.is_scenario_paused(1))
+        self.assertEqual(worker.get_status_dict()[1]["status"], "running")
+
+        worker._cleanup_temp_files()
 
 
 if __name__ == "__main__":

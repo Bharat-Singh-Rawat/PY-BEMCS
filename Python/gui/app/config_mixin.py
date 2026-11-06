@@ -210,12 +210,13 @@ class ConfigMixin:
         if hasattr(self, 'sim') and hasattr(self.sim, 'Lx') and self.sim.Lx > 0:
             val = self.inputs["neut_x"].value()
             if val > self.sim.Lx or val < 0.0:
-                QMessageBox.warning(
-                    self,
-                    "Neutralizer Warning",
-                    f"Neutralizer axial position (x = {val:.3f} mm) is settled outside the x-domain [0, {self.sim.Lx:.3f} mm].\n\n"
-                    f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
-                )
+                if getattr(self, 'isVisible', lambda: False)():
+                    QMessageBox.warning(
+                        self,
+                        "Neutralizer Warning",
+                        f"Neutralizer axial position (x = {val:.3f} mm) is settled outside the x-domain [0, {self.sim.Lx:.3f} mm].\n\n"
+                        f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
+                    )
                 self.inputs["neut_x"].blockSignals(True)
                 self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
                 self.inputs["neut_x"].blockSignals(False)

@@ -351,17 +351,18 @@ class GUISettingsDialog(QDialog):
         custom_row.setContentsMargins(22, 0, 0, 0)
         self._spin_custom = QSpinBox()
         self._spin_custom.setRange(1, 10_000_000)
-        self._spin_custom.setSingleStep(10_000)
-        self._spin_custom.setValue(100_000)
+        self._spin_custom.setSingleStep(500)
+        self._spin_custom.setValue(1000)
         self._spin_custom.setSuffix("  particles")
         self._spin_custom.setToolTip("Maximum particles shown per species (ions / electrons)")
         custom_row.addWidget(self._spin_custom)
         custom_row.addStretch()
         scatter_layout.addLayout(custom_row)
 
-        # Enable / disable spinner based on selection
+        # Default to Custom limit with 1000 particles
+        self._rb_custom.setChecked(True)
         self._rb_custom.toggled.connect(self._spin_custom.setEnabled)
-        self._spin_custom.setEnabled(False)
+        self._spin_custom.setEnabled(True)
 
         layout.addWidget(grp_scatter)
 
@@ -401,11 +402,12 @@ class GUISettingsDialog(QDialog):
         app = self._app
         if app is None:
             self._rb_custom.setChecked(True)
+            self._spin_custom.setValue(1000)
             self._spin_diag_ms.setValue(500)
             return
 
         # Scatter limit
-        lim = getattr(app._sim_worker, '_scatter_limit', SimulationWorker.MAX_SCATTER)
+        lim = getattr(app, 'scatter_limit', getattr(getattr(app, '_sim_worker', None), '_scatter_limit', 1000))
         if lim is None:
             self._rb_none.setChecked(True)
         elif lim == 0:
@@ -1297,6 +1299,71 @@ SWEEP_PARAMETERS = [
         "decimals": 2,
         "scientific": False,
     },
+    {
+        "id": "grid_1_r",
+        "label": "Grid 1 Aperture Radius (mm)",
+        "unit": "mm",
+        "default_start": 0.6,
+        "default_end": 1.2,
+        "default_n": 5,
+        "min": 0.05,
+        "max": 20.0,
+        "step": 0.1,
+        "decimals": 3,
+        "scientific": False,
+    },
+    {
+        "id": "grid_1_t",
+        "label": "Grid 1 Thickness (mm)",
+        "unit": "mm",
+        "default_start": 0.2,
+        "default_end": 0.8,
+        "default_n": 5,
+        "min": 0.05,
+        "max": 10.0,
+        "step": 0.05,
+        "decimals": 3,
+        "scientific": False,
+    },
+    {
+        "id": "grid_2_gap",
+        "label": "Grid 2 Gap / Separation (mm)",
+        "unit": "mm",
+        "default_start": 0.4,
+        "default_end": 1.5,
+        "default_n": 5,
+        "min": 0.05,
+        "max": 20.0,
+        "step": 0.1,
+        "decimals": 3,
+        "scientific": False,
+    },
+    {
+        "id": "grid_2_r",
+        "label": "Grid 2 Aperture Radius (mm)",
+        "unit": "mm",
+        "default_start": 0.5,
+        "default_end": 1.0,
+        "default_n": 5,
+        "min": 0.05,
+        "max": 20.0,
+        "step": 0.1,
+        "decimals": 3,
+        "scientific": False,
+    },
+    {
+        "id": "grid_2_t",
+        "label": "Grid 2 Thickness (mm)",
+        "unit": "mm",
+        "default_start": 0.2,
+        "default_end": 0.8,
+        "default_n": 5,
+        "min": 0.05,
+        "max": 10.0,
+        "step": 0.05,
+        "decimals": 3,
+        "scientific": False,
+    },
 ]
 
 
@@ -1451,8 +1518,8 @@ class SweepSettingsDialog(QDialog):
         form_steady.addRow("Safeguard Max Iterations:", self.spin_max_iters)
 
         self.spin_min_iters = QSpinBox()
-        self.spin_min_iters.setRange(10, 2000)
-        self.spin_min_iters.setValue(50)
+        self.spin_min_iters.setRange(10, 10000)
+        self.spin_min_iters.setValue(500)
         self.spin_min_iters.setSuffix(" iterations")
         form_steady.addRow("Min Iterations per Point:", self.spin_min_iters)
 
@@ -1507,10 +1574,10 @@ class SweepSettingsDialog(QDialog):
         btn_cancel.clicked.connect(self.reject)
         btn_box.addWidget(btn_cancel)
 
-        btn_start = QPushButton("Start Sweep")
-        btn_start.setStyleSheet("font-weight: bold; background-color: #7e22ce; color: white; padding: 6px 14px; border-radius: 4px;")
-        btn_start.clicked.connect(self.accept)
-        btn_box.addWidget(btn_start)
+        self.btn_start = QPushButton("Save Sweep Settings")
+        self.btn_start.setStyleSheet("font-weight: bold; background-color: #7e22ce; color: white; padding: 6px 14px; border-radius: 4px;")
+        self.btn_start.clicked.connect(self.accept)
+        btn_box.addWidget(self.btn_start)
 
         layout.addLayout(btn_box)
 
@@ -1698,6 +1765,21 @@ class ParallelSweepProgressDialog(QDialog):
         self.lbl_status.setText(status_text)
 
 
+def format_comp_duration(seconds):
+    """Format duration in seconds into a clear, human-readable string."""
+    if seconds is None or not isinstance(seconds, (int, float)) or not np.isfinite(seconds) or seconds < 0:
+        return "N/A"
+    if seconds < 60:
+        return f"{seconds:.2f} s"
+    mins = int(seconds // 60)
+    secs = seconds % 60
+    if mins < 60:
+        return f"{mins}m {secs:04.1f}s ({seconds:.1f} s)"
+    hrs = int(mins // 60)
+    mins = mins % 60
+    return f"{hrs}h {mins:02d}m {int(secs):02d}s"
+
+
 class SweepResultsDialog(QDialog):
     """
     Pop-up dialog displaying results of a completed parametric sweep,
@@ -1709,8 +1791,8 @@ class SweepResultsDialog(QDialog):
         self.sweep_config = sweep_config
         self.results = results
         self.setWindowTitle("Parametric Sweep Results")
-        self.resize(1020, 500)
-        self.setMinimumSize(800, 400)
+        self.resize(1100, 520)
+        self.setMinimumSize(850, 400)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -1719,12 +1801,19 @@ class SweepResultsDialog(QDialog):
         param_label = sweep_config.get("param_label", "Parameter")
         unconverged_count = sum(1 for r in results if not r.get("steady_state_reached", True))
 
+        total_time = sweep_config.get("total_computation_time_s")
+        if total_time is None:
+            valid_times = [r.get("computation_time_s") for r in results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s"))]
+            if valid_times:
+                total_time = sum(valid_times)
+
         header_box = QFrame()
         header_box.setFrameShape(QFrame.StyledPanel)
         h_layout = QVBoxLayout(header_box)
         h_layout.setContentsMargins(10, 8, 10, 8)
 
-        title_lbl = QLabel(f"<b>Sweep Completed: {len(results)} Scenarios ({param_label})</b>")
+        time_str = f" &nbsp;•&nbsp; ⏱ <b>Total Computational Time:</b> {format_comp_duration(total_time)}" if (total_time is not None and total_time > 0) else ""
+        title_lbl = QLabel(f"<b>Sweep Completed: {len(results)} Scenarios ({param_label})</b>{time_str}")
         title_lbl.setStyleSheet("font-size: 13px; color: #1e293b;")
         h_layout.addWidget(title_lbl)
 
@@ -1744,12 +1833,13 @@ class SweepResultsDialog(QDialog):
 
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(11)
+        self.table.setColumnCount(12)
         self.table.setHorizontalHeaderLabels([
             "Scenario",
             f"{param_label}",
             "Steady State?",
             "Iterations",
+            "Computation Time",
             "Saddle V (V)",
             "Divergence Grid Exit (°)",
             "Divergence 2nd Plane (°)",
@@ -1772,6 +1862,7 @@ class SweepResultsDialog(QDialog):
             p_val = res.get("parameter_value", 0.0)
             ss_reached = res.get("steady_state_reached", True)
             iters = res.get("steady_iterations", 0)
+            comp_time = res.get("computation_time_s")
             saddle_v = res.get("saddle_potential_V", 0.0)
             div = res.get("divergence_deg", res.get("divergence_grid_deg", 0.0))
             div_2nd = res.get("divergence_2nd_plane_deg")
@@ -1800,16 +1891,22 @@ class SweepResultsDialog(QDialog):
             self.table.setItem(row, 2, item_ss)
 
             self.table.setItem(row, 3, QTableWidgetItem(f"{iters:,}"))
-            self.table.setItem(row, 4, QTableWidgetItem(f"{saddle_v:.2f}"))
+
+            item_comp = QTableWidgetItem(format_comp_duration(comp_time))
+            if comp_time is not None and isinstance(comp_time, (int, float)) and np.isfinite(comp_time):
+                item_comp.setToolTip(f"Wall-clock simulation duration: {comp_time:.3f} seconds")
+            self.table.setItem(row, 4, item_comp)
+
+            self.table.setItem(row, 5, QTableWidgetItem(f"{saddle_v:.2f}"))
             div_str = f"{div:.2f}" if (isinstance(div, (int, float)) and np.isfinite(div)) else str(div)
-            self.table.setItem(row, 5, QTableWidgetItem(div_str))
+            self.table.setItem(row, 6, QTableWidgetItem(div_str))
             div_2nd_str = f"{div_2nd:.2f}" if (isinstance(div_2nd, (int, float)) and np.isfinite(div_2nd)) else str(div_2nd)
-            self.table.setItem(row, 6, QTableWidgetItem(div_2nd_str))
-            self.table.setItem(row, 7, QTableWidgetItem(f"{i_exit:.3e}"))
+            self.table.setItem(row, 7, QTableWidgetItem(div_2nd_str))
+            self.table.setItem(row, 8, QTableWidgetItem(f"{i_exit:.3e}"))
             perv_frac_str = f"{perv_frac:.4f}" if (isinstance(perv_frac, (int, float)) and np.isfinite(perv_frac)) else ("N/A" if perv_frac is None else str(perv_frac))
-            self.table.setItem(row, 8, QTableWidgetItem(perv_frac_str))
-            self.table.setItem(row, 9, QTableWidgetItem(f"{trans:.3f}"))
-            self.table.setItem(row, 10, QTableWidgetItem(f"{e_tot:.3e}"))
+            self.table.setItem(row, 9, QTableWidgetItem(perv_frac_str))
+            self.table.setItem(row, 10, QTableWidgetItem(f"{trans:.3f}"))
+            self.table.setItem(row, 11, QTableWidgetItem(f"{e_tot:.3e}"))
 
         layout.addWidget(self.table, 1)
 
@@ -1870,11 +1967,19 @@ class SweepResultsDialog(QDialog):
         unconverged = [r for r in self.results if not r.get("steady_state_reached", True)]
         param_label = self.sweep_config.get("param_label", "Parameter")
 
+        total_time = self.sweep_config.get("total_computation_time_s")
+        if total_time is None:
+            valid_times = [r.get("computation_time_s") for r in self.results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s"))]
+            if valid_times:
+                total_time = sum(valid_times)
+
         with open(fpath, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, delimiter=delim)
             writer.writerow(["# PY-BEMCS Parametric Sweep Results"])
             writer.writerow([f"# Swept Parameter: {param_label}"])
             writer.writerow([f"# Total Scenarios: {len(self.results)}"])
+            if total_time is not None and total_time > 0:
+                writer.writerow([f"# Total Computational Time: {format_comp_duration(total_time)} ({total_time:.3f} s)"])
 
             if unconverged:
                 writer.writerow([
@@ -1895,6 +2000,7 @@ class SweepResultsDialog(QDialog):
                 "steady_state_reached",
                 "warning_note",
                 "iterations",
+                "computation_time_s",
                 "t_sim_us",
                 "saddle_potential_V",
                 "beam_divergence_deg",
@@ -1922,6 +2028,8 @@ class SweepResultsDialog(QDialog):
                     val_str = format_sci_value(val)
                 else:
                     val_str = val
+                comp_s = r.get("computation_time_s", "")
+                comp_s_str = f"{comp_s:.4f}" if (isinstance(comp_s, (int, float)) and np.isfinite(comp_s)) else str(comp_s)
                 div_val = r.get("divergence_deg", r.get("divergence_grid_deg", ""))
                 div_2nd_val = r.get("divergence_2nd_plane_deg")
                 if div_2nd_val is None:
@@ -1944,6 +2052,7 @@ class SweepResultsDialog(QDialog):
                     "YES" if reached else "NO",
                     warn,
                     r.get("steady_iterations", ""),
+                    comp_s_str,
                     r.get("t_sim_us", ""),
                     r.get("saddle_potential_V", ""),
                     div_val,
@@ -1966,11 +2075,17 @@ class SweepResultsDialog(QDialog):
         import json
 
         unconverged_count = sum(1 for r in self.results if not r.get("steady_state_reached", True))
+        total_time = self.sweep_config.get("total_computation_time_s")
+        if total_time is None:
+            valid_times = [r.get("computation_time_s") for r in self.results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s"))]
+            if valid_times:
+                total_time = sum(valid_times)
         data = {
             "metadata": {
                 "software": "PY-BEMCS",
                 "sweep_config": self.sweep_config,
                 "total_scenarios": len(self.results),
+                "total_computation_time_s": total_time,
                 "unconverged_count": unconverged_count,
                 "warning": (
                     f"WARNING: {unconverged_count} scenarios did not reach steady state before hitting the safeguard limit of {self.sweep_config.get('max_iterations', 5000)} iterations!"

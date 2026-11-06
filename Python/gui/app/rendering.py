@@ -20,19 +20,19 @@ class RenderingMixin:
         self.ax_live.set_title("Ion Beam Extraction & Particle Tracking", fontsize=10)
         self.ax_live.set_xlabel("Axial Position [mm]")
         self.ax_live.set_ylabel("Radial Position [mm]")
-        self.ax_live.contourf(self.sim.X, self.sim.Y, self.sim.V, 20, cmap="viridis", alpha=0.4)
+        self.contour_live = self.ax_live.contourf(self.sim.X, self.sim.Y, self.sim.V, 20, cmap="viridis", alpha=0.4, zorder=0)
 
         gy, gx = np.where(self.sim.isBound)
         x_pts = getattr(self.sim, 'x_coords', getattr(self.sim, 'xpts', None))
         y_pts = getattr(self.sim, 'y_coords', getattr(self.sim, 'ypts', None))
         if x_pts is not None and y_pts is not None:
-            self.ax_live.scatter(x_pts[gx], y_pts[gy], s=4, c="k", alpha=0.8)
+            self.scat_bound = self.ax_live.scatter(x_pts[gx], y_pts[gy], s=4, c="k", alpha=0.8, zorder=2)
         else:
-            self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=4, c="k", alpha=0.8)
+            self.scat_bound = self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=4, c="k", alpha=0.8, zorder=2)
 
         max_v = max(gw['V'].value() for gw in self.grid_widgets) if self.grid_widgets else 1000.0
-        self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=max_v+300, alpha=0.8)
-        self.scat_cex = self.ax_live.scatter([], [], c=[], s=3, cmap='turbo', vmin=0, vmax=max_v+300, alpha=1.0)
+        self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=max_v+300, alpha=0.8, zorder=3)
+        self.scat_cex = self.ax_live.scatter([], [], c=[], s=3, cmap='turbo', vmin=0, vmax=max_v+300, alpha=1.0, zorder=4)
         self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.8, zorder=5)
 
         if hasattr(self, 'cax_live') and self.cax_live in self.fig.axes:
@@ -141,9 +141,9 @@ class RenderingMixin:
         x_pts = getattr(self.sim, 'x_coords', getattr(self.sim, 'xpts', None))
         y_pts = getattr(self.sim, 'y_coords', getattr(self.sim, 'ypts', None))
         if x_pts is not None and y_pts is not None:
-            self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
+            self.scat_dmg_bound = self.ax_dmg.scatter(x_pts[gx], y_pts[gy], s=2, c="grey", alpha=0.5)
         else:
-            self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c="grey", alpha=0.5)
+            self.scat_dmg_bound = self.ax_dmg.scatter(gx * self.sim.dx, gy * self.sim.dy, s=2, c="grey", alpha=0.5)
         self.ax_dmg.set_xlim(0, self.sim.Lx)
         self.ax_dmg.set_ylim(0, self.sim.Ly)
 
@@ -233,9 +233,14 @@ class RenderingMixin:
             self.scat_prim.set_offsets(snap['prim_xy'])
             self.scat_cex.set_offsets(snap['cex_xy'])
             self.scat_elec.set_offsets(snap['elec_xy'])
+            self._last_prim_xy = snap['prim_xy']
+            self._last_cex_xy = snap['cex_xy']
+            self._last_elec_xy = snap['elec_xy']
 
             e_prim_eV = snap['e_prim_eV']
             e_cex_eV  = snap['e_cex_eV']
+            self._last_e_prim_eV = e_prim_eV
+            self._last_e_cex_eV = e_cex_eV
 
             energy_min = float('inf')
             energy_max = float('-inf')

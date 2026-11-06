@@ -109,10 +109,14 @@ class DigitalTwinApp(
         self.steady_state_window = None
         self.substep_window = None
         self.is_sweep_active = False
+        self.sweep_mode_armed = False
+        self._sweep_paused_current = False
         self.sweep_config = None
         self.sweep_results = []
         self.sweep_current_idx = 0
         self.sweep_scenario_start_iter = 0
+        self.btn_resume_sweep = None
+        self._built_params_snapshot = None
         self.substep_history_iter = []
         self.substep_history_ion = []
         self.substep_history_e = []
@@ -157,6 +161,7 @@ class DigitalTwinApp(
 
         # Simulation worker (runs sim.step in background thread)
         self._sim_worker = SimulationWorker(self.sim, parent=self)
+        self.scatter_limit = getattr(self._sim_worker, '_scatter_limit', SimulationWorker.MAX_SCATTER)
         self._sim_worker.step_done.connect(self._on_step_result)
         self._sim_worker.sim_finished.connect(self._on_worker_finished)
 
@@ -164,10 +169,10 @@ class DigitalTwinApp(
         """Check if any simulation is currently running (regular beam simulation or parametric sweep)."""
         if getattr(self, 'sim_isRunning', False):
             return True
-        if getattr(self, 'is_sweep_active', False):
+        if getattr(self, 'is_sweep_active', False) and not getattr(self, '_sweep_stopped', False) and not getattr(self, '_sweep_paused_current', False):
             return True
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-            if self.parallel_sweep_worker.isRunning():
+            if self.parallel_sweep_worker.isRunning() and not getattr(self, '_sweep_stopped', False):
                 return True
         if hasattr(self, '_sim_worker') and self._sim_worker is not None:
             if self._sim_worker.isRunning() and getattr(self._sim_worker, 'running', False):

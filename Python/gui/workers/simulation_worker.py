@@ -38,14 +38,14 @@ class SimulationWorker(QThread):
     """
 
     # Maximum particles sent to scatter plots when no runtime override is active
-    MAX_SCATTER = 100_000
+    MAX_SCATTER = 1000
 
     # Runtime scatter limit — set by the GUI Settings dialog:
     #   None  -> hide all particles (display nothing)
     #   0     -> no limit (show every particle)
     #   N > 0 -> show at most N particles (randomly subsampled)
     # When _scatter_limit is not set it falls back to MAX_SCATTER.
-    _scatter_limit: "int | None | 'all'" = MAX_SCATTER
+    _scatter_limit: "int | None | 'all'" = 1000
 
     # Signal carries a dict with ALL snapshot data for the GUI update
     step_done = pyqtSignal(dict)
@@ -69,6 +69,8 @@ class SimulationWorker(QThread):
             self._params = params
             self._run_id = run_id
             self._running = True
+        if self.isRunning() and not self.running:
+            self.wait(1000)
         if not self.isRunning():
             self.start()            # QThread.start()
 

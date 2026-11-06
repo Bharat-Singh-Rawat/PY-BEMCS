@@ -270,14 +270,23 @@ class UIBuilderMixin:
         )
         top_bar_layout.addWidget(self.lbl_sweep_badge)
 
+        arrow_icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "down_arrow.svg")).replace("\\", "/")
         self.combo_sweep_scenario = QComboBox()
         self.combo_sweep_scenario.setVisible(False)
-        self.combo_sweep_scenario.setMinimumWidth(280)
+        self.combo_sweep_scenario.setFixedWidth(340)
+        self.combo_sweep_scenario.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.combo_sweep_scenario.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        if self.combo_sweep_scenario.view():
+            self.combo_sweep_scenario.view().setMinimumWidth(380)
         self.combo_sweep_scenario.setToolTip("Select an ongoing or completed sweep scenario to inspect its live state")
         self.combo_sweep_scenario.setStyleSheet(
-            "QComboBox { background-color: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; "
-            "border-radius: 4px; padding: 2px 8px; font-weight: bold; font-size: 11px; } "
-            "QComboBox::drop-down { border-left: 1px solid #cbd5e1; width: 18px; }"
+            f"QComboBox {{ background-color: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; "
+            f"border-radius: 4px; padding: 2px 24px 2px 8px; font-weight: bold; font-size: 11px; }} "
+            f"QComboBox:hover {{ border-color: #94a3b8; }} "
+            f"QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; "
+            f"width: 22px; border-left: 1px solid #cbd5e1; border-top-right-radius: 4px; border-bottom-right-radius: 4px; "
+            f"background-color: #f8fafc; }} "
+            f"QComboBox::down-arrow {{ image: url('{arrow_icon_path}'); width: 10px; height: 10px; }}"
         )
         self.combo_sweep_scenario.currentIndexChanged.connect(self._on_sweep_scenario_selected)
         top_bar_layout.addWidget(self.combo_sweep_scenario)
@@ -290,6 +299,26 @@ class UIBuilderMixin:
         )
         self.btn_stop_sweep.clicked.connect(self.stop_sweep)
         top_bar_layout.addWidget(self.btn_stop_sweep)
+
+        self.btn_resume_sweep = QPushButton("Resume with Selected Parameters")
+        self.btn_resume_sweep.setVisible(False)
+        self.btn_resume_sweep.setToolTip("Apply the selected scenario parameters and resume simulation / sweep")
+        self.btn_resume_sweep.setStyleSheet(
+            "background-color: #f0fdf4; color: #15803d; font-weight: bold; "
+            "border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        self.btn_resume_sweep.clicked.connect(self.resume_sweep_with_selected)
+        top_bar_layout.addWidget(self.btn_resume_sweep)
+
+        self.btn_exit_sweep = QPushButton("Exit sweep")
+        self.btn_exit_sweep.setVisible(False)
+        self.btn_exit_sweep.setToolTip("Exit sweep mode and return to normal single simulation")
+        self.btn_exit_sweep.setStyleSheet(
+            "background-color: #f1f5f9; color: #334155; font-weight: bold; "
+            "border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        self.btn_exit_sweep.clicked.connect(self.exit_sweep)
+        top_bar_layout.addWidget(self.btn_exit_sweep)
 
         top_bar_layout.addStretch()
 

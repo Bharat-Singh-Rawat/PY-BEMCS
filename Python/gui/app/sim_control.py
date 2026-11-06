@@ -12,7 +12,12 @@ class SimControlMixin:
     def get_simulation_duration(self):
         """Returns the total elapsed wall-clock duration of the simulation in seconds."""
         elapsed = getattr(self, 'sim_wall_elapsed', 0.0)
-        if getattr(self, 'sim_isRunning', False) and getattr(self, 'sim_wall_start_time', None) is not None:
+        is_running = (
+            self.is_simulation_running()
+            if hasattr(self, 'is_simulation_running')
+            else getattr(self, 'sim_isRunning', False)
+        )
+        if is_running and getattr(self, 'sim_wall_start_time', None) is not None:
             elapsed += time.perf_counter() - self.sim_wall_start_time
         return elapsed
 
@@ -27,7 +32,12 @@ class SimControlMixin:
         tenths = int((elapsed - int(elapsed)) * 10)
         self.lbl_sim_timer.setText(f"⏱ Simulation Duration: {hours:02d}:{minutes:02d}:{seconds:02d}.{tenths:01d}")
 
-        if hasattr(self, 'sim') and hasattr(self, 'lbl_top_sim_time'):
+        is_sweep = (
+            getattr(self, 'is_sweep_active', False)
+            or (hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning())
+            or getattr(self, 'sweep_config', None) is not None
+        )
+        if not is_sweep and hasattr(self, 'sim') and hasattr(self, 'lbl_top_sim_time'):
             t_sim_us = getattr(self.sim, 'iteration', 0) * getattr(self.sim, 'dt', 0.0) * 1e6
             it_count = getattr(self.sim, 'iteration', 0)
             self.lbl_top_sim_time.setText(f"Plasma Time: {t_sim_us:.2f} µs | Iter: {it_count}")
@@ -79,27 +89,132 @@ class SimControlMixin:
             self.sim_wall_start_time = None
         self.update_sim_status_badge("PAUSED")
 
+    def _extract_domain_signature(self):
+        """Returns a signature of physical parameters affecting domain mesh/fields."""
+        sig = []
+        if hasattr(self, 'inputs'):
+            for k in sorted(self.inputs.keys()):
+                try:
+                    sig.append((k, round(float(self.inputs[k].value()), 6)))
+                except Exception:
+                    pass
+        if hasattr(self, 'grid_widgets'):
+            for idx, gw in enumerate(self.grid_widgets):
+                for k in ("V", "t", "gap", "r", "cham"):
+                    if k in gw:
+                        try:
+                            sig.append((f"grid_{idx}_{k}", round(float(gw[k].value()), 6)))
+                        except Exception:
+                            pass
+        if hasattr(self, 'adv_params') and isinstance(self.adv_params, dict):
+            for k in ("Lx", "Ly"):
+                if k in self.adv_params:
+                    try:
+                        sig.append((k, round(float(self.adv_params[k]), 6)))
+                    except Exception:
+                        pass
+        return tuple(sig)
+
+    def _is_domain_dirty(self):
+        """Returns True if user-facing domain parameters have changed since last build_domain()."""
+        if not hasattr(self, 'sim') or not hasattr(self.sim, 'Ex') or self.sim.Ex is None or not np.any(self.sim.Ex):
+            return True
+        last_sig = getattr(self, '_built_params_snapshot', None)
+        if last_sig is None:
+            return False
+        current_sig = self._extract_domain_signature()
+        return current_sig != last_sig
+
     def toggle_sim(self):
+        # If sweep was stopped, resume the whole sweep with selected scenario
+        if getattr(self, '_sweep_stopped', False) and getattr(self, 'sweep_config', None) is not None:
+            if hasattr(self, 'resume_sweep_with_selected'):
+                self.resume_sweep_with_selected()
+                return
+
+        # If sweep is active or parallel worker is running, toggle pause/resume for the scenario selected from tent menu
+        if getattr(self, 'is_sweep_active', False) or (hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning()):
+            if hasattr(self, 'toggle_sweep_scenario_pause'):
+                self.toggle_sweep_scenario_pause()
+                return
+
         if not np.any(self.sim.Ex):
             QMessageBox.warning(self, "Warning", "Build Domain first!")
             return
 
         self._validate_neut_x()
 
+        # If sweep settings were saved and sweep is armed:
+        if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
+            self.sweep_mode_armed = False
+            self.is_sweep_active = True
+            self._sweep_paused_current = False
+            self.sweep_start_wall_time = time.perf_counter()
+            self.sweep_scenario_start_wall_time = time.perf_counter()
+            self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
+
+            cfg = getattr(self, 'sweep_config', {})
+            total_scenarios = len(cfg.get("values", []))
+            param_label = cfg.get("param_label", "Parameter")
+            param_id = cfg.get("param_id", "")
+            param_unit = cfg.get("param_unit", "")
+            cur_idx = getattr(self, 'sweep_current_idx', 0)
+            cur_val = cfg["values"][cur_idx] if total_scenarios > cur_idx else 0.0
+
+            try:
+                from ..dialogs import format_sci_value
+            except Exception:
+                from gui.dialogs import format_sci_value
+
+            cur_val_str = (
+                format_sci_value(cur_val)
+                if (param_id in ("n0_plasma", "n0") or abs(cur_val) >= 1e4 or (0 < abs(cur_val) <= 1e-3))
+                else f"{cur_val:.3g}"
+            )
+
+            if hasattr(self, 'lbl_sweep_badge'):
+                self.lbl_sweep_badge.setVisible(True)
+                self.lbl_sweep_badge.setText(
+                    f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {param_unit}]"
+                )
+            if hasattr(self, 'btn_stop_sweep'):
+                self.btn_stop_sweep.setVisible(True)
+            if hasattr(self, 'btn_resume_sweep'):
+                self.btn_resume_sweep.setVisible(True)
+            if hasattr(self, 'btn_exit_sweep'):
+                self.btn_exit_sweep.setVisible(True)
+            if hasattr(self, 'btn_toggle'):
+                self.btn_toggle.setText("PAUSE BEAM")
+
+            if cfg.get("parallel", False) and total_scenarios > 0:
+                n_cores = int(cfg.get("n_cores", 8))
+                self._start_parallel_sweep(cfg, n_cores)
+                return
+
         if not self.sim_isRunning:
             self.sim.injection_enabled = True
             self.sim_isRunning = True
+            self._sweep_paused_current = False
             self._resume_simulation_timer()
             self.btn_toggle.setText("PAUSE BEAM")
             self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
         else:
             self.sim_isRunning = False
+            self.btn_toggle.setText("RESUME BEAM")
             self._sim_worker.pause()
             self._pause_simulation_timer()
-            self.btn_toggle.setText("RESUME BEAM")
         self.update_simulation_timer()
 
     def build_domain(self):
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            worker = self.parallel_sweep_worker
+            self.parallel_sweep_worker = None
+            try:
+                worker.cancel()
+                worker.wait(2000)
+            except Exception:
+                pass
+
         self._sim_worker.pause()
         if self._sim_worker.isRunning():
             self._sim_worker.wait(5000)
@@ -109,8 +224,11 @@ class SimControlMixin:
         self._sim_worker._last_damage_copy = None
         self.sim_isRunning = False
         self.btn_toggle.setText("2. START BEAM")
-        self.sim_wall_elapsed = 0.0
-        self.sim_wall_start_time = None
+        if not getattr(self, 'is_sweep_active', False):
+            self.sim_wall_elapsed = 0.0
+            self.sim_wall_start_time = None
+        elif getattr(self, 'sim_wall_start_time', None) is None:
+            self.sim_wall_start_time = time.perf_counter()
         self.update_sim_status_badge("READY")
         self.update_simulation_timer()
         self.iter_history.clear()
@@ -196,7 +314,7 @@ class SimControlMixin:
         _last = getattr(self, '_last_auto_neut_x', None)
         _current_neut = round(self.inputs["neut_x"].value(), 3)
         if _current_neut > self.sim.Lx or _current_neut < 0.0:
-            if not getattr(self, 'is_sweep_active', False):
+            if not getattr(self, 'is_sweep_active', False) and getattr(self, 'isVisible', lambda: False)():
                 QMessageBox.warning(
                     self,
                     "Neutralizer Warning",
@@ -204,7 +322,7 @@ class SimControlMixin:
                     f"Setting position to x = Lx ({self.sim.Lx:.3f} mm)."
                 )
             else:
-                print(f"[Sweep Mode] Auto-clamped neut_x from {_current_neut:.3f} mm to {self.sim.Lx:.3f} mm")
+                print(f"[Domain Build] Auto-clamped neut_x from {_current_neut:.3f} mm to {self.sim.Lx:.3f} mm")
             self.inputs["neut_x"].blockSignals(True)
             self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
             self.inputs["neut_x"].blockSignals(False)
@@ -241,12 +359,19 @@ class SimControlMixin:
         if getattr(self, 'substep_window', None) is not None and self.substep_window.isVisible():
             self.substep_window.update_plot(self.sim)
 
+        self._built_params_snapshot = self._extract_domain_signature()
+        self._sweep_paused_current = False
+
     def _on_worker_finished(self):
         """Called when the SimulationWorker thread exits its run loop."""
         if self.sim_isRunning:
             self.sim_isRunning = False
             self._pause_simulation_timer()
-            self.btn_toggle.setText("RESUME BEAM")
+            if getattr(self, 'is_sweep_active', False):
+                self._sweep_paused_current = True
+                self.btn_toggle.setText("Resume")
+            else:
+                self.btn_toggle.setText("RESUME BEAM")
             self.update_sim_status_badge("STOPPED")
             self.lbl_status.setText("Status: Simulation worker stopped unexpectedly.")
             self.update_simulation_timer()

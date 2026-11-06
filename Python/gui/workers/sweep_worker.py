@@ -3,6 +3,7 @@ Background worker executing multi-scenario sweeps concurrently via ProcessPoolEx
 """
 
 import os
+import time
 import atexit
 import tempfile
 import multiprocessing as mp
@@ -44,12 +45,14 @@ class ParallelSweepWorker(QThread):
     sweep_finished = pyqtSignal(list)                # (all_sorted_results)
     sweep_error = pyqtSignal(str)                    # (error_message)
 
-    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, parent=None):
+    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=1000, parent=None):
         super().__init__(parent)
         self.sweep_config = sweep_config
         self.base_params = base_params
+        self.scatter_limit = scatter_limit
         total_cpus = os.cpu_count() or 16
         self.n_cores = int(n_cores) if n_cores and n_cores > 0 else max(1, total_cpus // 2)
+        self.total_computation_time_s = 0.0
         self._canceled = False
         self._executor = None
         worker_token = f"{os.getpid()}_{id(self)}"
@@ -60,22 +63,39 @@ class ParallelSweepWorker(QThread):
             except Exception:
                 pass
 
-        # File-based state tracking per scenario (fast, decoupled, zero-daemon)
+        self.active_view_file = os.path.join(tempfile.gettempdir(), f"pybemcs_sweep_{worker_token}.active_view")
+        try:
+            with open(self.active_view_file, "w") as f:
+                f.write("1")
+        except Exception:
+            pass
+
+        # File-based state and pause tracking per scenario (fast, decoupled, zero-daemon)
         self.state_files = {}
+        self.pause_files = {}
         self.final_status_dict = {}
+        self._paused_scenarios = set()
 
         values = self.sweep_config.get("values", [])
         max_iters = int(self.sweep_config.get("max_iterations", 5000))
         for idx, val in enumerate(values):
             scen_num = idx + 1
             sf = os.path.join(tempfile.gettempdir(), f"pybemcs_scen_{worker_token}_{scen_num}.bin")
+            pf = os.path.join(tempfile.gettempdir(), f"pybemcs_scen_{worker_token}_{scen_num}.pause")
             self.state_files[scen_num] = sf
+            self.pause_files[scen_num] = pf
+            if os.path.exists(pf):
+                try:
+                    os.remove(pf)
+                except Exception:
+                    pass
             init_st = {
                 "status": "queued",
                 "iter": 0,
                 "max_iters": max_iters,
                 "parameter_value": float(val),
                 "steady_state_reached": False,
+                "computation_time_s": 0.0,
                 "t_sim_us": 0.0,
                 "div": 0.0,
                 "div_mid": 0.0,
@@ -83,22 +103,114 @@ class ParallelSweepWorker(QThread):
                 "transparency": 0.0,
                 "prim_xy": np.empty((0, 2), dtype=np.float32),
                 "e_prim_eV": np.empty(0, dtype=np.float32),
+                "cex_xy": np.empty((0, 2), dtype=np.float32),
+                "e_cex_eV": np.empty(0, dtype=np.float32),
+                "elec_xy": np.empty((0, 2), dtype=np.float32),
+                "iter_history": [],
+                "div_history": [],
+                "div_mid_history": [],
+                "ebs_history": [],
             }
             self.final_status_dict[scen_num] = init_st
             write_scenario_state(sf, init_st)
 
+    def pause_scenario(self, scen_num):
+        """Pause a specific worker scenario by creating its pause signal file."""
+        if not hasattr(self, '_paused_scenarios'):
+            self._paused_scenarios = set()
+        self._paused_scenarios.add(scen_num)
+        pf = self.pause_files.get(scen_num)
+        if pf:
+            try:
+                with open(pf, "w") as f:
+                    f.write("paused")
+            except Exception:
+                pass
+        if scen_num in self.final_status_dict and self.final_status_dict[scen_num].get("status") != "done":
+            self.final_status_dict[scen_num]["status"] = "paused"
+        sf = self.state_files.get(scen_num)
+        if sf and os.path.exists(sf):
+            try:
+                st = read_scenario_state(sf)
+                if st and st.get("status") != "done":
+                    st["status"] = "paused"
+                    write_scenario_state(sf, st)
+            except Exception:
+                pass
+
+    def resume_scenario(self, scen_num):
+        """Resume a specific worker scenario by removing its pause signal file."""
+        if not hasattr(self, '_paused_scenarios'):
+            self._paused_scenarios = set()
+        self._paused_scenarios.discard(scen_num)
+        pf = self.pause_files.get(scen_num)
+        if pf and os.path.exists(pf):
+            try:
+                os.remove(pf)
+            except Exception:
+                pass
+        if scen_num in self.final_status_dict and self.final_status_dict[scen_num].get("status") != "done":
+            self.final_status_dict[scen_num]["status"] = "running"
+        sf = self.state_files.get(scen_num)
+        if sf and os.path.exists(sf):
+            try:
+                st = read_scenario_state(sf)
+                if st and st.get("status") == "paused":
+                    st["status"] = "running"
+                    write_scenario_state(sf, st)
+            except Exception:
+                pass
+
+    def pause_all_scenarios(self):
+        """Pause all running scenarios."""
+        for scen_num in list(self.pause_files.keys()):
+            if self.final_status_dict.get(scen_num, {}).get("status") != "done":
+                self.pause_scenario(scen_num)
+
+    def resume_all_scenarios(self):
+        """Resume all running scenarios."""
+        for scen_num in list(self.pause_files.keys()):
+            if self.final_status_dict.get(scen_num, {}).get("status") != "done":
+                self.resume_scenario(scen_num)
+
+    def is_scenario_paused(self, scen_num):
+        """Check if a specific scenario is currently paused."""
+        if not hasattr(self, '_paused_scenarios'):
+            self._paused_scenarios = set()
+        if scen_num in self._paused_scenarios:
+            return True
+        pf = self.pause_files.get(scen_num)
+        if pf and os.path.exists(pf):
+            return True
+        return False
+
+    def set_active_view_scenario(self, scen_num):
+        """Record which scenario is currently being viewed in the GUI."""
+        if hasattr(self, 'active_view_file'):
+            try:
+                with open(self.active_view_file, "w") as f:
+                    f.write(str(scen_num))
+            except Exception:
+                pass
+
     def get_status_dict(self):
         """Thread-safe snapshot dictionary of all scenario execution states."""
         res = dict(getattr(self, 'final_status_dict', {}))
+        paused_set = getattr(self, '_paused_scenarios', set())
         for scen_num, sf in getattr(self, 'state_files', {}).items():
             st = read_scenario_state(sf)
             if st is not None:
+                if st.get("status") != "done":
+                    if scen_num in paused_set:
+                        st["status"] = "paused"
+                    elif st.get("status") == "paused" and not self.is_scenario_paused(scen_num):
+                        st["status"] = "running"
                 res[scen_num] = st
                 self.final_status_dict[scen_num] = st
         return res
 
     def _cleanup_temp_files(self):
-        """Remove temporary state and cancel files."""
+        """Remove temporary state, pause, and cancel files."""
         if hasattr(self, 'cancel_file') and os.path.exists(self.cancel_file):
             try:
                 os.remove(self.cancel_file)
@@ -108,6 +220,17 @@ class ParallelSweepWorker(QThread):
             try:
                 if os.path.exists(sf):
                     os.remove(sf)
+            except Exception:
+                pass
+        for pf in getattr(self, 'pause_files', {}).values():
+            try:
+                if os.path.exists(pf):
+                    os.remove(pf)
+            except Exception:
+                pass
+        if hasattr(self, 'active_view_file') and os.path.exists(self.active_view_file):
+            try:
+                os.remove(self.active_view_file)
             except Exception:
                 pass
 
@@ -161,7 +284,7 @@ class ParallelSweepWorker(QThread):
             "window": self.sweep_config.get("window", 50),
             "threshold": self.sweep_config.get("threshold", 1.0),
             "max_iterations": self.sweep_config.get("max_iterations", 5000),
-            "min_iterations": self.sweep_config.get("min_iterations", 50),
+            "min_iterations": self.sweep_config.get("min_iterations", 500),
         }
 
         payloads = []
@@ -174,11 +297,15 @@ class ParallelSweepWorker(QThread):
                 "base_params": self.base_params,
                 "steady_config": steady_cfg,
                 "cancel_file": self.cancel_file,
+                "pause_file": self.pause_files.get(scen_idx),
                 "state_file": self.state_files.get(scen_idx),
+                "active_view_file": self.active_view_file,
+                "scatter_limit": getattr(self, 'scatter_limit', 1000),
             })
 
         results = []
         completed_count = 0
+        sweep_t0 = time.perf_counter()
 
         self.progress_updated.emit(0, total_count, f"Starting parallel sweep with {self.n_cores} worker cores...")
 
@@ -203,10 +330,12 @@ class ParallelSweepWorker(QThread):
                     results.append(row)
                     completed_count += 1
                     val_str = f"{row['parameter_value']:.4g}"
+                    c_time = row.get("computation_time_s", 0.0)
+                    time_info = f" in {c_time:.1f}s" if (isinstance(c_time, (int, float)) and c_time > 0) else ""
                     self.scenario_completed.emit(row, completed_count, total_count)
                     self.progress_updated.emit(
                         completed_count, total_count,
-                        f"Completed Scenario {row['scenario_idx']}/{total_count} (value={val_str})"
+                        f"Completed Scenario {row['scenario_idx']}/{total_count} (value={val_str}{time_info})"
                     )
                 except Exception as exc:
                     if not self._canceled:
@@ -217,6 +346,9 @@ class ParallelSweepWorker(QThread):
                 self.sweep_error.emit(f"Process pool error: {e}")
             return
         finally:
+            self.total_computation_time_s = time.perf_counter() - sweep_t0
+            if self.sweep_config is not None:
+                self.sweep_config["total_computation_time_s"] = float(self.total_computation_time_s)
             _active_workers.discard(self)
             try:
                 for scen_num, sf in getattr(self, 'state_files', {}).items():

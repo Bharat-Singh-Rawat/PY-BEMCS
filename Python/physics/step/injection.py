@@ -25,9 +25,11 @@ def step_inject(sim, ctx: StepContext):
     grids = ctx.grids
     t_current = ctx.t_current
 
-    if not sim.injection_enabled or (
-        sim.injection_stop_time is not None and t_current > sim.injection_stop_time
-    ):
+    if sim.injection_stop_time is not None and t_current > sim.injection_stop_time:
+        sim.injection_enabled = False
+        return
+
+    if not sim.injection_enabled:
         return
 
     n0 = params.get('n0_plasma', 1e17)
