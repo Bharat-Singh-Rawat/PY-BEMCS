@@ -391,7 +391,7 @@ class SweepMixin:
         self._sweep_base_params = copy.deepcopy(base_params)
         self._scenario_domain_cache = {}
         self._current_rendered_scenario_grid_idx = None
-        scatter_limit = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 1000))
+        scatter_limit = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 100000))
 
         self.parallel_sweep_worker = ParallelSweepWorker(
             config, base_params, n_cores=n_cores, scatter_limit=scatter_limit, parent=self
@@ -805,7 +805,7 @@ class SweepMixin:
         elec_xy = info.get("elec_xy")
 
         # Respect active scatter_limit (None = hide all, 0 = all, N = max N)
-        scatter_lim = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 1000))
+        scatter_lim = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 100000))
         if scatter_lim is None:
             prim_xy = np.empty((0, 2), dtype=np.float32)
             cex_xy = np.empty((0, 2), dtype=np.float32)

@@ -45,7 +45,7 @@ class ParallelSweepWorker(QThread):
     sweep_finished = pyqtSignal(list)                # (all_sorted_results)
     sweep_error = pyqtSignal(str)                    # (error_message)
 
-    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=1000, parent=None):
+    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=100000, parent=None):
         super().__init__(parent)
         self.sweep_config = sweep_config
         self.base_params = base_params
@@ -300,7 +300,7 @@ class ParallelSweepWorker(QThread):
                 "pause_file": self.pause_files.get(scen_idx),
                 "state_file": self.state_files.get(scen_idx),
                 "active_view_file": self.active_view_file,
-                "scatter_limit": getattr(self, 'scatter_limit', 1000),
+                "scatter_limit": getattr(self, 'scatter_limit', 100000),
             })
 
         results = []

@@ -2,6 +2,7 @@
 Simulation worker running DigitalTwinSimulator.step off the GUI thread.
 """
 import time
+import math
 import threading
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -39,14 +40,14 @@ class SimulationWorker(QThread):
     """
 
     # Maximum particles sent to scatter plots when no runtime override is active
-    MAX_SCATTER = 1000
+    MAX_SCATTER = 100000
 
     # Runtime scatter limit — set by the GUI Settings dialog:
     #   None  -> hide all particles (display nothing)
-    #   0     -> no limit (show every particle)
+    #   0     -> no limit (show every particle, capped at 100k for blitted display)
     #   N > 0 -> show at most N particles (randomly subsampled)
     # When _scatter_limit is not set it falls back to MAX_SCATTER.
-    _scatter_limit: "int | None | 'all'" = 1000
+    _scatter_limit: "int | None | 'all'" = 100000
 
     # Signal carries a dict with ALL snapshot data for the GUI update
     step_done = pyqtSignal(dict)
@@ -114,7 +115,7 @@ class SimulationWorker(QThread):
 
         # -- Phase 4 Downsampled Async Particle Extraction --
         scatter_limit = getattr(self, '_scatter_limit', params.get('scatter_limit', self.MAX_SCATTER))
-        eff_limit = 10000 if (scatter_limit == 0) else scatter_limit
+        eff_limit = 100000 if (scatter_limit == 0) else scatter_limit
 
         # Direct Downsampled Extraction for Ions (Zero full-array heap allocations)
         if scatter_limit is None or num_p == 0:
@@ -123,7 +124,7 @@ class SimulationWorker(QThread):
             ions_subsampled = False
             ions_subsample_ratio = 0.0
         elif eff_limit and num_p > eff_limit:
-            stride = max(1, num_p // eff_limit)
+            stride = max(1, math.ceil(num_p / eff_limit))
             sl = slice(0, num_p, stride)
             p_isCEX = self.sim.p_isCEX[sl].copy()
             p_x  = self.sim.p_x[sl].copy()
@@ -169,7 +170,7 @@ class SimulationWorker(QThread):
             e_x = e_y = e_vx = e_vy = np.empty(0, dtype=np.float32)
             elec_subsampled = False
         elif eff_limit and num_e > eff_limit:
-            stride_e = max(1, num_e // eff_limit)
+            stride_e = max(1, math.ceil(num_e / eff_limit))
             sl_e = slice(0, num_e, stride_e)
             e_x  = self.sim.e_x[sl_e].copy()
             e_y  = self.sim.e_y[sl_e].copy()

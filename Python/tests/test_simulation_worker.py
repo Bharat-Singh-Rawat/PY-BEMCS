@@ -103,6 +103,7 @@ def test_phase4_direct_subsampled_extraction_zero_alloc():
     sim.e_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
     sim.e_vx = np.full(N, 100000.0, dtype=np.float32)
     sim.e_vy = np.zeros(N, dtype=np.float32)
+    sim.e_vz = np.zeros(N, dtype=np.float32)
 
     snaps = []
     worker.step_done.connect(lambda s: snaps.append(s))
@@ -140,6 +141,7 @@ def test_phase4_iedf_on_demand_payload():
     sim.e_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
     sim.e_vx = np.full(N, 100000.0, dtype=np.float32)
     sim.e_vy = np.zeros(N, dtype=np.float32)
+    sim.e_vz = np.zeros(N, dtype=np.float32)
 
     snaps = []
     worker.step_done.connect(lambda s: snaps.append(s))
@@ -156,12 +158,12 @@ def test_phase4_iedf_on_demand_payload():
 
 
 def test_phase4_adaptive_display_ceiling():
-    """Verify that when scatter_limit is 0 (all particles), huge particle counts are capped at 10,000."""
+    """Verify that when scatter_limit is 0 (all particles), huge particle counts are capped at 100,000."""
     sim = DigitalTwinSimulator()
     worker = SimulationWorker(sim)
     worker._scatter_limit = 0  # User selected all particles
 
-    N = 50000
+    N = 250000
     sim.num_p = N
     sim.num_e = N
     sim.p_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
@@ -175,6 +177,7 @@ def test_phase4_adaptive_display_ceiling():
     sim.e_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
     sim.e_vx = np.full(N, 100000.0, dtype=np.float32)
     sim.e_vy = np.zeros(N, dtype=np.float32)
+    sim.e_vz = np.zeros(N, dtype=np.float32)
 
     snaps = []
     worker.step_done.connect(lambda s: snaps.append(s))
@@ -184,6 +187,6 @@ def test_phase4_adaptive_display_ceiling():
 
     assert len(snaps) == 1
     snap = snaps[0]
-    # Capped at 10,000 to prevent GUI freeze
-    assert len(snap['prim_xy']) <= 10001
+    # Capped at 100,000 to maintain blitted display performance
+    assert len(snap['prim_xy']) <= 100001
 

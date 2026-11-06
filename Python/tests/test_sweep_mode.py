@@ -833,12 +833,12 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
 
         self.win.stop_sweep()
 
-    def test_gui_settings_dialog_custom_1000_particles_default(self):
+    def test_gui_settings_dialog_custom_100000_particles_default(self):
         from gui.dialogs import GUISettingsDialog
         dlg = GUISettingsDialog(self.win)
         self.assertTrue(dlg._rb_custom.isChecked())
-        self.assertEqual(dlg._spin_custom.value(), 1000)
-        self.assertEqual(dlg.get_scatter_limit(), 1000)
+        self.assertEqual(dlg._spin_custom.value(), 100000)
+        self.assertEqual(dlg.get_scatter_limit(), 100000)
         dlg.close()
 
     def test_parallel_sweep_active_gui_view_tracking(self):

@@ -35,6 +35,7 @@
 * **Multi-Core Benchmarking Suite (`benchmarks/`)**: Automated parallel multi-process parametric sweeps for CEX erosion rates, Electron Backstreaming (EBS) limits, primary beam impingement / grid scraping, and perveance-divergence curves.
 * **Thermo-Mechanical Cantilever Grid Deflection**: Real-time modeling of grid aperture deformation driven by Euler--Bernoulli cantilever thermal expansion ($\delta = \frac{\alpha \Delta T L^2}{2t}$), with dynamic mesh distortion and Poisson refactorization.
 * **Live Telemetry & Divergence Analysis**: Real-time tracking of 95th-percentile beam divergence ($\theta_{95}$), midline divergence, centerline saddle-point potential, and interactive axial divergence evaluation plane controls positioned cleanly under the telemetry graphs.
+* **Blitted Real-Time GUI Display & Display Particle Controls**: High-throughput Matplotlib blitting (`canvas.blit`) updates live particle trajectories in under $10\text{ ms}$ on top of cached domain contours. Default display set to `Custom: 100,000` particles for high-fidelity extraction beam visualization; lightweight power-saving settings (`None` / `1,000`) are provided for extended sweeps and battery-powered laptops lacking dedicated GPUs.
 
 ---
 

@@ -339,7 +339,7 @@ class GUISettingsDialog(QDialog):
         self._scatter_group = QButtonGroup(self)
 
         self._rb_none   = QRadioButton("None  — hide all particles (best performance)")
-        self._rb_all    = QRadioButton("All   — show every particle (may freeze GUI at high N)")
+        self._rb_all    = QRadioButton("All   — show every particle (capped at 100k points for blitted display)")
         self._rb_custom = QRadioButton("Custom limit:")
 
         for rb in (self._rb_none, self._rb_all, self._rb_custom):
@@ -351,15 +351,15 @@ class GUISettingsDialog(QDialog):
         custom_row.setContentsMargins(22, 0, 0, 0)
         self._spin_custom = QSpinBox()
         self._spin_custom.setRange(1, 10_000_000)
-        self._spin_custom.setSingleStep(500)
-        self._spin_custom.setValue(1000)
+        self._spin_custom.setSingleStep(5000)
+        self._spin_custom.setValue(100000)
         self._spin_custom.setSuffix("  particles")
         self._spin_custom.setToolTip("Maximum particles shown per species (ions / electrons)")
         custom_row.addWidget(self._spin_custom)
         custom_row.addStretch()
         scatter_layout.addLayout(custom_row)
 
-        # Default to Custom limit with 1000 particles
+        # Default to Custom limit with 100000 particles
         self._rb_custom.setChecked(True)
         self._rb_custom.toggled.connect(self._spin_custom.setEnabled)
         self._spin_custom.setEnabled(True)
@@ -402,12 +402,12 @@ class GUISettingsDialog(QDialog):
         app = self._app
         if app is None:
             self._rb_custom.setChecked(True)
-            self._spin_custom.setValue(1000)
+            self._spin_custom.setValue(100000)
             self._spin_diag_ms.setValue(500)
             return
 
         # Scatter limit
-        lim = getattr(app, 'scatter_limit', getattr(getattr(app, '_sim_worker', None), '_scatter_limit', 1000))
+        lim = getattr(app, 'scatter_limit', getattr(getattr(app, '_sim_worker', None), '_scatter_limit', 100000))
         if lim is None:
             self._rb_none.setChecked(True)
         elif lim == 0:
