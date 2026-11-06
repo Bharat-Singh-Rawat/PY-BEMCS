@@ -161,6 +161,10 @@ class DialogsMixin:
         if self.iedf_window is None:
             self.iedf_window = IEDFWindow()
         self.iedf_window.show()
+        if hasattr(self, '_sim_worker') and self._sim_worker is not None:
+            p = self.get_params()
+            p['iedf_visible'] = True
+            self._sim_worker.update_params(p)
 
     def open_ppc_window(self):
         """Open Particles-Per-Cell monitor window."""

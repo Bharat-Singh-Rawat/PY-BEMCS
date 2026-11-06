@@ -31,9 +31,12 @@ class RenderingMixin:
             self.scat_bound = self.ax_live.scatter(gx * self.sim.dx, gy * self.sim.dy, s=4, c="k", alpha=0.8, zorder=2)
 
         max_v = max(gw['V'].value() for gw in self.grid_widgets) if self.grid_widgets else 1000.0
-        self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=max_v+300, alpha=0.8, zorder=3)
-        self.scat_cex = self.ax_live.scatter([], [], c=[], s=3, cmap='turbo', vmin=0, vmax=max_v+300, alpha=1.0, zorder=4)
-        self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.8, zorder=5)
+        self.scat_prim = self.ax_live.scatter([], [], c=[], s=2, cmap='turbo', vmin=0, vmax=max_v+300, alpha=0.8, zorder=3, animated=True)
+        self.scat_cex = self.ax_live.scatter([], [], c=[], s=3, cmap='turbo', vmin=0, vmax=max_v+300, alpha=1.0, zorder=4, animated=True)
+        self.scat_elec = self.ax_live.scatter([], [], s=1, c='#00FF00', alpha=0.8, zorder=5, animated=True)
+        self._bg_live = None
+        if not hasattr(self, '_resize_cid'):
+            self._resize_cid = self.canvas.mpl_connect('resize_event', lambda ev: setattr(self, '_bg_live', None))
 
         if hasattr(self, 'cax_live') and self.cax_live in self.fig.axes:
             self.cax_live.set_axes_locator(None)
@@ -461,7 +464,39 @@ class RenderingMixin:
         t_str = " | ".join([f"G{i+1}: {T - 273.15:.1f}°C" for i, T in enumerate(T_grids)])
         self.lbl_temp.setText("Grid Temps: " + t_str)
 
-        self.canvas.draw_idle()
+        now = time.perf_counter()
+        if not hasattr(self, '_last_full_redraw_t'):
+            self._last_full_redraw_t = 0.0
+            self._bg_live = None
+
+        full_redraw_due = (
+            (now - self._last_full_redraw_t >= 0.10)
+            or (not self.sim_isRunning)
+            or remeshed
+            or (self._bg_live is None)
+        )
+
+        if full_redraw_due:
+            self.canvas.draw()
+            try:
+                self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
+            except Exception:
+                self._bg_live = None
+            self._last_full_redraw_t = now
+
+        # High-performance blit of moving particle scatter on top of cached domain background
+        if self._bg_live is not None and self.scat_prim is not None:
+            try:
+                self.canvas.restore_region(self._bg_live)
+                self.ax_live.draw_artist(self.scat_prim)
+                self.ax_live.draw_artist(self.scat_cex)
+                self.ax_live.draw_artist(self.scat_elec)
+                self.canvas.blit(self.ax_live.bbox)
+            except Exception:
+                self._bg_live = None
+                self.canvas.draw_idle()
+        else:
+            self.canvas.draw_idle()
 
         if self.chk_record.isChecked():
             self.recorded_frames.append(self.canvas.grab())
@@ -470,6 +505,7 @@ class RenderingMixin:
         if self.sim_isRunning:
             p = self.get_params()
             p['_last_gui_ms'] = self._last_gui_ms
+            p['iedf_visible'] = bool(self.iedf_window and self.iedf_window.isVisible())
             self._sim_worker.update_params(p)
 
         if getattr(self, 'is_sweep_active', False):

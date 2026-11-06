@@ -81,3 +81,109 @@ def test_simulation_worker_strided_subsampling():
     assert len(sub_x) <= worker.MAX_SCATTER + 1
     assert sub_x[0] == sim.p_x[0]
     assert np.all(np.diff(sub_x) > 0), "Spatial ordering must be strictly preserved"
+
+
+def test_phase4_direct_subsampled_extraction_zero_alloc():
+    """Verify that snapshot extraction extracts only downsampled slices without full copies."""
+    sim = DigitalTwinSimulator()
+    worker = SimulationWorker(sim)
+    worker._scatter_limit = 500
+
+    N = 50000
+    sim.num_p = N
+    sim.num_e = N
+    sim.p_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
+    sim.p_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
+    sim.p_vx = np.full(N, 15000.0, dtype=np.float32)
+    sim.p_vy = np.zeros(N, dtype=np.float32)
+    sim.p_vz = np.zeros(N, dtype=np.float32)
+    sim.p_isCEX = np.zeros(N, dtype=bool)
+
+    sim.e_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
+    sim.e_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
+    sim.e_vx = np.full(N, 100000.0, dtype=np.float32)
+    sim.e_vy = np.zeros(N, dtype=np.float32)
+
+    snaps = []
+    worker.step_done.connect(lambda s: snaps.append(s))
+    params = {'sim_mode': 'Both', 'iedf_visible': False}
+
+    worker._emit_snapshot(params, 0, False, -20.0, 5.0, [300.0, 300.0], 0.8)
+
+    assert len(snaps) == 1
+    snap = snaps[0]
+    # Extracted scatter points should be bounded by 500
+    assert len(snap['prim_xy']) <= 501
+    assert len(snap['elec_xy']) <= 501
+    # When iedf_visible is False, IEDF arrays must be empty
+    assert len(snap['p_vx']) == 0
+    assert len(snap['e_vx']) == 0
+
+
+def test_phase4_iedf_on_demand_payload():
+    """Verify that IEDF payload is populated only when iedf_visible is True, and safely capped."""
+    sim = DigitalTwinSimulator()
+    worker = SimulationWorker(sim)
+    worker._scatter_limit = 1000
+
+    N = 30000
+    sim.num_p = N
+    sim.num_e = N
+    sim.p_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
+    sim.p_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
+    sim.p_vx = np.full(N, 15000.0, dtype=np.float32)
+    sim.p_vy = np.zeros(N, dtype=np.float32)
+    sim.p_vz = np.zeros(N, dtype=np.float32)
+    sim.p_isCEX = np.zeros(N, dtype=bool)
+
+    sim.e_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
+    sim.e_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
+    sim.e_vx = np.full(N, 100000.0, dtype=np.float32)
+    sim.e_vy = np.zeros(N, dtype=np.float32)
+
+    snaps = []
+    worker.step_done.connect(lambda s: snaps.append(s))
+    params = {'sim_mode': 'Both', 'iedf_visible': True}
+
+    worker._emit_snapshot(params, 0, False, -20.0, 5.0, [300.0, 300.0], 0.8)
+
+    assert len(snaps) == 1
+    snap = snaps[0]
+    assert len(snap['p_vx']) > 0
+    assert len(snap['p_vx']) <= 10001
+    assert len(snap['e_vx']) > 0
+    assert len(snap['e_vx']) <= 10001
+
+
+def test_phase4_adaptive_display_ceiling():
+    """Verify that when scatter_limit is 0 (all particles), huge particle counts are capped at 10,000."""
+    sim = DigitalTwinSimulator()
+    worker = SimulationWorker(sim)
+    worker._scatter_limit = 0  # User selected all particles
+
+    N = 50000
+    sim.num_p = N
+    sim.num_e = N
+    sim.p_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
+    sim.p_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
+    sim.p_vx = np.full(N, 15000.0, dtype=np.float32)
+    sim.p_vy = np.zeros(N, dtype=np.float32)
+    sim.p_vz = np.zeros(N, dtype=np.float32)
+    sim.p_isCEX = np.zeros(N, dtype=bool)
+
+    sim.e_x = np.linspace(0.0, 5.0, N, dtype=np.float32)
+    sim.e_y = np.linspace(0.0, 2.0, N, dtype=np.float32)
+    sim.e_vx = np.full(N, 100000.0, dtype=np.float32)
+    sim.e_vy = np.zeros(N, dtype=np.float32)
+
+    snaps = []
+    worker.step_done.connect(lambda s: snaps.append(s))
+    params = {'sim_mode': 'Both'}
+
+    worker._emit_snapshot(params, 0, False, -20.0, 5.0, [300.0, 300.0], 0.8)
+
+    assert len(snaps) == 1
+    snap = snaps[0]
+    # Capped at 10,000 to prevent GUI freeze
+    assert len(snap['prim_xy']) <= 10001
+

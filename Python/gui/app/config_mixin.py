@@ -772,4 +772,6 @@ class ConfigMixin:
         params['div_method'] = getattr(self, 'div_method', '95%')
         params['div_plane_x'] = getattr(self, 'div_plane_x', None)
         params['twiss_n_sigma'] = getattr(self, 'twiss_n_sigma', 1.0)
+        params['iedf_visible'] = bool(getattr(self, 'iedf_window', None) and self.iedf_window.isVisible())
+        params['scatter_limit'] = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 1000))
         return params

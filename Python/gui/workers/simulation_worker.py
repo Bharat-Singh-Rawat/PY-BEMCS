@@ -112,45 +112,38 @@ class SimulationWorker(QThread):
         m_e   = self.sim.m_e
         q     = self.sim.q
 
-        # -- Ion arrays (raw slices, before subsampling) --
-        if num_p > 0:
-            p_isCEX_raw = self.sim.p_isCEX[:num_p].copy()
-            p_x_raw  = self.sim.p_x[:num_p].copy()
-            p_y_raw  = self.sim.p_y[:num_p].copy()
-            p_vx_raw = self.sim.p_vx[:num_p].copy()
-            p_vy_raw = self.sim.p_vy[:num_p].copy()
-            p_vz_raw = self.sim.p_vz[:num_p].copy()
-        else:
-            p_isCEX_raw = np.empty(0, dtype=bool)
-            p_x_raw = p_y_raw = p_vx_raw = p_vy_raw = p_vz_raw = np.empty(0)
+        # -- Phase 4 Downsampled Async Particle Extraction --
+        scatter_limit = getattr(self, '_scatter_limit', params.get('scatter_limit', self.MAX_SCATTER))
+        eff_limit = 10000 if (scatter_limit == 0) else scatter_limit
 
-        # -- Subsample ions based on runtime scatter limit --
-        scatter_limit = getattr(self, '_scatter_limit', self.MAX_SCATTER)
-
-        if scatter_limit is None:
-            # Hide all particles
+        # Direct Downsampled Extraction for Ions (Zero full-array heap allocations)
+        if scatter_limit is None or num_p == 0:
             p_isCEX = np.empty(0, dtype=bool)
-            p_x = p_y = p_vx = p_vy = p_vz = np.empty(0)
+            p_x = p_y = p_vx = p_vy = p_vz = np.empty(0, dtype=np.float32)
             ions_subsampled = False
             ions_subsample_ratio = 0.0
-        elif scatter_limit == 0 or num_p <= scatter_limit:
-            # No limit or already below threshold — use full arrays
-            p_isCEX = p_isCEX_raw
-            p_x = p_x_raw; p_y = p_y_raw
-            p_vx = p_vx_raw; p_vy = p_vy_raw; p_vz = p_vz_raw
-            ions_subsampled = False
-            ions_subsample_ratio = 1.0
-        else:
-            # Uniform strided subsampling to scatter_limit without allocating random index arrays
-            stride = max(1, num_p // scatter_limit)
+        elif eff_limit and num_p > eff_limit:
+            stride = max(1, num_p // eff_limit)
             sl = slice(0, num_p, stride)
-            p_isCEX = p_isCEX_raw[sl]
-            p_x  = p_x_raw[sl];  p_y  = p_y_raw[sl]
-            p_vx = p_vx_raw[sl]; p_vy = p_vy_raw[sl]; p_vz = p_vz_raw[sl]
+            p_isCEX = self.sim.p_isCEX[sl].copy()
+            p_x  = self.sim.p_x[sl].copy()
+            p_y  = self.sim.p_y[sl].copy()
+            p_vx = self.sim.p_vx[sl].copy()
+            p_vy = self.sim.p_vy[sl].copy()
+            p_vz = self.sim.p_vz[sl].copy()
             ions_subsampled = True
             ions_subsample_ratio = num_p / max(1, len(p_x))
+        else:
+            p_isCEX = self.sim.p_isCEX[:num_p].copy()
+            p_x  = self.sim.p_x[:num_p].copy()
+            p_y  = self.sim.p_y[:num_p].copy()
+            p_vx = self.sim.p_vx[:num_p].copy()
+            p_vy = self.sim.p_vy[:num_p].copy()
+            p_vz = self.sim.p_vz[:num_p].copy()
+            ions_subsampled = False
+            ions_subsample_ratio = 1.0
 
-        # -- Pre-compute scatter XY and per-particle energy (worker thread) --
+        # Pre-compute scatter XY and per-particle energy on worker thread
         prim_mask = ~p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
         cex_mask  =  p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
 
@@ -171,29 +164,48 @@ class SimulationWorker(QThread):
         else:
             e_cex_eV = np.empty(0)
 
-        # -- Electron arrays (subsample if needed) --
-        if num_e > 0:
-            e_x_raw  = self.sim.e_x[:num_e].copy()
-            e_y_raw  = self.sim.e_y[:num_e].copy()
-            e_vx_raw = self.sim.e_vx[:num_e].copy()
-            e_vy_raw = self.sim.e_vy[:num_e].copy()
-        else:
-            e_x_raw = e_y_raw = e_vx_raw = e_vy_raw = np.empty(0)
-
-        if scatter_limit is None:
-            e_x = e_y = e_vx = e_vy = np.empty(0)
+        # Direct Downsampled Extraction for Electrons
+        if scatter_limit is None or num_e == 0:
+            e_x = e_y = e_vx = e_vy = np.empty(0, dtype=np.float32)
             elec_subsampled = False
-        elif scatter_limit == 0 or num_e <= scatter_limit:
-            e_x = e_x_raw; e_y = e_y_raw; e_vx = e_vx_raw; e_vy = e_vy_raw
-            elec_subsampled = False
-        else:
-            stride_e = max(1, num_e // scatter_limit)
+        elif eff_limit and num_e > eff_limit:
+            stride_e = max(1, num_e // eff_limit)
             sl_e = slice(0, num_e, stride_e)
-            e_x  = e_x_raw[sl_e];  e_y  = e_y_raw[sl_e]
-            e_vx = e_vx_raw[sl_e]; e_vy = e_vy_raw[sl_e]
+            e_x  = self.sim.e_x[sl_e].copy()
+            e_y  = self.sim.e_y[sl_e].copy()
+            e_vx = self.sim.e_vx[sl_e].copy()
+            e_vy = self.sim.e_vy[sl_e].copy()
             elec_subsampled = True
+        else:
+            e_x  = self.sim.e_x[:num_e].copy()
+            e_y  = self.sim.e_y[:num_e].copy()
+            e_vx = self.sim.e_vx[:num_e].copy()
+            e_vy = self.sim.e_vy[:num_e].copy()
+            elec_subsampled = False
 
-        elec_xy = (np.column_stack((e_x, e_y)) if num_e > 0 else np.empty((0, 2)))
+        elec_xy = (np.column_stack((e_x, e_y)) if len(e_x) > 0 else np.empty((0, 2)))
+
+        # IEDF Window Data (Only extracted when window is actively open)
+        iedf_open = params.get('iedf_visible', False)
+        if iedf_open and num_p > 0:
+            stride_iedf = max(1, num_p // 10000)
+            p_isCEX_iedf = self.sim.p_isCEX[:num_p:stride_iedf].copy()
+            p_vx_iedf    = self.sim.p_vx[:num_p:stride_iedf].copy()
+            p_vy_iedf    = self.sim.p_vy[:num_p:stride_iedf].copy()
+        else:
+            p_isCEX_iedf = np.empty(0, dtype=bool)
+            p_vx_iedf = np.empty(0, dtype=np.float32)
+            p_vy_iedf = np.empty(0, dtype=np.float32)
+
+        if iedf_open and num_e > 0:
+            stride_iedf_e = max(1, num_e // 10000)
+            e_x_iedf  = self.sim.e_x[:num_e:stride_iedf_e].copy()
+            e_vx_iedf = self.sim.e_vx[:num_e:stride_iedf_e].copy()
+            e_vy_iedf = self.sim.e_vy[:num_e:stride_iedf_e].copy()
+        else:
+            e_x_iedf = np.empty(0, dtype=np.float32)
+            e_vx_iedf = np.empty(0, dtype=np.float32)
+            e_vy_iedf = np.empty(0, dtype=np.float32)
 
         # -- Strategy 2: conditional Tmap copy (only if thermal is active) --
         sim_mode = params.get('sim_mode', 'Both')
@@ -252,13 +264,13 @@ class SimulationWorker(QThread):
             'e_cex_eV':            e_cex_eV,
             'prim_mask':           prim_mask,
             'cex_mask':            cex_mask,
-            # Raw particle arrays (needed for IEDF window)
-            'p_isCEX':    p_isCEX_raw,
-            'p_vx':       p_vx_raw,
-            'p_vy':       p_vy_raw,
-            'e_x':        e_x_raw,
-            'e_vx':       e_vx_raw,
-            'e_vy':       e_vy_raw,
+            # Particle arrays (supplied on-demand for IEDF window)
+            'p_isCEX':    p_isCEX_iedf,
+            'p_vx':       p_vx_iedf,
+            'p_vy':       p_vy_iedf,
+            'e_x':        e_x_iedf,
+            'e_vx':       e_vx_iedf,
+            'e_vy':       e_vy_iedf,
             # Subsampling metadata
             'ions_subsampled':      ions_subsampled,
             'ions_subsample_ratio': ions_subsample_ratio,
