@@ -24,7 +24,7 @@
 
 ## 🌟 Key Features & Upgrades
 
-* **Dual-Kernel Architecture (Taichi GPU + CPU Fallback)**: High-throughput 2D3V Boris particle advancement and bilinear charge deposition accelerated with Taichi (CUDA, Metal, Vulkan) with seamless, vectorized pure-NumPy CPU fallback kernels for maximum portability across any machine.
+* **Dual-Kernel Architecture (Taichi GPU + CPU Fallback)**: High-throughput 2D3V Boris particle advancement with fused in-register sub-stepping, bilinear charge deposition, and parallel GPU wall collision and boundary tracking accelerated with Taichi (Vulkan, CUDA, CPU) with seamless, vectorized pure-NumPy CPU fallback kernels for maximum portability across any machine.
 * **Automated Numerical Physics Controls**: Built-in automated checks for spatial Debye length resolution ($\Delta x, \Delta y \le \lambda_{\mathrm{D}}$), plasma frequency integration limits ($\Delta t \le 2\pi/\omega_{\mathrm{pi}}$), and CFL velocity limits ($v_{\max} \Delta t \le \Delta x$).
 * **Customizable Upstream Gap & Sheath Ratio Controls**: Interactive modal dialog (**Settings** button aside Upstream Gap) allowing users to inspect and adjust the physical calculation ratio (Presheath: $k \cdot r_{\mathrm{screen}}$; Entire Bulk Plasma: $N \cdot \lambda_{\mathrm{D}}$), reset to literature recommendations, or set a direct custom gap in millimeters that remains locked during parameter updates.
 * **Granular Export Parameter Selectors**: Dedicated pop-up checklist dialogs (**Parameters** buttons beside Data and Particle exports) to selectively choose which simulation variables and particle kinematics ($t, x, y, v_x, v_y, v_z, E, \text{type}$) are saved to `.csv` or `.txt`.

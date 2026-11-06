@@ -1,7 +1,8 @@
 """
 Taichi GPU / accelerated kernels for particle deposition, Boris push, and thermal conduction.
 """
-from .backend import USE_TAICHI, _TI_FP
+from .backend import USE_TAICHI, _TI_FP, _NP_FP
+import numpy as np
 
 if USE_TAICHI:
     import taichi as ti
@@ -155,6 +156,172 @@ if USE_TAICHI:
         )
 
     @ti.kernel
+    def _check_particle_boundaries_taichi_kernel(
+        x: ti.types.ndarray(dtype=_TI_FP),
+        y: ti.types.ndarray(dtype=_TI_FP),
+        vx: ti.types.ndarray(dtype=_TI_FP),
+        x_old: ti.types.ndarray(dtype=_TI_FP),
+        y_old: ti.types.ndarray(dtype=_TI_FP),
+        is_bound: ti.types.ndarray(dtype=ti.i32),
+        zone_b: ti.types.ndarray(dtype=_TI_FP),
+        zone_dx: ti.types.ndarray(dtype=_TI_FP),
+        zone_off: ti.types.ndarray(dtype=ti.i32),
+        num_zones: ti.i32,
+        num_p: ti.i32,
+        dy: ti.f32,
+        nx: ti.i32,
+        ny: ti.i32,
+        Lx: ti.f32,
+        Ly: ti.f32,
+        periodic_y: ti.i32,
+        grid_x_min: ti.f32,
+        grid_x_max: ti.f32,
+        x_entry: ti.f32,
+        x_exit: ti.f32,
+        x_mid: ti.f32,
+        samples: ti.i32,
+        status: ti.types.ndarray(dtype=ti.u8),
+        impact_ix: ti.types.ndarray(dtype=ti.i16),
+        impact_iy: ti.types.ndarray(dtype=ti.i16),
+        counts: ti.types.ndarray(dtype=ti.i32)
+    ):
+        """Parallel particle wall collision, ray segment testing, and domain boundary checking."""
+        for i in range(num_p):
+            px = x[i]
+            py = y[i]
+            cur_vx = vx[i]
+            px_old = x_old[i]
+            py_old = y_old[i]
+
+            is_oob = 0
+            if px < 0.0 or px > Lx or ti.math.isnan(px) or ti.math.isnan(py):
+                is_oob = 1
+            elif periodic_y == 0 and (py < 0.0 or py > Ly):
+                is_oob = 1
+
+            is_hit = 0
+            imp_x = 0
+            imp_y = 0
+
+            if is_oob == 0:
+                seg_min_x = ti.min(px, px_old)
+                seg_max_x = ti.max(px, px_old)
+
+                if seg_max_x >= grid_x_min and seg_min_x <= grid_x_max and samples > 1:
+                    dx = px - px_old
+                    dy_p = py - py_old
+
+                    for s in range(1, samples + 1):
+                        f = ti.cast(s, ti.f32) / ti.cast(samples, ti.f32)
+                        xi = px_old + dx * f
+                        yi = py_old + dy_p * f
+
+                        z = 0
+                        while z < num_zones - 1 and xi >= zone_b[z + 1]:
+                            z += 1
+                        c_x = ti.cast(ti.round((xi - zone_b[z]) / zone_dx[z]), ti.i32) + zone_off[z]
+                        c_y = ti.cast(ti.round(yi / dy), ti.i32)
+
+                        c_x = ti.max(0, ti.min(c_x, nx - 1))
+                        c_y = ti.max(0, ti.min(c_y, ny - 1))
+
+                        if is_bound[c_y, c_x] != 0:
+                            is_hit = 1
+                            imp_x = c_x
+                            imp_y = c_y
+                            break
+                else:
+                    z = 0
+                    while z < num_zones - 1 and px >= zone_b[z + 1]:
+                        z += 1
+                    c_x = ti.cast(ti.round((px - zone_b[z]) / zone_dx[z]), ti.i32) + zone_off[z]
+                    c_y = ti.cast(ti.round(py / dy), ti.i32)
+
+                    c_x = ti.max(0, ti.min(c_x, nx - 1))
+                    c_y = ti.max(0, ti.min(c_y, ny - 1))
+
+                    if is_bound[c_y, c_x] != 0:
+                        is_hit = 1
+                        imp_x = c_x
+                        imp_y = c_y
+
+            impact_ix[i] = ti.cast(imp_x, ti.i16)
+            impact_iy[i] = ti.cast(imp_y, ti.i16)
+
+            st = ti.cast(0, ti.u8)
+            if is_hit == 1:
+                st |= ti.cast(1, ti.u8)   # bit 0: hit_grid
+            if is_oob == 1:
+                st |= ti.cast(2, ti.u8)   # bit 1: oob
+
+            is_dead = is_hit | is_oob
+            if is_dead == 1:
+                st |= ti.cast(4, ti.u8)   # bit 2: dead
+                ti.atomic_add(counts[0], 1)
+
+            if is_hit == 1 and is_oob == 0:
+                ti.atomic_add(counts[1], 1)  # lost to grid
+
+            if is_oob == 1:
+                ti.atomic_add(counts[2], 1)  # lost to oob
+
+            if px_old < x_entry and px >= x_entry and cur_vx > 0.0:
+                st |= ti.cast(8, ti.u8)   # bit 3: entered optics
+                ti.atomic_add(counts[3], 1)
+
+            if px > x_exit and cur_vx > 0.0:
+                st |= ti.cast(64, ti.u8)  # bit 6: exited
+                ti.atomic_add(counts[6], 1)
+                if px_old <= x_exit:
+                    st |= ti.cast(16, ti.u8)  # bit 4: crossed exit
+                    ti.atomic_add(counts[4], 1)
+
+            if px_old <= x_mid and px > x_mid and cur_vx > 0.0:
+                st |= ti.cast(32, ti.u8)  # bit 5: crossed mid plane
+                ti.atomic_add(counts[5], 1)
+
+            status[i] = st
+
+    def check_particle_boundaries_taichi(
+        x, y, vx, x_old, y_old,
+        is_bound, zone_b, zone_dx, zone_off, num_zones,
+        num_p, dy, nx, ny, Lx, Ly, periodic_y,
+        grid_x_min, grid_x_max, x_entry, x_exit, x_mid,
+        samples, status, impact_ix, impact_iy, counts
+    ):
+        """Python wrapper for Taichi boundary and wall collision checking."""
+        if num_p <= 0:
+            return
+        if x.dtype != _NP_FP:
+            x = x.astype(_NP_FP)
+        if y.dtype != _NP_FP:
+            y = y.astype(_NP_FP)
+        if vx.dtype != _NP_FP:
+            vx = vx.astype(_NP_FP)
+        if x_old.dtype != _NP_FP:
+            x_old = x_old.astype(_NP_FP)
+        if y_old.dtype != _NP_FP:
+            y_old = y_old.astype(_NP_FP)
+        if zone_b.dtype != _NP_FP:
+            zone_b = zone_b.astype(_NP_FP)
+        if zone_dx.dtype != _NP_FP:
+            zone_dx = zone_dx.astype(_NP_FP)
+        if zone_off.dtype != np.int32:
+            zone_off = zone_off.astype(np.int32)
+        if is_bound.dtype != np.int32:
+            is_bound = is_bound.astype(np.int32)
+
+        _check_particle_boundaries_taichi_kernel(
+            x, y, vx, x_old, y_old,
+            is_bound, zone_b, zone_dx, zone_off, int(num_zones),
+            int(num_p), float(dy), int(nx), int(ny),
+            float(Lx), float(Ly), int(periodic_y),
+            float(grid_x_min), float(grid_x_max),
+            float(x_entry), float(x_exit), float(x_mid),
+            int(samples), status, impact_ix, impact_iy, counts
+        )
+
+    @ti.kernel
     def thermal_conduction_taichi(
         T:    ti.types.ndarray(dtype=_TI_FP),
         T_new:ti.types.ndarray(dtype=_TI_FP),
@@ -183,4 +350,5 @@ if USE_TAICHI:
 else:
     accumulate_rho_taichi = None
     push_particles_boris_taichi = None
+    check_particle_boundaries_taichi = None
     thermal_conduction_taichi = None

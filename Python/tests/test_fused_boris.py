@@ -96,3 +96,4 @@ def test_fast_path_substep_bounding():
     n_sub, ds_max, ds_lim = sim.compute_particle_substeps(x, y, vx, vy, vz, 1.0, dt=1e-9)
     assert n_sub == 1
     assert ds_max < ds_lim
+

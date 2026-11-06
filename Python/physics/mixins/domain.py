@@ -404,6 +404,8 @@ class DomainMixin:
         self.mask_grids = []
         self.T_grids    = []
         self.isBound.fill(False)
+        self._isBound_int = None
+        self._damage_version = 0
         self.V_fixed.fill(0.0)
 
         self.energy_history_t.clear()
