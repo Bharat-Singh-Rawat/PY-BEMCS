@@ -10,9 +10,22 @@ import numpy as np
 USE_TAICHI = (not getattr(sys, "frozen", False)) and os.environ.get("PYBEMCS_FORCE_CPU", "0") != "1"
 
 if USE_TAICHI:
-    import taichi as ti
-    ti.init(arch=ti.vulkan, default_fp=ti.f32)
-    _TI_FP = ti.f32
+    try:
+        import taichi as ti
+        ti.init(arch=ti.vulkan, default_fp=ti.f32)
+        _TI_FP = ti.f32
+    except Exception as e_vulkan:
+        # Fall back to Taichi CPU if Vulkan device/driver is missing
+        try:
+            ti.init(arch=ti.cpu, default_fp=ti.f32)
+            _TI_FP = ti.f32
+            print(f"[Taichi Info] Vulkan GPU unavailable ({e_vulkan}); initialized on multi-threaded CPU.")
+        except Exception as e_cpu:
+            # Fall back to pure NumPy vectorized CPU kernels
+            USE_TAICHI = False
+            ti = None
+            _TI_FP = None
+            print(f"[Taichi Info] Taichi initialization failed ({e_cpu}); falling back to pure NumPy CPU kernels.")
 else:
     ti = None
     _TI_FP = None
