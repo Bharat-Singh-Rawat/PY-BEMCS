@@ -195,6 +195,10 @@ class DigitalTwinSimulator(
         self.By = np.zeros((self.ny, self.nx), dtype=_NP_FP)
         self.Bz = np.zeros((self.ny, self.nx), dtype=_NP_FP)
 
+        # Non-linear Poisson hysteretic / sticky Newton solver state
+        self._poisson_nr_streak = 0
+        self._poisson_direct_nr_remaining = 0
+
         self.accum_ppc_map   = np.zeros((self.ny, self.nx), dtype=np.float64)
         self.ppc_steps_count = 0
         self.current_ppc_map = np.zeros((self.ny, self.nx), dtype=int)

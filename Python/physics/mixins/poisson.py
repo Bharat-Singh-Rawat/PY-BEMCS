@@ -42,14 +42,55 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
         else:
             max_it = int(params.get('poisson_max_iters', default_max))
 
-        if _GPU_POISSON and self.laplacian_lu_gpu is not None:
-            n_done, delta_V, rms_V, status = self._recalc_poisson_gpu(
-                max_it, coeff, V_plasma, Te_up, n0, omega_min, omega_max, target_tol, min_it, tol_rms, peak_guard
-            )
+        sticky_nr = bool(params.get('poisson_sticky_nr', True))
+        nr_streak_threshold = int(params.get('poisson_nr_streak_threshold', 5))
+        nr_direct_duration = int(params.get('poisson_nr_direct_duration', 50))
+        max_iters_nr = int(params.get('poisson_newton_max_iters', 15))
+
+        if sticky_nr and getattr(self, '_poisson_direct_nr_remaining', 0) > 0:
+            if _GPU_POISSON and getattr(self, 'laplacian_lu_gpu', None) is not None:
+                V_NR, iters_NR, diff_NR, status_NR = self._solve_poisson_newton_gpu(
+                    coeff, V_plasma, Te_up, n0, tol_V=target_tol, max_iters=max_iters_nr
+                )
+            else:
+                V_NR, iters_NR, diff_NR, status_NR = self._solve_poisson_newton_cpu(
+                    coeff, V_plasma, Te_up, n0, tol_V=target_tol, max_iters=max_iters_nr
+                )
+            self.V = V_NR
+            n_done = iters_NR
+            delta_V = diff_NR
+            rms_V = diff_NR
+            status = status_NR
+            self._poisson_direct_nr_remaining -= 1
+            self._last_anderson_count = 0
+            self._last_backtrack_count = 0
+            if self._poisson_direct_nr_remaining == 0:
+                iter_str = f"Iter {getattr(self, 'iteration', 0)}: " if hasattr(self, 'iteration') else ""
+                print(f"[Poisson Info] {iter_str}Direct Newton phase finished. Will probe Picard on next Poisson solve.")
         else:
-            n_done, delta_V, rms_V, status = self._recalc_poisson_cpu(
-                max_it, coeff, V_plasma, Te_up, n0, omega_min, omega_max, target_tol, min_it, tol_rms, peak_guard
-            )
+            if _GPU_POISSON and self.laplacian_lu_gpu is not None:
+                n_done, delta_V, rms_V, status = self._recalc_poisson_gpu(
+                    max_it, coeff, V_plasma, Te_up, n0, omega_min, omega_max, target_tol, min_it, tol_rms, peak_guard
+                )
+            else:
+                n_done, delta_V, rms_V, status = self._recalc_poisson_cpu(
+                    max_it, coeff, V_plasma, Te_up, n0, omega_min, omega_max, target_tol, min_it, tol_rms, peak_guard
+                )
+
+            if sticky_nr:
+                if status in ['converged_newton', 'diverged_newton']:
+                    self._poisson_nr_streak = getattr(self, '_poisson_nr_streak', 0) + 1
+                    if self._poisson_nr_streak >= nr_streak_threshold:
+                        self._poisson_direct_nr_remaining = nr_direct_duration
+                        self._poisson_nr_streak = 0
+                        iter_str = f"Iter {getattr(self, 'iteration', 0)}: " if hasattr(self, 'iteration') else ""
+                        print(
+                            f"[Poisson Info] {iter_str}Newton-Raphson fallback triggered "
+                            f"{nr_streak_threshold} consecutive times. Activating direct Newton solver for the next "
+                            f"{nr_direct_duration} Poisson steps to optimize computational time."
+                        )
+                elif status in ['converged', 'stagnated_noise_floor']:
+                    self._poisson_nr_streak = 0
 
         self.last_poisson_iters = n_done
         self.last_poisson_delta_V = delta_V

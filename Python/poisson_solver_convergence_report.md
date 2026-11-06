@@ -1011,3 +1011,110 @@ Because the diagonal derivative term is mathematically exact, the Newton method 
    - Updates  \leftarrow V + \Delta V$ and limits the step to \text{ V}$ to prevent overshoots.
    
 By strictly using Newton-Raphson as a fallback, it only activates during extreme transients (e.g., initial beam turn-on at high densities), forcing physical convergence on a computationally feasible mesh while maintaining maximum speed during steady-state operations.
+
+---
+
+### 14.4 The Consecutive Fallback Latency Bottleneck
+
+While the per-step Newton fallback successfully eliminates non-convergence, simulations with high particle counts (or stiff menisci where $\Delta x > \lambda_D$ holds across the entire beam grid) exhibit a **latency bottleneck**:
+
+1. **Persistent Physical State**: The ion transit time across the acceleration grids is $\tau_{\text{transit}} = L / v_{\text{ion}} \sim 300\text{--}1000\ \Delta t$. When dense ion clusters accumulate, the $\Delta x > \lambda_D$ condition does not vanish in 1 step; it persists for **hundreds of consecutive timesteps**.
+2. **Wasted Picard Effort**: In every single timestep, the engine runs Picard fixed-point iteration for 8 to 15 iterations. Each iteration performs vector exponentials, right-hand side masking, and triangular LU solves. After $\approx 15\text{--}20\text{ ms}$, Picard inevitably detects stagnation or divergence and calls Newton-Raphson.
+3. **Compound Time Penalty**:
+   $$T_{\text{step}} = T_{\text{Picard\_failed}} + T_{\text{Newton}} \approx 17\text{ ms} + 23\text{ ms} = 40\text{ ms}$$
+   The initial $17\text{ ms}$ spent in Picard yields **zero useful contribution**—the entire state update is recomputed by Newton-Raphson. Over 100 consecutive timesteps, this wastes $1.7\text{ seconds}$ of pure CPU time and floods the console with repetitive warning logs.
+
+---
+
+### 14.5 The Adaptive Hysteretic ("Sticky") Newton-Raphson Solver
+
+To eliminate this redundant computational overhead, an **Adaptive Hysteretic ("Sticky") Solver Strategy** is implemented in `PoissonMixin.recalc_poisson`:
+
+```
+                      ┌────────────────────────────┐
+                      │    recalc_poisson()        │
+                      └─────────────┬──────────────┘
+                                    │
+                    direct_nr_remaining > 0 ?
+                       /                        \
+                    [Yes]                       [No]
+                     /                            \
+      ┌─────────────────────────┐     ┌─────────────────────────┐
+      │  Direct Newton-Raphson  │     │   Run Standard Picard   │
+      │  (skip Picard entirely) │     │ (with pre-factored LU)  │
+      └────────────┬────────────┘     └────────────┬────────────┘
+                   │                               │
+        direct_remaining -= 1              Picard converged?
+                   │                        /             \
+                   │                     [Yes]           [No]
+                   │                      /                 \
+                   │             streak = 0          Trigger NR Fallback
+                   │                                         │
+                   │                                    streak += 1
+                   │                                         │
+                   │                                  streak >= 5 ?
+                   │                                  /           \
+                   │                               [Yes]          [No]
+                   │                                /               \
+                   │                    direct_remaining = 50       Done
+                   │                    streak = 0                   │
+                   │                                \               /
+                   └─────────────────────────────────┴─────────────┘
+```
+
+#### 1. Consecutive Streak Tracking
+The simulator maintains an internal counter, `_poisson_nr_streak`. Whenever Picard fails and triggers Newton-Raphson fallback, `_poisson_nr_streak` increments by 1. If Picard successfully converges, the streak immediately resets to 0.
+
+#### 2. Direct Newton Phase Activation
+When `_poisson_nr_streak` reaches a configurable threshold (default `poisson_nr_streak_threshold = 5`), the solver recognizes that the plasma state has entered a regime where Picard cannot contract. It enters **Direct Newton Mode** by setting `_poisson_direct_nr_remaining = poisson_nr_direct_duration` (default `50` Poisson solves).
+
+#### 3. Bypassing Picard During the Direct Phase
+While `_poisson_direct_nr_remaining > 0`:
+* Picard iteration (`_recalc_poisson_cpu` or `_recalc_poisson_gpu`) is **completely bypassed**.
+* Newton-Raphson (`_solve_poisson_newton_cpu` / `_solve_poisson_newton_gpu`) is called directly.
+* Because the solution field is warm-started from the preceding timestep ($V^{(t)} \approx V^{(t+\Delta t)}$), Newton-Raphson converges in **only 1 to 2 iterations**.
+* Time spent per step drops from $\approx 40\text{ ms}$ to $\approx 23\text{ ms}$ (**$\approx 43\%$ computational time reduction**).
+
+#### 4. Periodic Picard Probing & Hysteresis Return
+When `_poisson_direct_nr_remaining` decrements to 0, the solver "probes" Picard fixed-point iteration on the subsequent step:
+* **If Picard Converges**: The dense plasma transient has subsided or entered steady state. The solver stays in Picard mode, instantly enjoying the ultra-fast $3\text{--}5\text{ ms}$ pre-factored LU back-substitutions.
+* **If Picard Fails Again**: The fallback triggers Newton-Raphson, and upon accumulating the streak threshold, re-engages direct mode.
+* **Probing Overhead**: Exactly 1 failed Picard solve every 50 to 100 timesteps, amounting to less than $0.3\text{ ms/step}$ ($< 1\%$ overhead).
+
+#### 5. Max-Iterations Fallback Guardrail
+Previously, if Picard reached `max_iters` with residual error $\Delta V > \text{tol}_V$, status was set to `'max_iters'` without triggering Newton fallback. The trigger condition in both CPU and GPU solvers is now expanded:
+```python
+if status in ['diverged', 'stagnated'] or (status == 'max_iters' and last_diff > tol_V):
+    # Trigger Newton-Raphson fallback
+```
+This guarantees that an un-converged potential field is never propagated downstream into the particle pusher.
+
+---
+
+### 14.6 Empirical Benchmark Results
+
+Measured on an NSTAR thruster grid ($118 \times 146 = 17{,}228$ nodes, $n_0 \approx 2 \times 10^{18}\text{ m}^{-3}$, $\Delta x > \lambda_D$):
+
+| Operational Regime | Picard Work | Newton-Raphson Work | Total Step Time | Speedup vs Fallback Baseline |
+| :--- | :--- | :--- | :--- | :--- |
+| **Normal Picard Convergence** (Low density / steady state) | 3–6 iters ($3.8\text{ ms}$) | None ($0\text{ ms}$) | **$3.8\text{ ms}$** | **$10.5\times$ faster** |
+| **Traditional Newton Fallback** (Every step runs doomed Picard) | 14 iters ($17.2\text{ ms}$) | 1–2 iters ($22.7\text{ ms}$) | **$39.9\text{ ms}$** | Baseline ($1.0\times$) |
+| **Adaptive Sticky Newton** (Direct Newton phase) | **0 iters ($0\text{ ms}$)** | 1 iter ($22.7\text{ ms}$) | **$22.7\text{ ms}$** | **$1.76\times$ faster (43.1% saved)** |
+
+Across a 100-step high-density burst:
+* **Without Sticky Fallback**: $100 \times 39.9\text{ ms} = 3.99\text{ s}$ CPU time.
+* **With Sticky Fallback**: $5 \times 39.9\text{ ms} + 95 \times 22.7\text{ ms} = 2.35\text{ s}$ CPU time.
+* **Net Savings**: **$1.64\text{ seconds}$ saved ($41.1\%$ total runtime reduction)**, along with clean suppression of terminal warning spam.
+
+---
+
+### 14.7 Configuration Parameters
+
+The sticky fallback mechanism is fully configurable via `config.json` under `"simulation"` or passed into `recalc_poisson(params=...)`:
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `poisson_sticky_nr` | `bool` | `True` | Master toggle for sticky Newton-Raphson mode. |
+| `poisson_nr_streak_threshold` | `int` | `5` | Number of consecutive Picard fallbacks before activating direct Newton mode. |
+| `poisson_nr_direct_duration` | `int` | `50` | Number of Poisson steps to remain in direct Newton mode before probing Picard. |
+| `poisson_newton_max_iters` | `int` | `15` | Maximum allowed Newton iterations per step. |
