@@ -140,3 +140,4 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
 
         self.Ey = self.Ey.astype(_NP_FP)
         self.Ex = self.Ex.astype(_NP_FP)
+        self._cached_E_max_sq = -1.0

@@ -59,6 +59,25 @@ class ParticlesMixin:
         if len(x) == 0:
             return 1, 0.0, frac * min(getattr(self, 'dx_min', self.dx), self.dy) * 1e-3
 
+        ds_lim_min = float(frac * min(getattr(self, 'dx_min', self.dx), self.dy) * 1e-3)
+
+        # Fast upper-bound check: if the maximum theoretical displacement in the domain
+        # cannot exceed ds_lim_min, skip expensive per-particle 2D field interpolation.
+        v_sq_max = float(np.max(vx * vx + vy * vy + vz * vz))
+        v_max = np.sqrt(v_sq_max) if v_sq_max > 0.0 else 0.0
+        
+        E_max_sq = float(getattr(self, '_cached_E_max_sq', -1.0))
+        if E_max_sq < 0.0 and hasattr(self, 'Ex') and hasattr(self, 'Ey') and self.Ex is not None and self.Ey is not None:
+            E_max_sq = float(np.max(self.Ex ** 2 + self.Ey ** 2))
+            self._cached_E_max_sq = E_max_sq
+        elif E_max_sq < 0.0:
+            E_max_sq = 0.0
+
+        a_max = abs(qm) * np.sqrt(E_max_sq)
+        ds_upper_bound = v_max * dt + 0.5 * a_max * (dt ** 2)
+        if ds_upper_bound <= ds_lim_min:
+            return 1, float(ds_upper_bound), ds_lim_min
+
         ix0 = self._x_to_ix_floor(x)
         iy0 = np.clip(np.floor(y / self.dy).astype(int), 0, self.ny - 2)
         dx_local = self.x_coords[ix0 + 1] - self.x_coords[ix0]

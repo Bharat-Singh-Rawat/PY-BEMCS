@@ -62,13 +62,13 @@ def step_push(sim, ctx: StepContext):
             pvy_ti = _ti_arr(sim.p_vy[:num_p_step])
             pvz_ti = _ti_arr(sim.p_vz[:num_p_step])
 
-            for _ in range(n_sub_ion):
-                push_particles_boris_taichi(
-                    px_ti, py_ti, pvx_ti, pvy_ti, pvz_ti,
-                    sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
-                    num_p_step, ctx._dy, sim.nx, sim.ny, dt_ion, _qm_ion,
-                    ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones
-                )
+            push_particles_boris_taichi(
+                px_ti, py_ti, pvx_ti, pvy_ti, pvz_ti,
+                sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
+                num_p_step, ctx._dy, sim.nx, sim.ny, dt_ion, _qm_ion,
+                ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
+                n_sub=n_sub_ion
+            )
 
             if px_ti.base is not sim.p_x:
                 sim.p_x[:num_p_step]  = px_ti
@@ -104,13 +104,13 @@ def step_push(sim, ctx: StepContext):
             evy_ti = _ti_arr(sim.e_vy[:num_e_step])
             evz_ti = _ti_arr(sim.e_vz[:num_e_step])
 
-            for _ in range(n_sub_e):
-                push_particles_boris_taichi(
-                    ex_ti, ey_ti, evx_ti, evy_ti, evz_ti,
-                    sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
-                    num_e_step, ctx._dy, sim.nx, sim.ny, dt_e, _qm_e,
-                    ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones
-                )
+            push_particles_boris_taichi(
+                ex_ti, ey_ti, evx_ti, evy_ti, evz_ti,
+                sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
+                num_e_step, ctx._dy, sim.nx, sim.ny, dt_e, _qm_e,
+                ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
+                n_sub=n_sub_e
+            )
 
             if ex_ti.base is not sim.e_x:
                 sim.e_x[:num_e_step]  = ex_ti
