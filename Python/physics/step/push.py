@@ -56,26 +56,14 @@ def step_push(sim, ctx: StepContext):
         dt_ion = np.float32(sim.dt / n_sub_ion)
 
         if USE_TAICHI:
-            px_ti = _ti_arr(sim.p_x[:num_p_step])
-            py_ti = _ti_arr(sim.p_y[:num_p_step])
-            pvx_ti = _ti_arr(sim.p_vx[:num_p_step])
-            pvy_ti = _ti_arr(sim.p_vy[:num_p_step])
-            pvz_ti = _ti_arr(sim.p_vz[:num_p_step])
-
             push_particles_boris_taichi(
-                px_ti, py_ti, pvx_ti, pvy_ti, pvz_ti,
+                sim.p_x[:num_p_step], sim.p_y[:num_p_step],
+                sim.p_vx[:num_p_step], sim.p_vy[:num_p_step], sim.p_vz[:num_p_step],
                 sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
                 num_p_step, ctx._dy, sim.nx, sim.ny, dt_ion, _qm_ion,
                 ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
                 n_sub=n_sub_ion
             )
-
-            if px_ti.base is not sim.p_x:
-                sim.p_x[:num_p_step]  = px_ti
-                sim.p_y[:num_p_step]  = py_ti
-                sim.p_vx[:num_p_step] = pvx_ti
-                sim.p_vy[:num_p_step] = pvy_ti
-                sim.p_vz[:num_p_step] = pvz_ti
         else:
             for _ in range(n_sub_ion):
                 push_particles_boris_cpu(
@@ -98,26 +86,14 @@ def step_push(sim, ctx: StepContext):
         dt_e = np.float32(sim.dt / n_sub_e)
 
         if USE_TAICHI:
-            ex_ti = _ti_arr(sim.e_x[:num_e_step])
-            ey_ti = _ti_arr(sim.e_y[:num_e_step])
-            evx_ti = _ti_arr(sim.e_vx[:num_e_step])
-            evy_ti = _ti_arr(sim.e_vy[:num_e_step])
-            evz_ti = _ti_arr(sim.e_vz[:num_e_step])
-
             push_particles_boris_taichi(
-                ex_ti, ey_ti, evx_ti, evy_ti, evz_ti,
+                sim.e_x[:num_e_step], sim.e_y[:num_e_step],
+                sim.e_vx[:num_e_step], sim.e_vy[:num_e_step], sim.e_vz[:num_e_step],
                 sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
                 num_e_step, ctx._dy, sim.nx, sim.ny, dt_e, _qm_e,
                 ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
                 n_sub=n_sub_e
             )
-
-            if ex_ti.base is not sim.e_x:
-                sim.e_x[:num_e_step]  = ex_ti
-                sim.e_y[:num_e_step]  = ey_ti
-                sim.e_vx[:num_e_step] = evx_ti
-                sim.e_vy[:num_e_step] = evy_ti
-                sim.e_vz[:num_e_step] = evz_ti
         else:
             for _ in range(n_sub_e):
                 push_particles_boris_cpu(

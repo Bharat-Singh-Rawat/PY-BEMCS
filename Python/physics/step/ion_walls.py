@@ -237,6 +237,7 @@ def step_ion_interactions(sim, ctx: StepContext):
                 E_joules = 0.5 * sim.m_ion * v_mag_sq * sim.macro_weight
                 dT_heat = (E_joules / sim.C_cell) * sim.thermal_accel
                 np.add.at(sim.Tmap, (impact_iy[valid_thermal_hit], impact_ix[valid_thermal_hit]), dT_heat)
+                sim._thermal_heat_added = True
 
             valid_see_hit = hit_grid_mask & (p_x > 0.25)
             if np.any(valid_see_hit):
@@ -428,6 +429,7 @@ def step_ion_interactions(sim, ctx: StepContext):
         E_joules = 0.5 * sim.m_ion * v_mag_sq * sim.macro_weight
         dT_heat = (E_joules / sim.C_cell) * sim.thermal_accel
         np.add.at(sim.Tmap, (impact_iy[valid_thermal_hit], impact_ix[valid_thermal_hit]), dT_heat)
+        sim._thermal_heat_added = True
 
     valid_see_hit = hit_grid & (p_x > 0.25)
     if np.any(valid_see_hit):

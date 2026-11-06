@@ -6,6 +6,7 @@ import numpy as np
 from ..backend import USE_TAICHI, _NP_FP
 from ..kernels_taichi import thermal_conduction_taichi
 from .context import StepContext
+from .ion_walls import _get_is_bound_int
 
 
 def step_thermal(sim, ctx: StepContext):
@@ -15,6 +16,17 @@ def step_thermal(sim, ctx: StepContext):
     grids = ctx.grids
 
     if sim_mode in ['Thermal', 'Both']:
+        # Isothermal fast-path: If no beam heat was deposited and grid is at 300K equilibrium,
+        # conduction on an isothermal field is an identity operation.
+        heat_added = getattr(sim, '_thermal_heat_added', False)
+        max_T = float(np.max(sim.Tmap[sim.isBound])) if np.any(sim.isBound) else 300.0
+
+        if not heat_added and max_T <= 300.05:
+            sim.Tmap[sim.isBound] = 300.0
+            for i in range(len(sim.T_grids)):
+                sim.T_grids[i] = 300.0
+            return
+
         T_bound = sim.Tmap[sim.isBound]
         cooling_factor = (sim.emissivity * sim.sb_sigma * sim.A_cell * sim.dt * sim.thermal_accel) / sim.C_cell
         dT_cool = cooling_factor * (T_bound ** 4 - 300.0 ** 4)
@@ -35,15 +47,18 @@ def step_thermal(sim, ctx: StepContext):
             Fo_y *= scale
 
         if USE_TAICHI:
+            is_bound_int = _get_is_bound_int(sim)
+            Fo_x_f32 = np.float32(Fo_x)
+            Fo_y_f32 = np.float32(Fo_y)
             for _ in range(10):
                 thermal_conduction_taichi(
                     sim.Tmap,
                     sim.T_map_new,
-                    sim.isBound.astype(np.int32),
+                    is_bound_int,
                     sim.nx,
                     sim.ny,
-                    np.float32(Fo_x),
-                    np.float32(Fo_y)
+                    Fo_x_f32,
+                    Fo_y_f32
                 )
                 sim.Tmap, sim.T_map_new = sim.T_map_new, sim.Tmap
         else:
@@ -64,6 +79,8 @@ def step_thermal(sim, ctx: StepContext):
             sim.Tmap, sim.T_map_new = T, T_new
 
         sim.Tmap[sim.isBound] = np.maximum(sim.Tmap[sim.isBound], 300.0)
+        if np.max(sim.Tmap[sim.isBound]) <= 300.05:
+            sim._thermal_heat_added = False
 
         needs_remesh = False
         for i, mask in enumerate(sim.mask_grids):

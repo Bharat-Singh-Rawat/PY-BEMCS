@@ -1,6 +1,7 @@
 """
 Simulation worker running DigitalTwinSimulator.step off the GUI thread.
 """
+import time
 import threading
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -61,6 +62,9 @@ class SimulationWorker(QThread):
         self._lock = threading.Lock()   # protects _params / _running / _run_id
         self._last_damage_version = -1   # tracks when damage_map changed
         self._last_damage_copy = None    # last copied damage_map
+        self._last_snap_time = 0.0
+        self._min_snap_interval = 0.033  # 30 FPS target for decoupled GUI rendering
+        self._last_emitted_iter = -1     # tracks the latest iteration sent to GUI
 
     # ---- control interface (called from GUI thread) ----
     def start_sim(self, params, run_id=0):
@@ -94,8 +98,197 @@ class SimulationWorker(QThread):
         """Return arr[idx] if arr is non-empty, else arr."""
         return arr[idx] if len(arr) > 0 else arr
 
+    def _emit_snapshot(self, params, run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame):
+        """Construct and emit full snapshot dict to GUI thread."""
+        # Compute derived quantities while still on the worker thread
+        self.sim.get_total_energy()
+        self.sim.get_total_charge()
+        transparency = self.sim.get_transparency()
+
+        # ---- Strategy 2: pre-compute particle data on worker thread ----
+        num_p = self.sim.num_p
+        num_e = self.sim.num_e
+        m_ion = self.sim.m_ion
+        m_e   = self.sim.m_e
+        q     = self.sim.q
+
+        # -- Ion arrays (raw slices, before subsampling) --
+        if num_p > 0:
+            p_isCEX_raw = self.sim.p_isCEX[:num_p].copy()
+            p_x_raw  = self.sim.p_x[:num_p].copy()
+            p_y_raw  = self.sim.p_y[:num_p].copy()
+            p_vx_raw = self.sim.p_vx[:num_p].copy()
+            p_vy_raw = self.sim.p_vy[:num_p].copy()
+            p_vz_raw = self.sim.p_vz[:num_p].copy()
+        else:
+            p_isCEX_raw = np.empty(0, dtype=bool)
+            p_x_raw = p_y_raw = p_vx_raw = p_vy_raw = p_vz_raw = np.empty(0)
+
+        # -- Subsample ions based on runtime scatter limit --
+        scatter_limit = getattr(self, '_scatter_limit', self.MAX_SCATTER)
+
+        if scatter_limit is None:
+            # Hide all particles
+            p_isCEX = np.empty(0, dtype=bool)
+            p_x = p_y = p_vx = p_vy = p_vz = np.empty(0)
+            ions_subsampled = False
+            ions_subsample_ratio = 0.0
+        elif scatter_limit == 0 or num_p <= scatter_limit:
+            # No limit or already below threshold — use full arrays
+            p_isCEX = p_isCEX_raw
+            p_x = p_x_raw; p_y = p_y_raw
+            p_vx = p_vx_raw; p_vy = p_vy_raw; p_vz = p_vz_raw
+            ions_subsampled = False
+            ions_subsample_ratio = 1.0
+        else:
+            # Uniform strided subsampling to scatter_limit without allocating random index arrays
+            stride = max(1, num_p // scatter_limit)
+            sl = slice(0, num_p, stride)
+            p_isCEX = p_isCEX_raw[sl]
+            p_x  = p_x_raw[sl];  p_y  = p_y_raw[sl]
+            p_vx = p_vx_raw[sl]; p_vy = p_vy_raw[sl]; p_vz = p_vz_raw[sl]
+            ions_subsampled = True
+            ions_subsample_ratio = num_p / max(1, len(p_x))
+
+        # -- Pre-compute scatter XY and per-particle energy (worker thread) --
+        prim_mask = ~p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
+        cex_mask  =  p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
+
+        prim_xy = (np.column_stack((p_x[prim_mask], p_y[prim_mask]))
+                   if np.any(prim_mask) else np.empty((0, 2)))
+        cex_xy  = (np.column_stack((p_x[cex_mask],  p_y[cex_mask]))
+                   if np.any(cex_mask)  else np.empty((0, 2)))
+
+        if np.any(prim_mask):
+            vsq = p_vx[prim_mask]**2 + p_vy[prim_mask]**2 + p_vz[prim_mask]**2
+            e_prim_eV = (0.5 * m_ion * vsq) / q
+        else:
+            e_prim_eV = np.empty(0)
+
+        if np.any(cex_mask):
+            vsq = p_vx[cex_mask]**2 + p_vy[cex_mask]**2 + p_vz[cex_mask]**2
+            e_cex_eV = (0.5 * m_ion * vsq) / q
+        else:
+            e_cex_eV = np.empty(0)
+
+        # -- Electron arrays (subsample if needed) --
+        if num_e > 0:
+            e_x_raw  = self.sim.e_x[:num_e].copy()
+            e_y_raw  = self.sim.e_y[:num_e].copy()
+            e_vx_raw = self.sim.e_vx[:num_e].copy()
+            e_vy_raw = self.sim.e_vy[:num_e].copy()
+        else:
+            e_x_raw = e_y_raw = e_vx_raw = e_vy_raw = np.empty(0)
+
+        if scatter_limit is None:
+            e_x = e_y = e_vx = e_vy = np.empty(0)
+            elec_subsampled = False
+        elif scatter_limit == 0 or num_e <= scatter_limit:
+            e_x = e_x_raw; e_y = e_y_raw; e_vx = e_vx_raw; e_vy = e_vy_raw
+            elec_subsampled = False
+        else:
+            stride_e = max(1, num_e // scatter_limit)
+            sl_e = slice(0, num_e, stride_e)
+            e_x  = e_x_raw[sl_e];  e_y  = e_y_raw[sl_e]
+            e_vx = e_vx_raw[sl_e]; e_vy = e_vy_raw[sl_e]
+            elec_subsampled = True
+
+        elec_xy = (np.column_stack((e_x, e_y)) if num_e > 0 else np.empty((0, 2)))
+
+        # -- Strategy 2: conditional Tmap copy (only if thermal is active) --
+        sim_mode = params.get('sim_mode', 'Both')
+        thermal_active = sim_mode in ('Thermal', 'Both')
+        Tmap_snap = self.sim.Tmap.copy() if (thermal_active and self.sim.Tmap is not None) else None
+
+        # -- Strategy 2: damage_map — only copy when it changed or shape resized --
+        dmg_ver = getattr(self.sim, '_damage_version', 0)
+        if (dmg_ver != self._last_damage_version
+                or self._last_damage_copy is None
+                or self._last_damage_copy.shape != self.sim.damage_map.shape):
+            self._last_damage_copy = self.sim.damage_map.copy()
+            self._last_damage_version = dmg_ver
+        damage_snap = self._last_damage_copy
+
+        # Build snapshot dict
+        snap = {
+            'remeshed':            remeshed,
+            'min_pot':             min_pot,
+            'current_div':         current_div,
+            'current_div_mid':     getattr(self.sim, 'current_div_mid', np.nan),
+            'T_grids':             list(T_grids),
+            'trans_last_frame':    trans_last_frame,
+            'transparency':        transparency,
+            'iteration':           self.sim.iteration,
+            'dt':                  self.sim.dt,
+            'num_p':               num_p,
+            'num_e':               num_e,
+            'exit_vx_mean':        self.sim.exit_vx_mean,
+            'exit_v_mean':         self.sim.exit_v_mean,
+            'exit_energy_mean_eV': self.sim.exit_energy_mean_eV,
+            'exit_count_step':     self.sim.exit_count_step,
+            'exit_ion_current_step': self.sim.exit_ion_current_step,
+            'exit_ion_current_avg':  self.sim.exit_ion_current_avg,
+            'transmitted_ions_step': self.sim.transmitted_ions_step,
+            'total_active_cells':  self.sim.total_active_cells,
+            'low_ppc_cells':       self.sim.low_ppc_cells,
+            'injection_enabled':   self.sim.injection_enabled,
+            'has_active_particles': self.sim.has_active_particles(),
+            'n_sub_ion':           getattr(self.sim, 'last_n_sub_ion', 1),
+            'n_sub_e':             getattr(self.sim, 'last_n_sub_e', 1),
+            'm_ion':               m_ion,
+            'm_e':                 m_e,
+            'q':                   q,
+            'Lx':                  self.sim.Lx,
+            'Ly':                  self.sim.Ly,
+            'dx':                  self.sim.dx,
+            'dy':                  self.sim.dy,
+            'nx':                  self.sim.nx,
+            'ny':                  self.sim.ny,
+            # Pre-computed scatter data (Strategy 3)
+            'prim_xy':             prim_xy,
+            'cex_xy':              cex_xy,
+            'elec_xy':             elec_xy,
+            'e_prim_eV':           e_prim_eV,
+            'e_cex_eV':            e_cex_eV,
+            'prim_mask':           prim_mask,
+            'cex_mask':            cex_mask,
+            # Raw particle arrays (needed for IEDF window)
+            'p_isCEX':    p_isCEX_raw,
+            'p_vx':       p_vx_raw,
+            'p_vy':       p_vy_raw,
+            'e_x':        e_x_raw,
+            'e_vx':       e_vx_raw,
+            'e_vy':       e_vy_raw,
+            # Subsampling metadata
+            'ions_subsampled':      ions_subsampled,
+            'ions_subsample_ratio': ions_subsample_ratio,
+            'elec_subsampled':      elec_subsampled,
+            # Maps
+            'Tmap':       Tmap_snap,
+            'isBound':    self.sim.isBound,    # read-only, safe to share
+            'mask_grids': self.sim.mask_grids,  # read-only
+            'damage_map': damage_snap,
+            'X':          self.sim.X,
+            'Y':          self.sim.Y,
+            'V':          self.sim.V,
+            'x_coords':   getattr(self.sim, 'x_coords', None),
+            'y_coords':   getattr(self.sim, 'y_coords', None),
+            # Perf monitor
+            'perf_monitor': self.sim._perf_monitor,
+            # params echo-back
+            'params':     params,
+            'run_id':     run_id,
+        }
+
+        self.step_done.emit(snap)
+        self._last_emitted_iter = self.sim.iteration
+
     # ---- thread body ----
     def run(self):
+        last_step_out = None
+        last_params = None
+        last_run_id = 0
+
         while True:
             with self._lock:
                 if not self._running:
@@ -112,197 +305,36 @@ class SimulationWorker(QThread):
                     self._running = False
                 break
 
+            last_step_out = step_out
+            last_params = params
+            last_run_id = run_id
+
             if len(step_out) == 5:
                 remeshed, min_pot, current_div, T_grids, trans_last_frame = step_out
             else:
                 remeshed, min_pot, current_div, T_grids = step_out
                 trans_last_frame = 0.0
 
-            # Compute derived quantities while still on the worker thread
-            self.sim.get_total_energy()
-            self.sim.get_total_charge()
-            transparency = self.sim.get_transparency()
+            # Check if a snapshot should be generated and emitted to the GUI
+            now = time.perf_counter()
+            with self._lock:
+                is_running = self._running
+            should_emit_snap = (now - self._last_snap_time >= self._min_snap_interval) or (not is_running) or remeshed
 
-            # ---- Strategy 2: pre-compute particle data on worker thread ----
-            num_p = self.sim.num_p
-            num_e = self.sim.num_e
-            m_ion = self.sim.m_ion
-            m_e   = self.sim.m_e
-            q     = self.sim.q
+            if should_emit_snap:
+                self._last_snap_time = now
+                self._emit_snapshot(params, run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame)
 
-            # -- Ion arrays (raw slices, before subsampling) --
-            if num_p > 0:
-                p_isCEX_raw = self.sim.p_isCEX[:num_p].copy()
-                p_x_raw  = self.sim.p_x[:num_p].copy()
-                p_y_raw  = self.sim.p_y[:num_p].copy()
-                p_vx_raw = self.sim.p_vx[:num_p].copy()
-                p_vy_raw = self.sim.p_vy[:num_p].copy()
-                p_vz_raw = self.sim.p_vz[:num_p].copy()
+            # Cooperative yield to prevent starving GUI and background threads
+            self.msleep(1)
+
+        # Guarantee that the very latest simulated iteration is delivered to GUI on pause/stop
+        if last_step_out is not None and self._last_emitted_iter != self.sim.iteration:
+            if len(last_step_out) == 5:
+                remeshed, min_pot, current_div, T_grids, trans_last_frame = last_step_out
             else:
-                p_isCEX_raw = np.empty(0, dtype=bool)
-                p_x_raw = p_y_raw = p_vx_raw = p_vy_raw = p_vz_raw = np.empty(0)
-
-            # -- Subsample ions based on runtime scatter limit --
-            scatter_limit = getattr(self, '_scatter_limit', self.MAX_SCATTER)
-
-            if scatter_limit is None:
-                # Hide all particles
-                p_isCEX = np.empty(0, dtype=bool)
-                p_x = p_y = p_vx = p_vy = p_vz = np.empty(0)
-                ions_subsampled = False
-                ions_subsample_ratio = 0.0
-            elif scatter_limit == 0 or num_p <= scatter_limit:
-                # No limit or already below threshold — use full arrays
-                p_isCEX = p_isCEX_raw
-                p_x = p_x_raw; p_y = p_y_raw
-                p_vx = p_vx_raw; p_vy = p_vy_raw; p_vz = p_vz_raw
-                ions_subsampled = False
-                ions_subsample_ratio = 1.0
-            else:
-                # Subsample to scatter_limit
-                ion_idx = np.random.choice(num_p, scatter_limit, replace=False)
-                ion_idx.sort()  # keep spatial ordering for visual coherence
-                p_isCEX = p_isCEX_raw[ion_idx]
-                p_x  = p_x_raw[ion_idx];  p_y  = p_y_raw[ion_idx]
-                p_vx = p_vx_raw[ion_idx]; p_vy = p_vy_raw[ion_idx]; p_vz = p_vz_raw[ion_idx]
-                ions_subsampled = True
-                ions_subsample_ratio = num_p / scatter_limit
-
-            # -- Pre-compute scatter XY and per-particle energy (worker thread) --
-            prim_mask = ~p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
-            cex_mask  =  p_isCEX if len(p_isCEX) > 0 else np.empty(0, dtype=bool)
-
-            prim_xy = (np.column_stack((p_x[prim_mask], p_y[prim_mask]))
-                       if np.any(prim_mask) else np.empty((0, 2)))
-            cex_xy  = (np.column_stack((p_x[cex_mask],  p_y[cex_mask]))
-                       if np.any(cex_mask)  else np.empty((0, 2)))
-
-            if np.any(prim_mask):
-                vsq = p_vx[prim_mask]**2 + p_vy[prim_mask]**2 + p_vz[prim_mask]**2
-                e_prim_eV = (0.5 * m_ion * vsq) / q
-            else:
-                e_prim_eV = np.empty(0)
-
-            if np.any(cex_mask):
-                vsq = p_vx[cex_mask]**2 + p_vy[cex_mask]**2 + p_vz[cex_mask]**2
-                e_cex_eV = (0.5 * m_ion * vsq) / q
-            else:
-                e_cex_eV = np.empty(0)
-
-            # -- Electron arrays (subsample if needed) --
-            if num_e > 0:
-                e_x_raw  = self.sim.e_x[:num_e].copy()
-                e_y_raw  = self.sim.e_y[:num_e].copy()
-                e_vx_raw = self.sim.e_vx[:num_e].copy()
-                e_vy_raw = self.sim.e_vy[:num_e].copy()
-            else:
-                e_x_raw = e_y_raw = e_vx_raw = e_vy_raw = np.empty(0)
-
-            if scatter_limit is None:
-                e_x = e_y = e_vx = e_vy = np.empty(0)
-                elec_subsampled = False
-            elif scatter_limit == 0 or num_e <= scatter_limit:
-                e_x = e_x_raw; e_y = e_y_raw; e_vx = e_vx_raw; e_vy = e_vy_raw
-                elec_subsampled = False
-            else:
-                elec_idx = np.random.choice(num_e, scatter_limit, replace=False)
-                e_x  = e_x_raw[elec_idx];  e_y  = e_y_raw[elec_idx]
-                e_vx = e_vx_raw[elec_idx]; e_vy = e_vy_raw[elec_idx]
-                elec_subsampled = True
-
-            elec_xy = (np.column_stack((e_x, e_y)) if num_e > 0 else np.empty((0, 2)))
-
-            # -- Strategy 2: conditional Tmap copy (only if thermal is active) --
-            sim_mode = params.get('sim_mode', 'Both')
-            thermal_active = sim_mode in ('Thermal', 'Both')
-            Tmap_snap = self.sim.Tmap.copy() if (thermal_active and self.sim.Tmap is not None) else None
-
-            # -- Strategy 2: damage_map — only copy when it changed or shape resized --
-            dmg_ver = getattr(self.sim, '_damage_version', 0)
-            if (dmg_ver != self._last_damage_version
-                    or self._last_damage_copy is None
-                    or self._last_damage_copy.shape != self.sim.damage_map.shape):
-                self._last_damage_copy = self.sim.damage_map.copy()
-                self._last_damage_version = dmg_ver
-            damage_snap = self._last_damage_copy
-
-            # Build snapshot dict
-            snap = {
-                'remeshed':            remeshed,
-                'min_pot':             min_pot,
-                'current_div':         current_div,
-                'current_div_mid':     getattr(self.sim, 'current_div_mid', np.nan),
-                'T_grids':             list(T_grids),
-                'trans_last_frame':    trans_last_frame,
-                'transparency':        transparency,
-                'iteration':           self.sim.iteration,
-                'dt':                  self.sim.dt,
-                'num_p':               num_p,
-                'num_e':               num_e,
-                'exit_vx_mean':        self.sim.exit_vx_mean,
-                'exit_v_mean':         self.sim.exit_v_mean,
-                'exit_energy_mean_eV': self.sim.exit_energy_mean_eV,
-                'exit_count_step':     self.sim.exit_count_step,
-                'exit_ion_current_step': self.sim.exit_ion_current_step,
-                'exit_ion_current_avg':  self.sim.exit_ion_current_avg,
-                'transmitted_ions_step': self.sim.transmitted_ions_step,
-                'total_active_cells':  self.sim.total_active_cells,
-                'low_ppc_cells':       self.sim.low_ppc_cells,
-                'injection_enabled':   self.sim.injection_enabled,
-                'has_active_particles': self.sim.has_active_particles(),
-                'n_sub_ion':           getattr(self.sim, 'last_n_sub_ion', 1),
-                'n_sub_e':             getattr(self.sim, 'last_n_sub_e', 1),
-                'm_ion':               m_ion,
-                'm_e':                 m_e,
-                'q':                   q,
-                'Lx':                  self.sim.Lx,
-                'Ly':                  self.sim.Ly,
-                'dx':                  self.sim.dx,
-                'dy':                  self.sim.dy,
-                'nx':                  self.sim.nx,
-                'ny':                  self.sim.ny,
-                # Pre-computed scatter data (Strategy 3)
-                'prim_xy':             prim_xy,
-                'cex_xy':              cex_xy,
-                'elec_xy':             elec_xy,
-                'e_prim_eV':           e_prim_eV,
-                'e_cex_eV':            e_cex_eV,
-                'prim_mask':           prim_mask,
-                'cex_mask':            cex_mask,
-                # Raw particle arrays (needed for IEDF window)
-                'p_isCEX':    p_isCEX_raw,
-                'p_vx':       p_vx_raw,
-                'p_vy':       p_vy_raw,
-                'e_x':        e_x_raw,
-                'e_vx':       e_vx_raw,
-                'e_vy':       e_vy_raw,
-                # Subsampling metadata
-                'ions_subsampled':      ions_subsampled,
-                'ions_subsample_ratio': ions_subsample_ratio,
-                'elec_subsampled':      elec_subsampled,
-                # Maps
-                'Tmap':       Tmap_snap,
-                'isBound':    self.sim.isBound,    # read-only, safe to share
-                'mask_grids': self.sim.mask_grids,  # read-only
-                'damage_map': damage_snap,
-                'X':          self.sim.X,
-                'Y':          self.sim.Y,
-                'V':          self.sim.V,
-                'x_coords':   getattr(self.sim, 'x_coords', None),
-                'y_coords':   getattr(self.sim, 'y_coords', None),
-                # Perf monitor
-                'perf_monitor': self.sim._perf_monitor,
-                # params echo-back
-                'params':     params,
-                'run_id':     run_id,
-            }
-
-            self.step_done.emit(snap)
-
-            # Strategy 1 (adaptive sleep): wait at least as long as the GUI
-            # took to process the previous snapshot so the event queue never
-            # fills up faster than it can be drained.
-            gui_ms = max(1, int(params.get('_last_gui_ms', 1)))
-            self.msleep(gui_ms)
+                remeshed, min_pot, current_div, T_grids = last_step_out
+                trans_last_frame = 0.0
+            self._emit_snapshot(last_params, last_run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame)
 
         self.sim_finished.emit()

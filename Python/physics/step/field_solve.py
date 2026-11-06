@@ -27,8 +27,8 @@ def step_deposit_and_solve(sim, ctx: StepContext):
     if sim.num_p > 0:
         if USE_TAICHI:
             accumulate_rho_taichi(
-                _ti_arr(sim.p_x[:sim.num_p]),
-                _ti_arr(sim.p_y[:sim.num_p]),
+                sim.p_x[:sim.num_p],
+                sim.p_y[:sim.num_p],
                 sim.rho,
                 cvol_ti,
                 sim.num_p,
@@ -57,8 +57,8 @@ def step_deposit_and_solve(sim, ctx: StepContext):
     if sim.num_e > 0:
         if USE_TAICHI:
             accumulate_rho_taichi(
-                _ti_arr(sim.e_x[:sim.num_e]),
-                _ti_arr(sim.e_y[:sim.num_e]),
+                sim.e_x[:sim.num_e],
+                sim.e_y[:sim.num_e],
                 sim.rho,
                 cvol_ti,
                 sim.num_e,

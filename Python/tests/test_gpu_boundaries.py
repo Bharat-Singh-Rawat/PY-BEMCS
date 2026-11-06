@@ -227,3 +227,4 @@ def test_pure_cpu_fallback(monkeypatch):
 
     ion_walls_mod.step_ion_interactions(sim, ctx)
     assert sim.num_p <= N
+

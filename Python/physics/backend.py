@@ -44,7 +44,7 @@ except ImportError:
     cp_splu = None
     _GPU_POISSON_AVAILABLE = False
 
-_USE_GPU_POISSON = False
+_USE_GPU_POISSON = os.environ.get("PYBEMCS_GPU_POISSON", "1") != "0"
 _GPU_POISSON = _GPU_POISSON_AVAILABLE and _USE_GPU_POISSON
 
 
