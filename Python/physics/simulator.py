@@ -78,6 +78,7 @@ class DigitalTwinSimulator(
         self.lost_to_oob_step    = 0.0
 
         self._perf_monitor = None
+        self._stop_requested = False
         self._last_injection_area = 0.0
         self._last_neut_injected = 0
         self.last_poisson_iters = 0
@@ -229,7 +230,7 @@ class DigitalTwinSimulator(
         self.last_n_sub_e         = 1
 
     def step(self, params):
-        if self.laplacian_lu is None:
+        if self.laplacian_lu is None or getattr(self, '_stop_requested', False):
             return False, np.nan, np.nan, self.T_grids, 0.0
 
         sim_mode = params.get('sim_mode', 'Both')
@@ -254,13 +255,29 @@ class DigitalTwinSimulator(
         )
 
         step_rf(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_inject(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_deposit_and_solve(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_push(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_ion_interactions(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_electrons(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_thermal(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_midhole_probe(self, ctx)
+        if getattr(self, '_stop_requested', False):
+            return False, np.nan, np.nan, self.T_grids, 0.0
         step_cex(self, ctx)
 
         return step_end_accounting(self, ctx)

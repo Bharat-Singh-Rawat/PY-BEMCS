@@ -56,7 +56,17 @@ def main():
                                 f"Config file not found:\n{sys.argv[1]}")
 
     window.show()
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    try:
+        window._shutdown_background_tasks()
+    except Exception:
+        pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

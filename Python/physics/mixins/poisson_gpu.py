@@ -37,6 +37,8 @@ class PoissonGPUMixin:
         down_limit = min(3.0 * te_val, 20.0)
 
         for it in range(1, max_iters + 1):
+            if getattr(self, '_stop_requested', False):
+                return iters_done, last_diff, last_rms, 'interrupted'
             iters_done = it
             boltzmann_factor_gpu = cp.exp((cp.minimum(V_gpu, V_plasma) - V_plasma) / Te_up)
             rho_e_gpu    = -q * n0 * boltzmann_factor_gpu
@@ -202,6 +204,8 @@ class PoissonGPUMixin:
         last_diff = 0.0
 
         for it in range(max_iters):
+            if getattr(self, '_stop_requested', False):
+                return V_current, it + 1, last_diff, 'interrupted'
             boltzmann_factor = cp.exp((cp.minimum(V_current, V_plasma) - V_plasma) / Te_up)
             rho_e = -self.q * n0 * boltzmann_factor
             rho_total = rho_gpu + rho_e

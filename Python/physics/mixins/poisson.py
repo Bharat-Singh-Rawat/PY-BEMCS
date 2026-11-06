@@ -12,7 +12,7 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
     """Main Poisson solver dispatcher, tolerance management, and electric field gradient computation."""
 
     def recalc_poisson(self, iterations=None, params=None, tol_V=None, min_iters=3):
-        if self.laplacian_lu is None:
+        if self.laplacian_lu is None or getattr(self, '_stop_requested', False):
             return
 
         dy_m2 = (self.dy * 1e-3) ** 2

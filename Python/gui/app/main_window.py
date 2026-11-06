@@ -201,14 +201,10 @@ class DigitalTwinApp(
 
         self.is_sweep_active = False
 
-        # 2. Stop regular simulation worker thread
+        # 2. Stop regular simulation worker thread cooperatively without dangerous terminate()
         if hasattr(self, '_sim_worker') and self._sim_worker is not None:
             try:
-                self._sim_worker.pause()
-                self._sim_worker.wait(500)
-                if self._sim_worker.isRunning():
-                    self._sim_worker.terminate()
-                    self._sim_worker.wait(500)
+                self._sim_worker.stop(wait_ms=3000)
             except Exception:
                 pass
         self.sim_isRunning = False

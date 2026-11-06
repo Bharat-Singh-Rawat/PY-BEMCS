@@ -74,6 +74,8 @@ class SimulationWorker(QThread):
             self._params = params
             self._run_id = run_id
             self._running = True
+        if hasattr(self, 'sim') and self.sim is not None:
+            self.sim._stop_requested = False
         if self.isRunning() and not self.running:
             self.wait(1000)
         if not self.isRunning():
@@ -88,6 +90,15 @@ class SimulationWorker(QThread):
         """Ask the worker to stop after the current step."""
         with self._lock:
             self._running = False
+
+    def stop(self, wait_ms=3000):
+        """Cooperatively and cleanly stop the worker thread without killing via terminate()."""
+        with self._lock:
+            self._running = False
+        if hasattr(self, 'sim') and self.sim is not None:
+            self.sim._stop_requested = True
+        if self.isRunning():
+            self.wait(wait_ms)
 
     @property
     def running(self):
@@ -318,6 +329,10 @@ class SimulationWorker(QThread):
                     self._running = False
                 break
 
+            with self._lock:
+                if not self._running:
+                    break
+
             last_step_out = step_out
             last_params = params
             last_run_id = run_id
@@ -341,13 +356,17 @@ class SimulationWorker(QThread):
             # Cooperative yield to prevent starving GUI and background threads
             self.msleep(1)
 
-        # Guarantee that the very latest simulated iteration is delivered to GUI on pause/stop
-        if last_step_out is not None and self._last_emitted_iter != self.sim.iteration:
-            if len(last_step_out) == 5:
-                remeshed, min_pot, current_div, T_grids, trans_last_frame = last_step_out
-            else:
-                remeshed, min_pot, current_div, T_grids = last_step_out
-                trans_last_frame = 0.0
-            self._emit_snapshot(last_params, last_run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame)
+        # Guarantee that the very latest simulated iteration is delivered to GUI on pause
+        if not getattr(self.sim, '_stop_requested', False):
+            if last_step_out is not None and self._last_emitted_iter != self.sim.iteration:
+                if len(last_step_out) == 5:
+                    remeshed, min_pot, current_div, T_grids, trans_last_frame = last_step_out
+                else:
+                    remeshed, min_pot, current_div, T_grids = last_step_out
+                    trans_last_frame = 0.0
+                try:
+                    self._emit_snapshot(last_params, last_run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame)
+                except Exception:
+                    pass
 
         self.sim_finished.emit()

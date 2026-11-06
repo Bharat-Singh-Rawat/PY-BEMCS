@@ -190,3 +190,16 @@ def test_phase4_adaptive_display_ceiling():
     # Capped at 100,000 to maintain blitted display performance
     assert len(snap['prim_xy']) <= 100001
 
+
+def test_simulation_worker_clean_cooperative_stop():
+    """Verify that calling stop() signals sim._stop_requested and cleanly halts the worker."""
+    sim = DigitalTwinSimulator()
+    worker = SimulationWorker(sim)
+    assert not sim._stop_requested
+
+    # Calling stop must set _stop_requested and clear _running
+    worker.stop(wait_ms=100)
+    assert sim._stop_requested
+    assert not worker.running
+
+

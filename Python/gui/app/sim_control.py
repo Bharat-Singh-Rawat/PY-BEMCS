@@ -215,9 +215,7 @@ class SimControlMixin:
             except Exception:
                 pass
 
-        self._sim_worker.pause()
-        if self._sim_worker.isRunning():
-            self._sim_worker.wait(5000)
+        self._sim_worker.stop(wait_ms=3000)
         self._sim_run_id = getattr(self, '_sim_run_id', 0) + 1
         self._pending_snap = None
         self._sim_worker._last_damage_version = -1
