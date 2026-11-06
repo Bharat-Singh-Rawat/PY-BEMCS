@@ -1269,3 +1269,48 @@ Measured on a standard gridded ion thruster simulation ($N_p = 150{,}000$ active
 | **Interactive Display Throughput** | $\approx 12\text{--}16\text{ FPS}$ | $\approx 16\text{--}20\text{ FPS}$ | $\approx 18\text{--}24\text{ FPS}$ | $\approx 55\text{--}75\text{ FPS}$ | **$\approx 80\text{--}115\text{ FPS}$** | **$\mathbf{6.5\times\text{--}8.0\times}$ faster** |
 | **Memory Allocation per Snapshot** | $6.2\text{ MB}$ (10 arrays) | $6.2\text{ MB}$ | $6.2\text{ MB}$ | $3.3\text{ MB}$ | **$< 0.02\text{ MB}$** | **$> 99.5\%$ reduction** |
 | **Memory Footprint Added** | $0\text{ MB}$ | $0\text{ MB}$ | $< 0.8\text{ MB}$ | $< 0.8\text{ MB}$ | **$< 0.8\text{ MB}$** | **Safe for iGPU & CPU** |
+
+---
+
+### 15.8 Profiling Analysis: Interpreting Backend Step Timings vs. GUI Responsiveness
+
+#### A. Separation of Domains: Where Gains Reside
+A critical distinction when analyzing simulation benchmarks is separating the **backend physics worker thread** from the **frontend GUI display thread**:
+1. **The `[PERF WARNING]` Metric**:
+   - Instrumented in [`physics/simulator.py`](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics/simulator.py#L240) and [`physics/step/probes.py`](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics/step/probes.py#L60-L63):
+     $$\Delta t_{\text{step}} = t_{\text{end}} - t_{\text{start}}$$
+   - Measured strictly within the background `QThread` (`SimulationWorker.run()`).
+   - Measures only the execution of physical kernels: particle injection, Boris advancement, charge accumulation, non-linear Poisson solution, CEX collisions, thermal conduction, and diagnostic accounting.
+   - **Does NOT measure**: Qt cross-thread signal transmission, widget event dispatch, Matplotlib canvas rasterization, or blitting.
+2. **Phase 4 Optimization Scope**:
+   - Phase 4 focused specifically on eliminating GUI thread freezes, reducing Matplotlib canvas draw latency ($65.9\text{ ms} \to 8.7\text{ ms}$), and preventing memory churn ($6.2\text{ MB} \to 0.02\text{ MB}$ per snapshot).
+   - Consequently, **Phase 4 dramatically increases GUI frame rates and UI responsiveness (up to 115 FPS), but by design does not alter the backend `sim.step()` execution duration reported by `[PERF WARNING]`**.
+
+#### B. The Even/Odd Step Oscillations ($\approx 22\text{ s}$ vs. $\approx 2.2\text{ s}$)
+In simulation logs, iterations frequently alternate between fast and slow steps:
+```text
+[PERF WARNING] Iter 90: step took 20420 ms (threshold: 1000 ms)
+[PERF WARNING] Iter 91: step took  2284 ms (threshold: 1000 ms)
+[PERF WARNING] Iter 92: step took 27962 ms (threshold: 1000 ms)
+[PERF WARNING] Iter 93: step took  2423 ms (threshold: 1000 ms)
+```
+This is a direct consequence of numerical field-solve scheduling in [`physics/step/field_solve.py`](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics/step/field_solve.py#L87):
+```python
+if sim.iteration % 2 == 0:
+    sim.recalc_poisson(iterations=5, params=ctx.params)
+```
+- **Odd Steps (Iter 91, 93, 95...)**: Poisson solve is completely bypassed; the electric field $\mathbf{E}$ from the previous step is frozen. Execution consists purely of particle kinematics, Boris push, CEX collisions, and wall tracking, completing in **$\approx 2.0\text{--}2.4\text{ s}$**.
+- **Even Steps (Iter 90, 92, 94...)**: The full non-linear Poisson solver is invoked in addition to all particle physics, taking **$\approx 20\text{--}25\text{ s}$**.
+- **Net Inferred Cost**: The non-linear Poisson solve accounts for **$\approx 18\text{--}22\text{ seconds}$** ($\approx 90\%$ of total simulation time) on every even step.
+
+#### C. The Ultra-High Density Regime ($n_0 \ge 10^{18}\text{ m}^{-3}$) & Amdahl's Law
+When running high-density plasma cases (e.g. NSTAR single aperture at $n_0 = 7 \times 10^{18}\text{ m}^{-3}$, 70 times baseline):
+1. **Extreme Sheath Stiffness**: The Debye length shrinks by $\sqrt{70} \approx 8.4\times$, creating an ultra-thin sheath where the electron Boltzmann term $\rho_e = -q n_0 \exp((V - V_{\text{plasma}})/T_e)$ exhibits massive gradients $\partial \rho_e / \partial V$.
+2. **Picard Divergence & Newton-Raphson Fallback**: Picard iteration stagnates or diverges immediately, forcing the solver into Newton-Raphson on every Poisson step.
+3. **CPU Sparse Linear Algebra Bottleneck**: In each Newton iteration, the Jacobian matrix $J = A - \text{diag}(\dots)$ must be inverted. If iterative BiCGSTAB fails to converge within 200 iterations due to ill-conditioning, the code falls back to direct sparse SuperLU (`scipy.sparse.linalg.spsolve`) on the CPU. Performing 10–15 Newton iterations with sparse matrix inversions on CPU naturally consumes **$18\text{--}20\text{ seconds}$**.
+4. **Amdahl's Law Explanation**:
+   - In Phase 2 and Phase 3, GPU particle advancement and density deposition were accelerated (saving $\approx 100\text{--}250\text{ ms}$).
+   - However, because the step is $\approx 90\%$ dominated by the CPU sparse Poisson solver ($20{,}000\text{ ms}$), a $200\text{ ms}$ particle acceleration represents only a $\approx 1\%$ variation in total step time.
+   - This small gain is easily overshadowed by natural Windows OS thread scheduling jitter, Python garbage collection, and background tasks ($\pm 1{,}500\text{ ms}$).
+   - Therefore, at ultra-high plasma densities ($n_0 \ge 10^{18}\text{ m}^{-3}$), overall runtime is entirely bound by the CPU Poisson linear solver, whereas GPU kernel optimizations (Phases 1–3) shine in particle-dominated regimes ($N_p \gg 100{,}000$ with moderate $n_0$), and Phase 4 ensures the GUI remains silky smooth regardless of particle count.
+
