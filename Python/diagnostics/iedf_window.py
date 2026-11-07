@@ -27,21 +27,45 @@ class IEDFWindow(QWidget):
         ])
         layout.addWidget(QLabel("Select Particle Population:"))
         layout.addWidget(self.combo_type)
+        self.combo_type.currentIndexChanged.connect(self._replot)
 
         self.fig = plt.figure(figsize=(6, 4))
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
         layout.addWidget(self.canvas)
+        self._last_args = None
+
+    def _replot(self):
+        if getattr(self, '_last_args', None) is not None:
+            self.update_histogram(*self._last_args)
 
     def update_histogram(self, p_vx, p_vy, p_isCEX, e_x, e_vx, e_vy, m_XE, m_e, q, Vs_max):
+        self._last_args = (p_vx, p_vy, p_isCEX, e_x, e_vx, e_vy, m_XE, m_e, q, Vs_max)
         self.ax.clear()
         self.ax.grid(True, alpha=0.3)
 
         mode = self.combo_type.currentText()
         data = np.array([])
         color = "gray"
-        x_max = Vs_max + 100
+        Vs_max_val = float(Vs_max) if (Vs_max is not None and np.isfinite(Vs_max) and Vs_max > 0) else 1000.0
+        x_max = Vs_max_val + 100.0
         title = "Energy Distribution"
+
+        p_vx = np.asarray(p_vx) if p_vx is not None else np.empty(0)
+        p_vy = np.asarray(p_vy) if p_vy is not None else np.empty(0)
+        p_isCEX = np.asarray(p_isCEX, dtype=bool) if p_isCEX is not None else np.empty(0, dtype=bool)
+        min_ion = min(len(p_vx), len(p_vy), len(p_isCEX))
+        p_vx = p_vx[:min_ion]
+        p_vy = p_vy[:min_ion]
+        p_isCEX = p_isCEX[:min_ion]
+
+        e_x = np.asarray(e_x) if e_x is not None else np.empty(0)
+        e_vx = np.asarray(e_vx) if e_vx is not None else np.empty(0)
+        e_vy = np.asarray(e_vy) if e_vy is not None else np.empty(0)
+        min_e = min(len(e_x), len(e_vx), len(e_vy))
+        e_x = e_x[:min_e]
+        e_vx = e_vx[:min_e]
+        e_vy = e_vy[:min_e]
 
         if "Ions" in mode:
             self.ax.set_xlabel("Energy (eV)")
@@ -57,7 +81,7 @@ class IEDFWindow(QWidget):
                 else:
                     data, color, title = E_all[p_isCEX], "red", "Ion Energy Distribution (CEX Only)"
 
-                x_max = max(Vs_max * 0.3, np.max(data) + 50) if len(data) > 0 else 500
+                x_max = max(Vs_max_val * 0.3, np.max(data) + 50) if len(data) > 0 else 500
 
         else:
             self.ax.set_xlabel("Electron Kinetic Energy (eV)")

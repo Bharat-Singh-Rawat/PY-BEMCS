@@ -196,6 +196,11 @@ class SimulationWorker(QThread):
             elec_subsampled = False
 
         elec_xy = (np.column_stack((e_x, e_y)) if len(e_x) > 0 else np.empty((0, 2)))
+        if len(e_vx) > 0:
+            vsq_e = e_vx**2 + e_vy**2
+            e_elec_eV = (0.5 * m_e * vsq_e) / q
+        else:
+            e_elec_eV = np.empty(0, dtype=np.float32)
 
         # IEDF Window Data (Only extracted when window is actively open)
         iedf_open = params.get('iedf_visible', False)
@@ -274,6 +279,7 @@ class SimulationWorker(QThread):
             'elec_xy':             elec_xy,
             'e_prim_eV':           e_prim_eV,
             'e_cex_eV':            e_cex_eV,
+            'e_elec_eV':           e_elec_eV,
             'prim_mask':           prim_mask,
             'cex_mask':            cex_mask,
             # Particle arrays (supplied on-demand for IEDF window)

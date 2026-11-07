@@ -161,6 +161,16 @@ class DialogsMixin:
         if self.iedf_window is None:
             self.iedf_window = IEDFWindow()
         self.iedf_window.show()
+        self.iedf_window.raise_()
+        self.iedf_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, '_sim_worker') and self._sim_worker is not None:
             p = self.get_params()
             p['iedf_visible'] = True
@@ -227,6 +237,14 @@ class DialogsMixin:
         self.charge_window.show()
         self.charge_window.raise_()
         self.charge_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             self.charge_window.update_plot(self.sim)
 

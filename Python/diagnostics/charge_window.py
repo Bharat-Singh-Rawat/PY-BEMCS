@@ -225,12 +225,12 @@ class TotalChargeMonitorWindow(QWidget):
         if sim is None or not hasattr(sim, 'charge_history_t'):
             return
 
-        t = np.asarray(sim.charge_history_t, dtype=float)
-        q_i = np.asarray(sim.charge_history_q_i, dtype=float)
-        q_e = np.asarray(sim.charge_history_q_e, dtype=float)
-        q_b = np.asarray(sim.charge_history_q_b, dtype=float)
-        q_free = np.asarray(sim.charge_history_q_free, dtype=float)
-        q_net = np.asarray(sim.charge_history_q_net, dtype=float)
+        t = np.asarray(getattr(sim, 'charge_history_t', []) or [], dtype=float)
+        q_i = np.asarray(getattr(sim, 'charge_history_q_i', []) or [], dtype=float)
+        q_e = np.asarray(getattr(sim, 'charge_history_q_e', []) or [], dtype=float)
+        q_b = np.asarray(getattr(sim, 'charge_history_q_b', []) or [], dtype=float)
+        q_free = np.asarray(getattr(sim, 'charge_history_q_free', []) or [], dtype=float)
+        q_net = np.asarray(getattr(sim, 'charge_history_q_net', []) or [], dtype=float)
 
         min_n = min(len(t), len(q_i), len(q_e), len(q_b), len(q_free), len(q_net))
         if min_n == 0:

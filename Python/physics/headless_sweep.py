@@ -123,7 +123,7 @@ def compute_perveance_metrics_static(grids: list, i_exit: float, q_ion: float = 
     return p_eff, p_max, perv_frac
 
 
-def extract_display_particles(sim, scatter_limit=1000):
+def extract_display_particles(sim, scatter_limit=1000, return_electron_energy=False):
     """
     Extract particle coordinates and energy arrays for GUI visualization.
     Coordinates (px, py) are in millimeters matching the simulator domain [0, Lx] and [0, Ly].
@@ -131,6 +131,7 @@ def extract_display_particles(sim, scatter_limit=1000):
     num_p = getattr(sim, 'num_p', 0)
     num_e = getattr(sim, 'num_e', 0)
     m_ion = getattr(sim, 'm_ion', 131.293 * 1.6605e-27)
+    m_e   = getattr(sim, 'm_e', 9.1093837e-31)
     q     = getattr(sim, 'q_ion', getattr(sim, 'q', 1.602e-19))
 
     prim_xy = np.empty((0, 2), dtype=np.float32)
@@ -138,9 +139,12 @@ def extract_display_particles(sim, scatter_limit=1000):
     cex_xy = np.empty((0, 2), dtype=np.float32)
     e_cex = np.empty(0, dtype=np.float32)
     elec_xy = np.empty((0, 2), dtype=np.float32)
+    e_elec = np.empty(0, dtype=np.float32)
 
     if scatter_limit is None:
         # None - hide all particles
+        if return_electron_energy:
+            return prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec
         return prim_xy, e_prim, cex_xy, e_cex, elec_xy
 
     # Extract ions
@@ -182,14 +186,23 @@ def extract_display_particles(sim, scatter_limit=1000):
     if num_e > 0 and hasattr(sim, 'e_x') and hasattr(sim, 'e_y'):
         e_x_raw = sim.e_x[:num_e]
         e_y_raw = sim.e_y[:num_e]
+        e_vx_raw = sim.e_vx[:num_e] if hasattr(sim, 'e_vx') else np.zeros(num_e)
+        e_vy_raw = sim.e_vy[:num_e] if hasattr(sim, 'e_vy') else np.zeros(num_e)
+        e_vz_raw = sim.e_vz[:num_e] if hasattr(sim, 'e_vz') else np.zeros(num_e)
         if scatter_limit == 0 or num_e <= scatter_limit:
             ex, ey = e_x_raw, e_y_raw
+            evx, evy, evz = e_vx_raw, e_vy_raw, e_vz_raw
         else:
             e_idx = np.random.choice(num_e, scatter_limit, replace=False)
             e_idx.sort()
             ex, ey = e_x_raw[e_idx], e_y_raw[e_idx]
+            evx, evy, evz = e_vx_raw[e_idx], e_vy_raw[e_idx], e_vz_raw[e_idx]
         elec_xy = np.column_stack((ex, ey)).astype(np.float32)
+        vsq_e = evx**2 + evy**2 + evz**2
+        e_elec = (0.5 * m_e * vsq_e / max(q, 1e-25)).astype(np.float32)
 
+    if return_electron_energy:
+        return prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec
     return prim_xy, e_prim, cex_xy, e_cex, elec_xy
 
 
@@ -313,6 +326,11 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 sim.get_total_energy()
             except Exception:
                 pass
+        if hasattr(sim, 'get_total_charge'):
+            try:
+                sim.get_total_charge()
+            except Exception:
+                pass
         scenario_iters += 1
 
         div_val = getattr(sim, 'current_div', np.nan)
@@ -344,7 +362,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
 
             if is_active_view:
                 try:
-                    prim_xy, e_prim, cex_xy, e_cex, elec_xy = extract_display_particles(sim, scatter_limit)
+                    prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec = extract_display_particles(sim, scatter_limit, return_electron_energy=True)
                 except Exception:
                     pass
 
@@ -370,6 +388,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "cex_xy": cex_xy,
                 "e_cex_eV": e_cex,
                 "elec_xy": elec_xy,
+                "e_elec_eV": locals().get('e_elec', np.empty(0, dtype=np.float32)),
                 "iter_history": list(iter_hist),
                 "div_history": list(div_hist),
                 "div_mid_history": list(div_mid_hist),
@@ -379,6 +398,12 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
                 "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
                 "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+                "charge_history_t": list(getattr(sim, 'charge_history_t', [])),
+                "charge_history_q_i": list(getattr(sim, 'charge_history_q_i', [])),
+                "charge_history_q_e": list(getattr(sim, 'charge_history_q_e', [])),
+                "charge_history_q_b": list(getattr(sim, 'charge_history_q_b', [])),
+                "charge_history_q_free": list(getattr(sim, 'charge_history_q_free', [])),
+                "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
                 "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
                 "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
                 "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
@@ -427,8 +452,9 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                         break
 
     # Extract final particles and metrics
+    e_elec = np.empty(0, dtype=np.float32)
     try:
-        prim_xy, e_prim, cex_xy, e_cex, elec_xy = extract_display_particles(sim, scatter_limit)
+        prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec = extract_display_particles(sim, scatter_limit, return_electron_energy=True)
     except Exception:
         pass
 
@@ -500,6 +526,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "cex_xy": cex_xy,
         "e_cex_eV": e_cex,
         "elec_xy": elec_xy,
+        "e_elec_eV": e_elec,
         "iter_history": list(iter_hist),
         "div_history": list(div_hist),
         "div_mid_history": list(div_mid_hist),
@@ -509,6 +536,12 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
         "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
         "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+        "charge_history_t": list(getattr(sim, 'charge_history_t', [])),
+        "charge_history_q_i": list(getattr(sim, 'charge_history_q_i', [])),
+        "charge_history_q_e": list(getattr(sim, 'charge_history_q_e', [])),
+        "charge_history_q_b": list(getattr(sim, 'charge_history_q_b', [])),
+        "charge_history_q_free": list(getattr(sim, 'charge_history_q_free', [])),
+        "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
         "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
         "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
         "substep_history_e": list(getattr(sim, 'substep_history_e', [])),

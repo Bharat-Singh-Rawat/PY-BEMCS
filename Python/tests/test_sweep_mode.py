@@ -1728,6 +1728,181 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.exit_sweep(confirm_choice="no")
         self.assertEqual(self.win.density_window.windowTitle(), "Plasma & Particle Density Diagnostics")
 
+    def test_charge_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Total Charge Monitor window in sweep mode (live & post-run)."""
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Total Charge window
+        self.win.open_charge_window()
+        self.assertIsNotNone(self.win.charge_window)
+        self.assertTrue(self.win.charge_window.isVisible())
+
+        # 1. Live status for Scenario 1
+        t1 = [0.0, 1e-7, 2e-7, 3e-7]
+        qi1 = [0.0, 1e-10, 2e-10, 3e-10]
+        qe1 = [0.0, -0.5e-10, -1e-10, -1.5e-10]
+        qb1 = [0.0, 0.0, 0.0, 0.0]
+        qfree1 = [0.0, 0.5e-10, 1e-10, 1.5e-10]
+        qnet1 = [0.0, 0.5e-10, 1e-10, 1.5e-10]
+
+        info_s1 = {
+            "status": "running",
+            "iter": 3,
+            "parameter_value": 1e17,
+            "charge_history_t": t1,
+            "charge_history_q_i": qi1,
+            "charge_history_q_e": qe1,
+            "charge_history_q_b": qb1,
+            "charge_history_q_free": qfree1,
+            "charge_history_q_net": qnet1,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.charge_window.windowTitle())
+        self.assertIn("+150.00 pC", self.win.charge_window.lbl_stats.text())
+
+        # 2. Switch to Scenario 2 (post-run done)
+        t2 = [0.0, 1e-7, 2e-7, 3e-7, 4e-7]
+        qi2 = [0.0, 2e-10, 4e-10, 6e-10, 8e-10]
+        qe2 = [0.0, -1e-10, -2e-10, -3e-10, -4e-10]
+        qb2 = [0.0, 0.0, 0.0, 0.0, 0.0]
+        qfree2 = [0.0, 1e-10, 2e-10, 3e-10, 4e-10]
+        qnet2 = [0.0, 1e-10, 2e-10, 3e-10, 4e-10]
+
+        info_s2 = {
+            "status": "done",
+            "iter": 5,
+            "parameter_value": 2e17,
+            "charge_history_t": t2,
+            "charge_history_q_i": qi2,
+            "charge_history_q_e": qe2,
+            "charge_history_q_b": qb2,
+            "charge_history_q_free": qfree2,
+            "charge_history_q_net": qnet2,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.charge_window.windowTitle())
+        self.assertIn("+400.00 pC", self.win.charge_window.lbl_stats.text())
+
+        # 3. Re-open via menu refreshes to currently selected scenario (Scenario 2)
+        self.win.charge_window.close()
+        self.assertFalse(self.win.charge_window.isVisible())
+        self.win.open_charge_window()
+        self.assertTrue(self.win.charge_window.isVisible())
+        self.assertIn("Scenario 2", self.win.charge_window.windowTitle())
+        self.assertIn("+400.00 pC", self.win.charge_window.lbl_stats.text())
+
+        # 4. Clean exit
+        self.win.charge_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.charge_window.windowTitle(), "Total Charge Monitor")
+
+    def test_iedf_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Energy Distribution Function (IEDF & EEDF) window in sweep mode (live & post-run)."""
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open IEDF window
+        self.win.open_iedf_window()
+        self.assertIsNotNone(self.win.iedf_window)
+        self.assertTrue(self.win.iedf_window.isVisible())
+
+        # 1. Live status for Scenario 1
+        e_prim1 = np.array([500.0, 520.0, 510.0], dtype=np.float32)
+        e_cex1  = np.array([50.0, 70.0], dtype=np.float32)
+        elec_xy1 = np.array([[1.0, 0.5], [5.0, 0.5]], dtype=np.float32)
+        e_elec1  = np.array([2.5, 3.5], dtype=np.float32)
+
+        info_s1 = {
+            "status": "running",
+            "iter": 30,
+            "parameter_value": 1e17,
+            "prim_xy": np.array([[0.5, 0.5], [0.6, 0.6], [0.7, 0.7]], dtype=np.float32),
+            "e_prim_eV": e_prim1,
+            "cex_xy": np.array([[1.2, 0.6], [1.3, 0.7]], dtype=np.float32),
+            "e_cex_eV": e_cex1,
+            "elec_xy": elec_xy1,
+            "e_elec_eV": e_elec1,
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.iedf_window.windowTitle())
+        self.assertIn("Ion Energy Distribution", self.win.iedf_window.ax.get_title())
+
+        # Switch to Electrons in combo_type
+        self.win.iedf_window.combo_type.setCurrentIndex(3)  # "All Electrons"
+        self.assertIn("Electron Energy Distribution (All)", self.win.iedf_window.ax.get_title())
+
+        # Switch to Grid SEE
+        self.win.iedf_window.combo_type.setCurrentIndex(4)  # SEE <= 4mm
+        self.assertIn("Grid/SEE Zone", self.win.iedf_window.ax.get_title())
+
+        # 2. Switch to Scenario 2 (post-run done)
+        e_prim2 = np.array([600.0, 610.0], dtype=np.float32)
+        e_cex2  = np.empty(0, dtype=np.float32)
+        info_s2 = {
+            "status": "done",
+            "iter": 60,
+            "parameter_value": 2e17,
+            "prim_xy": np.array([[0.8, 0.8], [0.9, 0.9]], dtype=np.float32),
+            "e_prim_eV": e_prim2,
+            "cex_xy": np.empty((0, 2), dtype=np.float32),
+            "e_cex_eV": e_cex2,
+            "elec_xy": np.empty((0, 2), dtype=np.float32),
+            "e_elec_eV": np.empty(0, dtype=np.float32),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.iedf_window.windowTitle())
+
+        # 3. Re-open via menu refreshes to currently selected scenario (Scenario 2)
+        self.win.iedf_window.close()
+        self.assertFalse(self.win.iedf_window.isVisible())
+        self.win.open_iedf_window()
+        self.assertTrue(self.win.iedf_window.isVisible())
+        self.assertIn("Scenario 2", self.win.iedf_window.windowTitle())
+
+        # 4. Clean exit
+        self.win.iedf_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.iedf_window.windowTitle(), "Energy Distribution Function (IEDF & EEDF)")
+
 
 if __name__ == "__main__":
     unittest.main()

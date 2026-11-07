@@ -246,6 +246,7 @@ class RenderingMixin:
             e_cex_eV  = snap['e_cex_eV']
             self._last_e_prim_eV = e_prim_eV
             self._last_e_cex_eV = e_cex_eV
+            self._last_e_elec_eV = snap.get('e_elec_eV', np.empty(0))
 
             energy_min = float('inf')
             energy_max = float('-inf')

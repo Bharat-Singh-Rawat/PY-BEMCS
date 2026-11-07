@@ -1225,6 +1225,20 @@ class SweepMixin:
             except Exception as exc:
                 print(f"[Density Snapshot Update Error] {exc}")
 
+        # 9. Update Total Charge Monitor Window for the selected scenario if open
+        if getattr(self, 'charge_window', None) and self.charge_window.isVisible():
+            try:
+                self._update_charge_window_for_scenario(scenario_idx, info)
+            except Exception as exc:
+                print(f"[Charge Snapshot Update Error] {exc}")
+
+        # 10. Update Energy Distribution (IEDF & EEDF) Window for the selected scenario if open
+        if getattr(self, 'iedf_window', None) and self.iedf_window.isVisible():
+            try:
+                self._update_iedf_window_for_scenario(scenario_idx, info, d_data)
+            except Exception as exc:
+                print(f"[IEDF Snapshot Update Error] {exc}")
+
         QApplication.processEvents()
 
     def _update_ppc_window_for_scenario(self, scenario_idx, info):
@@ -1537,6 +1551,103 @@ class SweepMixin:
         except Exception as exc:
             print(f"[Density Window Warning] Error updating density plot for scenario {scenario_idx}: {exc}")
 
+    def _update_charge_window_for_scenario(self, scenario_idx, info):
+        """Update Total Charge Monitor Window with historical charge data of selected scenario."""
+        if not getattr(self, 'charge_window', None) or not self.charge_window.isVisible():
+            return
+        try:
+            # Sync charge history attributes to self.sim
+            self.sim.charge_history_t = list(info.get("charge_history_t", []))
+            self.sim.charge_history_q_i = list(info.get("charge_history_q_i", []))
+            self.sim.charge_history_q_e = list(info.get("charge_history_q_e", []))
+            self.sim.charge_history_q_b = list(info.get("charge_history_q_b", []))
+            self.sim.charge_history_q_free = list(info.get("charge_history_q_free", []))
+            self.sim.charge_history_q_net = list(info.get("charge_history_q_net", []))
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.charge_window.setWindowTitle(f"Total Charge Monitor — Scenario {scenario_idx}{param_str}")
+            self.charge_window.update_plot(self.sim)
+        except Exception as exc:
+            print(f"[Charge Window Warning] Error updating charge monitor for scenario {scenario_idx}: {exc}")
+
+    def _update_iedf_window_for_scenario(self, scenario_idx, info, d_data=None):
+        """Update Energy Distribution (IEDF & EEDF) Window with particle data of selected scenario."""
+        if not getattr(self, 'iedf_window', None) or not self.iedf_window.isVisible():
+            return
+        try:
+            m_XE = getattr(self.sim, 'm_ion', 131.293 * 1.6605e-27)
+            m_e  = getattr(self.sim, 'm_e', 9.1093837e-31)
+            q    = getattr(self.sim, 'q_ion', getattr(self.sim, 'q', 1.602e-19))
+
+            grids = info.get("grids", []) or (getattr(self.sim, 'grids', []) if hasattr(self, 'sim') else [])
+            if grids:
+                max_v = max([float(g.get("V", 0.0)) for g in grids])
+            elif getattr(self, 'grid_widgets', None):
+                max_v = max([g["V"].value() for g in self.grid_widgets])
+            else:
+                max_v = 1000.0
+            max_v = max(max_v, 100.0)
+
+            # Check if direct velocity arrays are available
+            if d_data and 'p_vx' in d_data and len(d_data['p_vx']) > 0:
+                p_vx = d_data['p_vx']
+                p_vy = d_data.get('p_vy', np.zeros_like(p_vx))
+                p_isCEX = d_data.get('p_isCEX', np.zeros(len(p_vx), dtype=bool))
+            else:
+                e_prim = d_data.get('e_prim_eV') if d_data and 'e_prim_eV' in d_data else info.get('e_prim_eV', np.empty(0))
+                e_cex  = d_data.get('e_cex_eV') if d_data and 'e_cex_eV' in d_data else info.get('e_cex_eV', np.empty(0))
+                e_prim = np.asarray(e_prim, dtype=np.float32) if e_prim is not None else np.empty(0, dtype=np.float32)
+                e_cex  = np.asarray(e_cex, dtype=np.float32) if e_cex is not None else np.empty(0, dtype=np.float32)
+                n_prim = len(e_prim)
+                n_cex = len(e_cex)
+                if n_prim + n_cex > 0:
+                    p_isCEX = np.concatenate([np.zeros(n_prim, dtype=bool), np.ones(n_cex, dtype=bool)])
+                    E_ions = np.concatenate([e_prim, e_cex])
+                    p_vx = np.sqrt(2.0 * q * np.maximum(E_ions, 0.0) / m_XE)
+                    p_vy = np.zeros_like(p_vx)
+                else:
+                    p_isCEX = np.empty(0, dtype=bool)
+                    p_vx = np.empty(0, dtype=np.float32)
+                    p_vy = np.empty(0, dtype=np.float32)
+
+            if d_data and 'e_vx' in d_data and len(d_data['e_vx']) > 0:
+                e_x = d_data.get('e_x', np.empty(0, dtype=np.float32))
+                e_vx = d_data['e_vx']
+                e_vy = d_data.get('e_vy', np.zeros_like(e_vx))
+            else:
+                elec_xy = d_data.get('elec_xy') if d_data and 'elec_xy' in d_data else info.get('elec_xy', np.empty((0, 2)))
+                e_elec  = d_data.get('e_elec_eV') if d_data and 'e_elec_eV' in d_data else info.get('e_elec_eV', np.empty(0))
+                elec_xy = np.asarray(elec_xy) if elec_xy is not None else np.empty((0, 2))
+                e_elec  = np.asarray(e_elec, dtype=np.float32) if e_elec is not None else np.empty(0, dtype=np.float32)
+
+                if len(elec_xy) > 0 and elec_xy.ndim == 2 and elec_xy.shape[1] >= 1:
+                    e_x = elec_xy[:, 0]
+                else:
+                    e_x = np.empty(0, dtype=np.float32)
+
+                n_e = min(len(e_x), len(e_elec)) if len(e_elec) > 0 else len(e_x)
+                if n_e > 0:
+                    e_x = e_x[:n_e]
+                    if len(e_elec) >= n_e:
+                        e_vx = np.sqrt(2.0 * q * np.maximum(e_elec[:n_e], 0.0) / m_e)
+                    else:
+                        e_vx = np.zeros(n_e, dtype=np.float32)
+                    e_vy = np.zeros_like(e_vx)
+                else:
+                    e_x = np.empty(0, dtype=np.float32)
+                    e_vx = np.empty(0, dtype=np.float32)
+                    e_vy = np.empty(0, dtype=np.float32)
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.iedf_window.setWindowTitle(f"Energy Distribution Function (IEDF & EEDF) — Scenario {scenario_idx}{param_str}")
+            self.iedf_window.update_histogram(p_vx, p_vy, p_isCEX, e_x, e_vx, e_vy, m_XE, m_e, q, max_v)
+        except Exception as exc:
+            print(f"[IEDF Window Warning] Error updating energy distribution for scenario {scenario_idx}: {exc}")
+
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
             n_cores = getattr(self.parallel_sweep_worker, 'n_cores', '') if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker else ''
@@ -1766,6 +1877,7 @@ class SweepMixin:
             "cex_xy": getattr(self, '_last_cex_xy', np.empty((0, 2))),
             "e_cex_eV": getattr(self, '_last_e_cex_eV', np.empty(0)),
             "elec_xy": getattr(self, '_last_elec_xy', np.empty((0, 2))),
+            "e_elec_eV": getattr(self, '_last_e_elec_eV', np.empty(0)),
             "iter_history": list(self.iter_history),
             "div_history": list(self.div_history),
             "div_mid_history": list(self.div_mid_history),
@@ -1775,6 +1887,12 @@ class SweepMixin:
             "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
             "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
             "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+            "charge_history_t": list(getattr(sim, 'charge_history_t', [])),
+            "charge_history_q_i": list(getattr(sim, 'charge_history_q_i', [])),
+            "charge_history_q_e": list(getattr(sim, 'charge_history_q_e', [])),
+            "charge_history_q_b": list(getattr(sim, 'charge_history_q_b', [])),
+            "charge_history_q_free": list(getattr(sim, 'charge_history_q_free', [])),
+            "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
             "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
             "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
             "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
@@ -2227,6 +2345,14 @@ class SweepMixin:
             self.density_window.setWindowTitle("Plasma & Particle Density Diagnostics")
             if self.density_window.isVisible() and hasattr(self, 'sim'):
                 self.density_window.update_plot(self.sim)
+
+        if getattr(self, 'charge_window', None):
+            self.charge_window.setWindowTitle("Total Charge Monitor")
+            if self.charge_window.isVisible() and hasattr(self, 'sim'):
+                self.charge_window.update_plot(self.sim)
+
+        if getattr(self, 'iedf_window', None):
+            self.iedf_window.setWindowTitle("Energy Distribution Function (IEDF & EEDF)")
 
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")
