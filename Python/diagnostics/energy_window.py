@@ -13,17 +13,16 @@ controls in both the UI legend bar and the plot's clickable legend.
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton, QFrame
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton
     )
 except ImportError:
     from PyQt6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton, QFrame
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton
     )
 
 try:

@@ -189,7 +189,6 @@ def evaluate_mesh_efield_variation(
 
     is_compliant = (max_jump_x <= max_rel_jump) and (max_jump_y <= max_rel_jump)
     return max_jump_x, max_jump_y, is_compliant
-    return max_jump_x, max_jump_y, is_compliant
 
 
 def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump: float = 0.10):

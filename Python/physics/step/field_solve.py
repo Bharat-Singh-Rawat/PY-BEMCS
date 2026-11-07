@@ -3,7 +3,7 @@ Charge deposition and periodic Poisson solve step phase.
 """
 import numpy as np
 
-from ..backend import USE_TAICHI, _ti_arr
+from ..backend import USE_TAICHI
 from ..kernels_taichi import accumulate_rho_taichi
 from ..kernels_cpu import accumulate_rho_cpu
 from .context import StepContext

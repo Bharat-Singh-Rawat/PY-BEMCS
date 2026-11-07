@@ -106,10 +106,6 @@ class SimulationWorker(QThread):
             return self._running
 
     # ---- internal helpers ----
-    def _subsample(self, arr, idx):
-        """Return arr[idx] if arr is non-empty, else arr."""
-        return arr[idx] if len(arr) > 0 else arr
-
     def _emit_snapshot(self, params, run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame):
         """Construct and emit full snapshot dict to GUI thread."""
         # Compute derived quantities while still on the worker thread

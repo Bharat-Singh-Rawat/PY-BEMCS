@@ -6,7 +6,6 @@ import os
 import time
 import atexit
 import tempfile
-import multiprocessing as mp
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from PyQt5.QtCore import QThread, pyqtSignal

@@ -2,7 +2,6 @@
 Export mixin for CSV telemetry, particle kinetics, GIF recording, and PyInstaller exe generation.
 """
 import os
-import sys
 import time
 import csv
 import numpy as np

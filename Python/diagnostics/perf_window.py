@@ -11,7 +11,6 @@ Pop-up window displaying real-time simulation performance diagnostics:
 import os
 import time
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas

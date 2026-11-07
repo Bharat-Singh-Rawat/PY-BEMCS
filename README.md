@@ -48,6 +48,11 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 
 ## 🌟 Key Features & Capabilities
 
+### 🌐 Non-Uniform Multi-Zone Mesh & Adaptive Field Solvers
+- **Multi-Zone Non-Uniform Mesh:** 3 parametrizable geometric axial zones (Presheath, Optics Barrels, Plume) with adaptive coarsening factors (.0\times, 1.5\times, 2.0\times, 4.0\times$), cutting cell count and solve times by 25--35% while maintaining strict sub-Debye resolution.
+- **Adaptive Picard & Newton-Raphson Solver:** Real-time residual tracking ($\Delta V_{\max} \le 50\text{ mV}$) that auto-scales Picard iterations and automatically engages a sticky Newton-Raphson fallback solver if stagnation occurs.
+- **Automated Parametric Sweep Framework:** Multi-threaded and multi-process batch execution (SweepMixin, ParallelSweepWorker, and headless_sweep.py) with multi-metric steady-state convergence criteria.
+
 ### ⚡ Dual-Kernel Hardware Acceleration
 - **Taichi GPU Acceleration:** Particle pusher (2D3V Boris algorithm), bilinear charge density deposition, and 2D thermal conduction run natively on GPU via Taichi (supporting Vulkan, CUDA, and Metal backends).
 - **Vectorized CPU Fallback:** Seamless, pure-NumPy CPU fallback kernels ensure 100% functionality on CPU-only machines or within frozen executable bundles.
@@ -68,6 +73,8 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 - **Live Visualizations:** Real-time ion/electron trajectory tracking, grid temperature heatmaps, sputter damage maps, and radial accelerator grid erosion groove profiles.
 - **95th-Percentile Beam Divergence ($\theta_{95}$):** Continuous tracking of beam envelope divergence.
 - **Saddle-Point Potential & EBS Monitoring:** Centerline saddle-point potential tracking to detect Electron Backstreaming risk barriers ($V_{\mathrm{saddle}} \le -5\,\text{V}$).
+- **2D Plasma Density Visualizer (density_window.py):** Logarithmic 2D number density maps and radial density profiles at user-defined axial evaluation planes.
+- **Steady-State Convergence Monitor (steady_state_window.py):** Real-time multi-variable rolling variance tracking ($\le 1.0\%$) with automated stabilization detection.
 - **Energy Distribution Function Viewer (IEDF / EEDF):** Dedicated diagnostic window to inspect ion and electron energy spectra.
 - **Cross-Section Manager:** Visual log-log cubic spline fitting and interpolation for custom Charge Exchange (CX), Secondary Electron Emission (SEE), and gas mixture interaction data.
 - **Material Preset Library:** Built-in properties for Molybdenum, SS316 Stainless Steel, Titanium, and Graphite, with fully customizable thermal and sputtering coefficients.
@@ -318,7 +325,7 @@ If you use this software in your research, please cite:
 
 ```bibtex
 @software{PY-BEMCS,
-  author       = {Bharat Singh Rawat},
+  author       = {Bharat Singh Rawat and Nick Magrin},
   title        = {Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)},
   year         = {2026},
   publisher    = {GitHub},

@@ -27,12 +27,10 @@ try:
     from PyQt5.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton
     )
-    from PyQt5.QtCore import Qt
 except ImportError:
     from PyQt6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton
     )
-    from PyQt6.QtCore import Qt
 
 
 class DensityWindow(QWidget):

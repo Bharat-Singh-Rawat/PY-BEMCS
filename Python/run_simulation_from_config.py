@@ -19,7 +19,6 @@ Instructions:
 """
 #import configparser
 import json
-import re
 import time
 import os
 import numpy as np

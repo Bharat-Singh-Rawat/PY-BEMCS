@@ -7,7 +7,6 @@ supporting Time-Averaged Accumulator, Instantaneous PPC, and Low PPC Warning mas
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import ListedColormap, BoundaryNorm
 try:

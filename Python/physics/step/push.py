@@ -3,7 +3,7 @@ Particle integration via Boris push with substepping and periodic boundary handl
 """
 import numpy as np
 
-from ..backend import USE_TAICHI, _NP_FP, _ti_arr
+from ..backend import USE_TAICHI
 from ..kernels_taichi import push_particles_boris_taichi
 from ..kernels_cpu import push_particles_boris_cpu
 from .context import StepContext

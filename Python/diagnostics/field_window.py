@@ -27,8 +27,8 @@ except Exception:
     NavigationToolbar = None
 
 from PyQt5.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
-    QPushButton, QGroupBox, QGridLayout, QFrame, QComboBox, QSpinBox
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
+    QPushButton, QGroupBox, QFrame, QComboBox, QSpinBox
 )
 from PyQt5.QtCore import Qt
 

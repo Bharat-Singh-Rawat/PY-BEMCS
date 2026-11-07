@@ -2,7 +2,7 @@
 State container passed across sub-steps during a single simulation iteration.
 """
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Optional
 import numpy as np
 
 

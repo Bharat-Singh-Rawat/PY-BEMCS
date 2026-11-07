@@ -18,7 +18,6 @@ import math
 import numpy as np
 import matplotlib
 matplotlib.use("Qt5Agg")
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -33,11 +32,10 @@ except Exception:
 
 from PyQt5.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
-    QPushButton, QGroupBox, QGridLayout, QFrame, QScrollArea,
+    QPushButton, QGroupBox, QFrame,
     QTabWidget, QFileDialog, QMessageBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 
 
 class SubstepGraphWidget(QWidget):

@@ -91,8 +91,11 @@
 Key capabilities detailed in this manual include:
 \begin{itemize}[nosep]
     \item Self-consistent Bohm extraction from upstream plasma sheaths with space-charge Poisson solves and Boltzmann electron screening.
+    \item Multi-zone non-uniform finite-volume mesh with automatic geometry partitioning and adaptive axial coarsening factors ($1.0\times, 1.5\times, 2.0\times, 4.0\times$).
+    \item Adaptive Picard iteration with dynamic residual convergence ($\Delta V_{\max} \le \SI{50}{\milli\volt}$) and sticky Newton--Raphson fallback solver.
     \item Automatic numerical physics validation controls (Debye length resolution, plasma frequency limits, CFL velocity bounds, and dynamic domain scaling).
     \item 2D3V relativistic Boris particle advancement with dual Taichi GPU/CPU accelerated and pure-NumPy fallback kernels.
+    \item Automated parametric sweep framework with real-time multi-scenario switching and multi-metric steady-state convergence criteria.
     \item Charge-Exchange (CEX) collision dynamics using Roy's neutral plume model or user-imported experimental cross-section datasets with log-log cubic spline smoothing.
     \item In-situ sputter erosion modeling (Matsunami yield formulation) coupled with live grid mesh boundary deletion.
     \item Coupled 2D thermal conduction, Stefan--Boltzmann radiative cooling, and Euler--Bernoulli cantilever thermo-mechanical grid aperture deflection.
@@ -112,14 +115,27 @@ Key capabilities detailed in this manual include:
 \section{Computational Framework and Architecture}
 % =====================================================
 
-\subsection{Coordinate System and Discretisation}
+\subsection{Coordinate System and Multi-Zone Non-Uniform Discretisation}
 
-The computational domain employs a 2D Cartesian grid in $(x, y)$, where $x$ represents the primary axial beam extraction coordinate and $y$ corresponds to the transverse/radial coordinate (half-aperture or axisymmetric slice). The domain extents are defined by $L_x \times L_y$ with uniform cell spacing $\Delta x \times \Delta y$:
+The computational domain employs a 2D Cartesian grid in $(x, y)$, where $x$ represents the primary axial beam extraction coordinate and $y$ corresponds to the transverse/radial coordinate (half-aperture or axisymmetric slice). 
+
+To optimize computational throughput while strictly resolving local physical scales (such as the sub-millimeter upstream Debye length $\lambda_{\mathrm{D}}$ and fine aperture grid chamfers), \PYBEMCS{} implements a \textbf{multi-zone non-uniform axial mesh} coupled with a uniform transverse spacing:
+\begin{itemize}[nosep]
+    \item Transverse spacing remains strictly uniform: $\Delta y = \text{const}$ across all $j \in [0, n_y - 1]$, where $n_y = \lfloor L_y / \Delta y \rfloor + 1$.
+    \item Axial spacing $\Delta x(x)$ adapts across automatically detected physical zones:
+    \begin{enumerate}[nosep]
+        \item \textbf{Presheath Zone} ($x \in [0, x_{\mathrm{screen\_start}}]$): Baseline fine resolution $f_{\mathrm{pre}} = 1.0\times$ ($\Delta x = \Delta x_0 \le \lambda_{\mathrm{D}}$) to accurately capture Bohm meniscus formation.
+        \item \textbf{Optics Grid Barrels} ($x \in [x_k, x_k + t_k]$): Moderate resolution $f_{\mathrm{barrel}} = 1.0\text{--}1.5\times$ ensuring $\ge 15$ cells across grid thickness $t_k$ for high-fidelity boundary tracking and sputter erosion.
+        \item \textbf{Inter-Grid Acceleration Gaps} ($x \in [x_k + t_k, x_{k+1}]$): $f_{\mathrm{gap}} = 1.0\text{--}2.0\times$ resolving strong electrostatic acceleration fields while maintaining electric field gradient jumps below $10\%$.
+        \item \textbf{Near and Far Plume Zones} ($x \in [x_{\mathrm{exit}}, L_x]$): Coarsened resolution $f_{\mathrm{plume}} = 2.0\text{--}4.0\times$, exploiting the dilute quasi-neutral state of the downstream beam to achieve a $25\text{--}35\%$ reduction in total grid nodes.
+    \end{enumerate}
+\end{itemize}
+
+For each axial node $i$, the non-uniform control volume width $h_i^x$ is defined by:
 \begin{equation}
-    n_x = \left\lfloor\frac{L_x}{\Delta x}\right\rfloor + 1, \qquad
-    n_y = \left\lfloor\frac{L_y}{\Delta y}\right\rfloor + 1.
+    h_i^x = \frac{\Delta x_{i-1/2} + \Delta x_{i+1/2}}{2}, \qquad \Delta x_{i+1/2} = x_{i+1} - x_i.
 \end{equation}
-By default, $\Delta x = \Delta y = \SI{0.02}{\milli\meter}$ ($\SI{20}{\micro\meter}$), ensuring the grid spacing resolves the local Debye length throughout the sheath region while preserving computational tractability.
+The 2D nodal cell volume is rigorously given by $\Omega_{i,j} = h_i^x \Delta y \Delta z$ (with unit transverse depth $\Delta z = \SI{1}{\milli\meter}$), ensuring exact machine-precision charge conservation ($|\sum Q_p - \iint \rho\, \dd{V}| / \sum Q_p < 10^{-8}$).
 
 Every macroparticle stores three-dimensional velocity components $\vb{v} = (v_x, v_y, v_z)$. While spatial motion is constrained to the $(x, y)$ plane, $v_z$ is rigorously advanced in time during magnetic rotations and collisional scattering.
 
@@ -204,13 +220,32 @@ where $q_{\mathrm{i}} = Z e$ is the ion charge, $n_{\mathrm{i}}$ is the deposite
 \end{equation}
 with $T_{\mathrm{e}}$ in electron-volts ($\si{\eV}$), $n_0$ the upstream plasma density, and $\phi_{\mathrm{pl}}$ the reference plasma potential established at the upstream boundary ($x = 0$). The clipping operator $\min(\phi, \phi_{\mathrm{pl}})$ prevents non-physical exponential density blow-ups in regions where local potential excursions exceed the upstream plasma potential.
 
-Equation~\eqref{eq:poisson} is discretised on the uniform mesh via a standard 5-point finite-difference stencil:
+Equation~\eqref{eq:poisson} is discretised on the non-uniform mesh using a finite-volume formulation. Multiplying by $\Delta y^2$ yields the scaled 5-point stencil:
 \begin{equation}
-    \frac{\phi_{i+1,j} - 2\phi_{i,j} + \phi_{i-1,j}}{(\Delta x)^2} +
-    \frac{\phi_{i,j+1} - 2\phi_{i,j} + \phi_{i,j-1}}{(\Delta y)^2}
-    = -\frac{\rho_{i,j}}{\varepsilon_{0}}.
+    \frac{\Delta y^2}{h_i^x} \left( \frac{\phi_{i+1,j} - \phi_{i,j}}{\Delta x_{i+1/2}} - \frac{\phi_{i,j} - \phi_{i-1,j}}{\Delta x_{i-1/2}} \right) +
+    \left(\phi_{i,j+1} - 2\phi_{i,j} + \phi_{i,j-1}\right)
+    = -\frac{\Delta y^2 \rho_{i,j}}{\varepsilon_{0}}.
 \end{equation}
-The resulting sparse linear system $A \boldsymbol{\phi} = \mathbf{b}$ is factorised using SuperLU sparse LU decomposition. Non-linear electron space charge is converged via successive under-relaxation with relaxation parameter $\omega = 0.2$.
+Scaling by $\Delta y^2$ preserves identical unit off-diagonals $(+1.0)$ along the $y$-direction, maintaining optimal matrix conditioning and sparse structure. The resulting sparse operator $\mathbf{A} \boldsymbol{\phi} = \mathbf{b}$ is pre-factorised using SuperLU sparse LU decomposition (or GPU-accelerated CuPy sparse LU).
+
+\subsubsection{Adaptive Picard Iteration and Sticky Newton--Raphson Fallback}
+
+To guarantee numerical stability and eliminate unphysical electric field spikes, the non-linear Boltzmann electron response is solved adaptively:
+\begin{enumerate}[nosep]
+    \item \textbf{Adaptive Picard Under-Relaxation}: At iteration $k$, the right-hand side space charge vector $\mathbf{b}^{(k)}$ incorporates the non-linear electron fluid density $\rho_e(\boldsymbol{\phi}^{(k)})$. The intermediate solution $\boldsymbol{\phi}^* = \mathbf{A}^{-1} \mathbf{b}^{(k)}$ is relaxed via:
+    \begin{equation}
+        \boldsymbol{\phi}^{(k+1)} = (1 - \omega) \boldsymbol{\phi}^{(k)} + \omega \boldsymbol{\phi}^*, \qquad \omega = 0.2.
+    \end{equation}
+    Iterations proceed dynamically until the maximum potential residual satisfies:
+    \begin{equation}
+        \|\Delta \boldsymbol{\phi}\|_{\infty} = \max_{i,j} \left|\phi_{i,j}^{(k+1)} - \phi_{i,j}^{(k)}\right| \le \SI{50}{\milli\volt}.
+    \end{equation}
+    \item \textbf{Sticky Newton--Raphson Fallback}: If Picard iteration stagnates (residual decreases by less than $1\%$ over 5 iterations) or exceeds 35 iterations, the engine automatically switches to a linearized Newton--Raphson solver:
+    \begin{equation}
+        \mathbf{J}(\boldsymbol{\phi}^{(k)}) \, \delta \boldsymbol{\phi} = -\mathbf{F}(\boldsymbol{\phi}^{(k)}), \qquad \boldsymbol{\phi}^{(k+1)} = \boldsymbol{\phi}^{(k)} + \delta \boldsymbol{\phi},
+    \end{equation}
+    where the Jacobian diagonal contains the Boltzmann derivative $J_{m,m} = A_{m,m} + \frac{\Delta y^2 e n_e(\phi_m)}{\varepsilon_0 T_e}$. Once engaged, the solver remains in Newton mode ('sticky') until steady-state convergence is re-established, achieving quadratic convergence without divergence risk.
+\end{enumerate}
 
 \subsection{Bilinear Charge Deposition}
 
@@ -424,15 +459,21 @@ The simulator parameters are managed through a unified, hierarchical JSON struct
     \item \textbf{Materials $\rightarrow$ Grid Material...}: Selects material presets (Molybdenum, Steel SS316, Titanium, Graphite) or custom thermophysical properties ($k, \rho, c_p, \varepsilon, \alpha, E, Y_0, E_{\mathrm{th}}$).
 \end{itemize}
 
-\subsection{Live Diagnostics and Data Export}
+\subsection{Comprehensive Diagnostic Windows and Telemetry Suite}
 
+The simulator provides an extensive suite of standalone, interactive diagnostic windows equipped with native Matplotlib navigation toolbars (Pan, Zoom, Save) and live data streaming:
 \begin{itemize}[nosep]
-    \item \textbf{Beam Divergence Angle ($\theta_{95}$)}: Evaluated from the 95\textsuperscript{th} percentile of ion trajectory angles downstream of the last grid:
+    \item \textbf{Beam Divergence Angle ($\theta_{95}$ \& Midline)}: Evaluated from the 95\textsuperscript{th} percentile and midline trajectory angles at configurable axial evaluation planes downstream of the optics:
     \begin{equation}
         \theta_{95} = Q_{0.95}\!\left[\,\left|\arctan\left(\frac{v_y}{v_x}\right)\right|\,\right].
     \end{equation}
+    \item \textbf{2D Plasma Number Density Visualizer (\texttt{density\_window.py})}: Full 2D logarithmic color contours of ion and electron density maps coupled with 1D radial profiles cut along two independent downstream axial planes.
+    \item \textbf{Steady-State Convergence Monitor (\texttt{steady\_state\_window.py})}: Continuous rolling window variance analysis tracking key parameters ($\theta_{95}$, $V_{\mathrm{saddle}}$, $I_{\mathrm{beam}}$, $E_{\mathrm{kin}}$). Steady state is confirmed when rolling relative fluctuations drop below $\le 1.0\%$ over a configurable evaluation duration.
     \item \textbf{Electron Backstreaming (EBS) Saddle Potential}: Continuous monitoring of centerline potential in the accelerator aperture to verify backstreaming suppression ($V_{\mathrm{sp}} < -5\,\si{\volt}$).
-    \item \textbf{Ion Energy Distribution Function (IEDF)}: Live spectral histogram tracking particle energy distributions exiting the grid system.
+    \item \textbf{Mesh Discretization \& Sub-Step Inspector (\texttt{mesh\_window.py})}: Visualizes axial zone boundaries, cell size transitions $\Delta x(x)$, and the real-time distribution of Boris sub-steps required by high-velocity particles.
+    \item \textbf{Energy \& Charge Budget Conservation (\texttt{energy\_window.py}, \texttt{charge\_window.py})}: Tracks instantaneous kinetic, potential, and field energy conservation, as well as macroparticle vs.\ Boltzmann electron charge neutrality.
+    \item \textbf{Ion Energy Distribution Function (\texttt{iedf\_window.py})}: Live spectral histogram tracking particle kinetic energy distributions exiting the extraction system.
+    \item \textbf{Cross-Section Manager (\texttt{cs\_viewer\_window.py})}: Log--log visualizer and cubic-spline interpolation inspector for imported reaction cross-section tables.
     \item \textbf{Asynchronous Data Exporters}: Background progress dialogs for exporting time-series simulation telemetry to CSV, particle phase-space archives, and animated GIF recordings.
 \end{itemize}
 

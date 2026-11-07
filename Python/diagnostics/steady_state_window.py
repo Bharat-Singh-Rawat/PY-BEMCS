@@ -21,12 +21,11 @@ except Exception:
         NavigationToolbar = None
 
 from PyQt5.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
-    QPushButton, QGroupBox, QGridLayout, QFrame, QComboBox, QSpinBox,
-    QDoubleSpinBox, QScrollArea
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
+    QPushButton, QGroupBox, QFrame, QComboBox, QSpinBox,
+    QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 
 from .metrics import compute_rolling_variation
 
