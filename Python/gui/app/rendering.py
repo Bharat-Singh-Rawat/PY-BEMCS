@@ -7,7 +7,6 @@ import numpy as np
 from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication
 
 
 class RenderingMixin:
@@ -120,15 +119,22 @@ class RenderingMixin:
         if hasattr(self, 'line_div_mid'):
             self.line_div_mid.set_data([], [])
 
+        dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+        is_ebs_us = getattr(self, 'ebs_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds'
+        init_ebs_x_max = max(0.05, 100 * dt_us) if is_ebs_us else 100
+
+        is_div_us = getattr(self, 'div_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds'
+        init_div_x_max = max(0.05, 100 * dt_us) if is_div_us else 100
+
         v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
         if v_init_saddle is not None:
             pad = max(20.0, abs(v_init_saddle) * 0.1)
-            self.ax_ebs.set_xlim(0, 100)
+            self.ax_ebs.set_xlim(0, init_ebs_x_max)
             self.ax_ebs.set_ylim(v_init_saddle - pad, v_init_saddle + pad)
         else:
-            self.ax_ebs.set_xlim(0, 100)
+            self.ax_ebs.set_xlim(0, init_ebs_x_max)
             self.ax_ebs.set_ylim(-100, 100)
-        self.ax_div.set_xlim(0, 100)
+        self.ax_div.set_xlim(0, init_div_x_max)
         self.ax_div.set_ylim(0, 45)
         self._update_div_plot_visibility()
 
@@ -152,6 +158,7 @@ class RenderingMixin:
         self.ax_dmg.set_ylim(0, self.sim.Ly)
 
         self._reposition_div_menu_btn()
+        self._reposition_xaxis_menu_btns()
         if redraw:
             self.canvas.draw_idle()
 
@@ -350,12 +357,14 @@ class RenderingMixin:
         for i, T in enumerate(T_grids):
             self.T_histories[i].append(T)
 
-        self.line_ebs.set_data(self.iter_history, self.ebs_history)
-        self.line_div.set_data(self.iter_history, self.div_history)
+        x_data_ebs = self._get_plot_x_data('ebs')
+        x_data_div = self._get_plot_x_data('div')
+        self.line_ebs.set_data(x_data_ebs, self.ebs_history)
+        self.line_div.set_data(x_data_div, self.div_history)
         if hasattr(self, 'line_div_mid'):
-            self.line_div_mid.set_data(self.iter_history, self.div_mid_history)
+            self.line_div_mid.set_data(x_data_div, self.div_mid_history)
 
-        self.ax_ebs.set_xlim(max(0, snap['iteration'] - 400), max(100, snap['iteration']))
+        self._update_ebs_xlim(snap['iteration'])
         self._update_div_scroll_range(snap['iteration'])
 
         if len(self.ebs_history) > 0:
@@ -755,12 +764,182 @@ class RenderingMixin:
         except Exception:
             pass
 
+    def _get_plot_x_data(self, target: str = 'div'):
+        """Return the x-axis coordinates for telemetry graphs in current units (iterations or microseconds)."""
+        unit = getattr(self, f"{target}_xaxis_unit", getattr(self, 'xaxis_unit', 'iterations'))
+        if unit == 'microseconds':
+            if hasattr(self, 'time_history') and len(self.time_history) == len(self.iter_history) and len(self.time_history) > 0:
+                return [t * 1e6 for t in self.time_history]
+            dt = getattr(self.sim, 'dt', 5e-10) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-10
+            return [it * dt * 1e6 for it in getattr(self, 'iter_history', [])]
+        return list(getattr(self, 'iter_history', []))
+
+    def _update_ebs_xlim(self, current_iter: int):
+        """Update x-limits for ax_ebs matching current x-axis unit."""
+        if not hasattr(self, 'ax_ebs'):
+            return
+
+        if getattr(self, 'ebs_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds':
+            dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+            window_us = 400 * dt_us
+            cur_t_us = current_iter * dt_us
+            x_end = max(100 * dt_us, cur_t_us)
+            x_start = max(0.0, x_end - window_us)
+            self.ax_ebs.set_xlim(x_start, x_end)
+        else:
+            self.ax_ebs.set_xlim(max(0, current_iter - 400), max(100, current_iter))
+
+    def set_ebs_xaxis_unit(self, unit: str):
+        """Set the active x-axis unit specifically for midline potential ('iterations' or 'microseconds')."""
+        return self.set_xaxis_unit(unit, target='ebs')
+
+    def set_div_xaxis_unit(self, unit: str):
+        """Set the active x-axis unit specifically for beam divergence ('iterations' or 'microseconds')."""
+        return self.set_xaxis_unit(unit, target='div')
+
+    def set_xaxis_unit(self, unit: str, target: str = 'both'):
+        """Set the active x-axis unit ('iterations' or 'microseconds') for beam divergence, midline potential, or both."""
+        if str(unit).lower() in ('us', 'µs', 'microsecond', 'microseconds', 'microseconds (µs)'):
+            normalized_unit = 'microseconds'
+        else:
+            normalized_unit = 'iterations'
+
+        target = (target or 'both').lower()
+        targets = ['ebs', 'div'] if target == 'both' else [target]
+
+        cur_iter = self.iter_history[-1] if hasattr(self, 'iter_history') and len(self.iter_history) > 0 else 0
+        dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+
+        if 'ebs' in targets:
+            self.ebs_xaxis_unit = normalized_unit
+            if hasattr(self, '_ebs_xaxis_actions'):
+                for name, act in self._ebs_xaxis_actions.items():
+                    act.setChecked(name == normalized_unit)
+
+            label_text = "Time [µs]" if normalized_unit == 'microseconds' else "Iteration"
+            if hasattr(self, 'ax_ebs'):
+                self.ax_ebs.set_xlabel(label_text, fontsize=8)
+
+            x_data_ebs = self._get_plot_x_data('ebs')
+            if hasattr(self, 'line_ebs') and hasattr(self, 'ebs_history'):
+                self.line_ebs.set_data(x_data_ebs, self.ebs_history)
+
+            if cur_iter > 0:
+                if hasattr(self, '_update_ebs_xlim'):
+                    self._update_ebs_xlim(cur_iter)
+            else:
+                init_x_max = max(0.05, 100 * dt_us) if normalized_unit == 'microseconds' else 100
+                if hasattr(self, 'ax_ebs'):
+                    self.ax_ebs.set_xlim(0, init_x_max)
+
+        if 'div' in targets:
+            self.div_xaxis_unit = normalized_unit
+            self.xaxis_unit = normalized_unit
+            if hasattr(self, '_div_xaxis_actions'):
+                for name, act in self._div_xaxis_actions.items():
+                    act.setChecked(name == normalized_unit)
+            if hasattr(self, '_div_xaxis_unit_actions'):
+                for name, act in self._div_xaxis_unit_actions.items():
+                    act.setChecked(name == normalized_unit)
+            if hasattr(self, '_xaxis_unit_actions'):
+                for name, act in self._xaxis_unit_actions.items():
+                    act.setChecked(name == normalized_unit)
+
+            label_text = "Time [µs]" if normalized_unit == 'microseconds' else "Iteration"
+            if hasattr(self, 'ax_div'):
+                self.ax_div.set_xlabel(label_text, fontsize=8)
+
+            x_data_div = self._get_plot_x_data('div')
+            if hasattr(self, 'line_div') and hasattr(self, 'div_history'):
+                self.line_div.set_data(x_data_div, self.div_history)
+            if hasattr(self, 'line_div_mid') and hasattr(self, 'div_mid_history'):
+                self.line_div_mid.set_data(x_data_div, self.div_mid_history)
+
+            if cur_iter > 0:
+                if hasattr(self, '_update_div_scroll_range'):
+                    self._update_div_scroll_range(cur_iter)
+            else:
+                init_x_max = max(0.05, 100 * dt_us) if normalized_unit == 'microseconds' else 100
+                if hasattr(self, 'ax_div'):
+                    self.ax_div.set_xlim(0, init_x_max)
+
+        unit_display = "Microseconds (µs)" if normalized_unit == 'microseconds' else "Iterations"
+        if hasattr(self, 'lbl_status'):
+            if target == 'ebs':
+                self.lbl_status.setText(f"Midline potential X-axis unit set to {unit_display}")
+            elif target == 'div':
+                self.lbl_status.setText(f"Beam divergence X-axis unit set to {unit_display}")
+            else:
+                self.lbl_status.setText(f"Plot X-axis unit set to {unit_display}")
+
+        if hasattr(self, '_reposition_xaxis_menu_btns'):
+            self._reposition_xaxis_menu_btns()
+        if hasattr(self, '_reposition_div_scrollbar'):
+            self._reposition_div_scrollbar()
+
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+    def _reposition_xaxis_menu_btns(self):
+        """Position the dropdown arrow buttons immediately aside the x-axis label of ax_ebs and ax_div."""
+        if not hasattr(self, 'canvas'):
+            return
+
+        renderer = None
+        try:
+            renderer = self.canvas.get_renderer()
+        except Exception:
+            pass
+
+        canvas_h = self.canvas.height()
+        canvas_w = self.canvas.width()
+
+        for btn, ax in [
+            (getattr(self, 'btn_ebs_x_menu', None), getattr(self, 'ax_ebs', None)),
+            (getattr(self, 'btn_div_x_menu', None), getattr(self, 'ax_div', None)),
+        ]:
+            if btn is None or ax is None:
+                continue
+
+            btn_w = btn.width()
+            btn_h = btn.height()
+            positioned = False
+
+            if renderer is not None:
+                try:
+                    bbox = ax.xaxis.label.get_window_extent(renderer)
+                    if bbox.width > 0 and bbox.height > 0:
+                        x = int(bbox.x1 + 4)
+                        y = int(canvas_h - bbox.y1 + (bbox.height - btn_h) / 2)
+                        x = max(0, min(x, canvas_w - btn_w - 2))
+                        y = max(0, min(y, canvas_h - btn_h - 2))
+                        btn.move(x, y)
+                        btn.show()
+                        btn.raise_()
+                        positioned = True
+                except Exception:
+                    positioned = False
+
+            if not positioned:
+                try:
+                    pos = ax.get_position()
+                    center_x = (pos.x0 + pos.x1) * 0.5 * canvas_w
+                    x = int(center_x + 28)
+                    y = int((1.0 - pos.y0) * canvas_h + 8)
+                    x = max(0, min(x, canvas_w - btn_w - 2))
+                    y = max(0, min(y, canvas_h - btn_h - 2))
+                    btn.move(x, y)
+                    btn.show()
+                    btn.raise_()
+                except Exception:
+                    pass
+
     # ------------------------------------------------------------------
     # Divergence history scrollbar helpers
     # ------------------------------------------------------------------
 
     def _reposition_div_scrollbar(self):
-        """Position the floating scrollbar and Live button below the 'Iteration' xlabel of ax_div."""
+        """Position the floating scrollbar and Live button below the 'Iteration' / 'Time [µs]' xlabel of ax_div."""
         if not hasattr(self, 'div_scrollbar') or not hasattr(self, 'ax_div'):
             return
 
@@ -775,7 +954,7 @@ class RenderingMixin:
             x_left  = int(ax_bbox.x0)
             x_right = int(ax_bbox.x1)
 
-            # Find the bottom of the "Iteration" xlabel in display coordinates (so we don't cover tick values)
+            # Find the bottom of the xlabel in display coordinates (so we don't cover tick values)
             y_bottom_disp = None
             try:
                 xlabel_bbox = self.ax_div.xaxis.label.get_window_extent(renderer)
@@ -796,12 +975,19 @@ class RenderingMixin:
                 # Fallback: estimate 25px below ax_div bottom to clear tick values and xlabel
                 y_bottom_disp = ax_bbox.y0 - 25
 
-            # Bottom of "Iteration" xlabel in Qt coords (Qt y=0 is top)
+            # Bottom of xlabel in Qt coords (Qt y=0 is top)
             y_bottom_qt = int(canvas_h - y_bottom_disp)
+
+            # If btn_div_x_menu is visible, ensure scrollbar is placed below the button
+            btn_div_x = getattr(self, 'btn_div_x_menu', None)
+            if btn_div_x is not None and btn_div_x.isVisible():
+                btn_bottom_qt = btn_div_x.y() + btn_div_x.height()
+                if btn_bottom_qt > y_bottom_qt:
+                    y_bottom_qt = btn_bottom_qt
 
             bar_h   = self.div_scrollbar.height()   # 12 px fixed
             btn_w   = self.btn_div_live.width()      # 48 px fixed
-            gap     = 2                              # px gap below xlabel
+            gap     = 3                              # px gap below xlabel / button
 
             total_w = x_right - x_left
             scroll_w = max(20, total_w - btn_w - gap)
@@ -846,9 +1032,17 @@ class RenderingMixin:
         if live_mode:
             # Snap to rightmost (latest) position
             self.div_scrollbar.setValue(max_scroll)
-            x_end = max(100, current_iter)
-            x_start = max(0, x_end - window)
-            self.ax_div.set_xlim(x_start, x_end)
+            if getattr(self, 'div_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds':
+                dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+                window_us = window * dt_us
+                cur_t_us = current_iter * dt_us
+                x_end = max(100 * dt_us, cur_t_us)
+                x_start = max(0.0, x_end - window_us)
+                self.ax_div.set_xlim(x_start, x_end)
+            else:
+                x_end = max(100, current_iter)
+                x_start = max(0, x_end - window)
+                self.ax_div.set_xlim(x_start, x_end)
         # else: leave xlim as-is (user is scrolling)
 
         self.div_scrollbar.blockSignals(False)
@@ -880,20 +1074,24 @@ class RenderingMixin:
                 self.btn_div_live.blockSignals(False)
 
         window = self._DIV_WINDOW
-        iters = self.iter_history
+        x_data = self._get_plot_x_data('div')
 
-        if len(iters) == 0:
+        if len(x_data) == 0:
             return
 
-        # Map scroll position to iteration range
+        # Map scroll position to data range
         # value = index of the first data-point visible (0-based)
         idx_start = value
-        idx_end = min(len(iters) - 1, idx_start + window)
+        idx_end = min(len(x_data) - 1, idx_start + window)
 
-        x_start = iters[idx_start] if idx_start < len(iters) else 0
-        x_end = iters[idx_end] if idx_end < len(iters) else iters[-1]
+        x_start = x_data[idx_start] if idx_start < len(x_data) else 0
+        x_end = x_data[idx_end] if idx_end < len(x_data) else x_data[-1]
         if x_end <= x_start:
-            x_end = x_start + window
+            if getattr(self, 'div_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds':
+                dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+                x_end = x_start + window * dt_us
+            else:
+                x_end = x_start + window
 
         self.ax_div.set_xlim(x_start, x_end)
         if hasattr(self, 'canvas'):
@@ -908,5 +1106,7 @@ class RenderingMixin:
                 # Jump scrollbar to the end immediately
                 if hasattr(self, 'div_scrollbar'):
                     self.div_scrollbar.setValue(self.div_scrollbar.maximum())
+                    cur_iter = self.iter_history[-1] if hasattr(self, 'iter_history') and len(self.iter_history) > 0 else 0
+                    self._update_div_scroll_range(cur_iter)
             else:
                 self.btn_div_live.setText("▶ Live")

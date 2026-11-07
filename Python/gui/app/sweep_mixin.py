@@ -10,7 +10,7 @@ import numpy as np
 from PyQt5.QtWidgets import QMessageBox, QApplication
 from PyQt5.QtCore import QTimer
 
-from ..dialogs import SweepSettingsDialog, SweepResultsDialog, ParallelSweepProgressDialog, format_sci_value
+from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value
 from ..workers import ParallelSweepWorker
 from diagnostics.metrics import compute_rolling_variation
 
@@ -1078,13 +1078,21 @@ class SweepMixin:
             self.div_history = list(divs) if divs is not None else []
             self.div_mid_history = list(divs_mid) if divs_mid is not None else []
             self.ebs_history = list(ebs) if ebs is not None else []
+            t_hist = info.get("time_history")
+            if t_hist is not None and len(t_hist) == len(iters):
+                self.time_history = list(t_hist)
+            else:
+                dt = getattr(self.sim, 'dt', 5e-10) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-10
+                self.time_history = [it * dt for it in iters]
 
+            x_data_div = self._get_plot_x_data('div') if hasattr(self, '_get_plot_x_data') else self.iter_history
+            x_data_ebs = self._get_plot_x_data('ebs') if hasattr(self, '_get_plot_x_data') else self.iter_history
             if hasattr(self, 'line_div'):
-                self.line_div.set_data(self.iter_history, self.div_history)
+                self.line_div.set_data(x_data_div, self.div_history)
             if hasattr(self, 'line_div_mid'):
-                self.line_div_mid.set_data(self.iter_history, self.div_mid_history)
+                self.line_div_mid.set_data(x_data_div, self.div_mid_history)
             if hasattr(self, 'line_ebs'):
-                self.line_ebs.set_data(self.iter_history, self.ebs_history)
+                self.line_ebs.set_data(x_data_ebs, self.ebs_history)
 
             cur_iter = iters[-1]
             if hasattr(self, '_update_div_scroll_range'):
@@ -1099,7 +1107,9 @@ class SweepMixin:
                 if valid_divs:
                     self.ax_div.set_ylim(0, max(45, max(valid_divs) * 1.1))
 
-            if hasattr(self, 'ax_ebs'):
+            if hasattr(self, '_update_ebs_xlim'):
+                self._update_ebs_xlim(cur_iter)
+            elif hasattr(self, 'ax_ebs'):
                 self.ax_ebs.set_xlim(max(0, cur_iter - 400), max(100, cur_iter))
                 valid_ebs = [v for v in self.ebs_history if np.isfinite(v)]
                 if valid_ebs:
@@ -1962,6 +1972,7 @@ class SweepMixin:
             "elec_xy": getattr(self, '_last_elec_xy', np.empty((0, 2))),
             "e_elec_eV": getattr(self, '_last_e_elec_eV', np.empty(0)),
             "iter_history": list(self.iter_history),
+            "time_history": list(getattr(self, 'time_history', [])),
             "div_history": list(self.div_history),
             "div_mid_history": list(self.div_mid_history),
             "ebs_history": list(self.ebs_history),

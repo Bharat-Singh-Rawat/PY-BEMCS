@@ -62,6 +62,9 @@ class DigitalTwinApp(
         self.div_method = "95%"
         self.div_percentile = 95.0
         self.div_plane_x = None
+        self.ebs_xaxis_unit = "iterations"
+        self.div_xaxis_unit = "iterations"
+        self.xaxis_unit = "iterations"
         self.time_history = []
         self.transparency_history  = []
         self.transparency3_history = []

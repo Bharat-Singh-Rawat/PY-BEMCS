@@ -621,6 +621,7 @@ class UIBuilderMixin:
         self.canvas.mpl_connect('pick_event', self._on_legend_pick)
         self._update_div_legend()
         self.setup_divergence_menu()
+        self.setup_xaxis_menu()
 
     def setup_divergence_menu(self):
         """Build the downstream arrow dropdown button and cascading tent menus for divergence options."""
@@ -713,6 +714,22 @@ class UIBuilderMixin:
         self.action_div_plane.triggered.connect(self.open_divergence_plane_dialog)
         self.menu_div.addAction(self.action_div_plane)
 
+        # Submenu: "X-axis unit" (for beam divergence)
+        self.menu_div.addSeparator()
+        self.menu_div_xaxis = self.menu_div.addMenu("X-axis unit")
+        self.menu_div_xaxis.setStyleSheet(self.menu_div.styleSheet())
+        self._div_xaxis_unit_actions = {}
+        self._div_xaxis_unit_group = QActionGroup(self)
+        self._div_xaxis_unit_group.setExclusive(True)
+
+        for unit_key, label in [("iterations", "Iterations"), ("microseconds", "Microseconds (µs)")]:
+            act = self.menu_div_xaxis.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(unit_key == getattr(self, 'div_xaxis_unit', 'iterations'))
+            act.triggered.connect(lambda checked, u=unit_key: self.set_xaxis_unit(u, target='div'))
+            self._div_xaxis_unit_group.addAction(act)
+            self._div_xaxis_unit_actions[unit_key] = act
+
         self.btn_div_menu.setMenu(self.menu_div)
         self.btn_div_menu.setPopupMode(QToolButton.InstantPopup)
 
@@ -723,3 +740,118 @@ class UIBuilderMixin:
         self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_scrollbar())
         self._reposition_div_menu_btn()
         self._reposition_div_scrollbar()
+
+    def setup_xaxis_menu(self):
+        """Build the downstream arrow dropdown buttons and independent tent menus to switch x-axis units per graph."""
+        menu_style = """
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #ced4da;
+                padding: 4px 0px;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 5px 22px 5px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #e7f1ff;
+                color: #0d6efd;
+            }
+        """
+
+        unit_items = [
+            ("iterations", "Iterations", "Display x-axis in simulation iterations"),
+            ("microseconds", "Microseconds (µs)", "Display x-axis in physical time (microseconds)"),
+        ]
+
+        # 1. Menu for Midline / Saddle-Point Potential graph (ax_ebs)
+        self.menu_ebs_xaxis = QMenu(self)
+        self.menu_ebs_xaxis.setStyleSheet(menu_style)
+        self._ebs_xaxis_actions = {}
+        self._ebs_xaxis_group = QActionGroup(self)
+        self._ebs_xaxis_group.setExclusive(True)
+
+        current_ebs_unit = getattr(self, 'ebs_xaxis_unit', 'iterations')
+        for unit_key, unit_label, tip in unit_items:
+            act = self.menu_ebs_xaxis.addAction(unit_label)
+            act.setCheckable(True)
+            act.setChecked(unit_key == current_ebs_unit)
+            act.setToolTip(tip)
+            act.triggered.connect(lambda checked, u=unit_key: self.set_xaxis_unit(u, target='ebs'))
+            self._ebs_xaxis_group.addAction(act)
+            self._ebs_xaxis_actions[unit_key] = act
+
+        # 2. Menu for Beam Divergence graph (ax_div)
+        self.menu_div_xaxis_btn = QMenu(self)
+        self.menu_div_xaxis_btn.setStyleSheet(menu_style)
+        self._div_xaxis_actions = {}
+        self._div_xaxis_group = QActionGroup(self)
+        self._div_xaxis_group.setExclusive(True)
+
+        current_div_unit = getattr(self, 'div_xaxis_unit', 'iterations')
+        for unit_key, unit_label, tip in unit_items:
+            act = self.menu_div_xaxis_btn.addAction(unit_label)
+            act.setCheckable(True)
+            act.setChecked(unit_key == current_div_unit)
+            act.setToolTip(tip)
+            act.triggered.connect(lambda checked, u=unit_key: self.set_xaxis_unit(u, target='div'))
+            self._div_xaxis_group.addAction(act)
+            self._div_xaxis_actions[unit_key] = act
+
+        # Backward compatibility aliases
+        self.menu_xaxis = self.menu_div_xaxis_btn
+        self._xaxis_unit_actions = self._div_xaxis_actions
+
+        btn_style = """
+            QToolButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 3px;
+                color: #495057;
+                font-size: 8px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QToolButton:hover {
+                background-color: #e2e6ea;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+            QToolButton:pressed {
+                background-color: #dae0e5;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """
+
+        # Downward arrow button next to ax_ebs (midline / saddle-point potential) x-axis label
+        self.btn_ebs_x_menu = QToolButton(self.canvas)
+        self.btn_ebs_x_menu.setText("▼")
+        self.btn_ebs_x_menu.setToolTip("Change Midline Potential X-Axis Unit (Iterations / Microseconds)")
+        self.btn_ebs_x_menu.setFixedSize(16, 14)
+        self.btn_ebs_x_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_ebs_x_menu.setFocusPolicy(Qt.NoFocus)
+        self.btn_ebs_x_menu.setStyleSheet(btn_style)
+        self.btn_ebs_x_menu.setMenu(self.menu_ebs_xaxis)
+        self.btn_ebs_x_menu.setPopupMode(QToolButton.InstantPopup)
+
+        # Downward arrow button next to ax_div (beam divergence) x-axis label
+        self.btn_div_x_menu = QToolButton(self.canvas)
+        self.btn_div_x_menu.setText("▼")
+        self.btn_div_x_menu.setToolTip("Change Beam Divergence X-Axis Unit (Iterations / Microseconds)")
+        self.btn_div_x_menu.setFixedSize(16, 14)
+        self.btn_div_x_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_div_x_menu.setFocusPolicy(Qt.NoFocus)
+        self.btn_div_x_menu.setStyleSheet(btn_style)
+        self.btn_div_x_menu.setMenu(self.menu_div_xaxis_btn)
+        self.btn_div_x_menu.setPopupMode(QToolButton.InstantPopup)
+
+        # Alias for single-button reference
+        self.btn_xaxis_menu = self.btn_div_x_menu
+
+        # Reposition buttons on canvas draw and resize
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_xaxis_menu_btns())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_xaxis_menu_btns())
+        self._reposition_xaxis_menu_btns()
