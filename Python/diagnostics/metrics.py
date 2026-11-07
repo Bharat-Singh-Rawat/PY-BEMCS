@@ -46,11 +46,26 @@ def compute_energy_budget(sim):
         ke_e = 0.0
 
     # --- Electrostatic field energy: (eps0/2) * integral(|E|^2) dV ---
-    if hasattr(sim, 'cell_area_2d'):
-        e_field = float(np.sum((sim.Ex**2 + sim.Ey**2) * sim.cell_area_2d)) * 0.5 * sim.eps0
+    Ex = getattr(sim, 'Ex', None)
+    Ey = getattr(sim, 'Ey', None)
+    if Ex is None or Ey is None:
+        V = getattr(sim, 'V', None)
+        if V is not None and getattr(V, 'ndim', 0) == 2 and V.shape[0] >= 2 and V.shape[1] >= 2:
+            dy_m = float(getattr(sim, 'dy', 0.05)) * 1e-3
+            dx_m = float(getattr(sim, 'dx', 0.05)) * 1e-3
+            Ey, Ex = np.gradient(-V, dy_m, dx_m)
+            sim.Ex = Ex
+            sim.Ey = Ey
+
+    if Ex is not None and Ey is not None:
+        eps0 = getattr(sim, 'eps0', 8.8541878128e-12)
+        if hasattr(sim, 'cell_area_2d') and sim.cell_area_2d is not None:
+            e_field = float(np.sum((Ex**2 + Ey**2) * sim.cell_area_2d)) * 0.5 * eps0
+        else:
+            cell_area = (float(getattr(sim, 'dx', 0.05)) * 1e-3) * (float(getattr(sim, 'dy', 0.05)) * 1e-3)  # [m^2]
+            e_field = float(np.sum(Ex**2 + Ey**2)) * 0.5 * eps0 * cell_area
     else:
-        cell_area = (sim.dx * 1e-3) * (sim.dy * 1e-3)  # [m^2]
-        e_field = float(np.sum(sim.Ex**2 + sim.Ey**2)) * 0.5 * sim.eps0 * cell_area
+        e_field = 0.0
 
     total = ke_i + ke_e + e_field
 

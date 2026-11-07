@@ -1685,9 +1685,13 @@ class SweepMixin:
             elif d_data and d_data.get("V") is not None:
                 self.sim.V = d_data["V"]
 
-            # Reset Ex and Ey so field_window recomputes self-consistent gradients for the scenario's V
-            self.sim.Ex = None
-            self.sim.Ey = None
+            # Compute self-consistent electric field gradients for the scenario's potential V
+            if hasattr(self.sim, 'V') and self.sim.V is not None and getattr(self.sim.V, 'ndim', 0) == 2:
+                y_m = (self.sim.Y[:, 0] if hasattr(self.sim, 'Y') and self.sim.Y is not None and self.sim.Y.shape == self.sim.V.shape else np.linspace(0, getattr(self.sim, 'Ly', 3.0), self.sim.V.shape[0])) * 1e-3
+                x_m = (self.sim.X[0, :] if hasattr(self.sim, 'X') and self.sim.X is not None and self.sim.X.shape == self.sim.V.shape else np.linspace(0, getattr(self.sim, 'Lx', 3.0), self.sim.V.shape[1])) * 1e-3
+                Ey, Ex = np.gradient(-self.sim.V, y_m, x_m)
+                self.sim.Ex = Ex
+                self.sim.Ey = Ey
             self.sim.iteration = int(info.get("iter", 0))
 
             param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
@@ -2446,6 +2450,15 @@ class SweepMixin:
             self.steady_state_window.setWindowTitle(f"Steady State Diagnostics — {w}-Iteration Variation")
             if self.steady_state_window.isVisible() and hasattr(self, 'sim'):
                 self.steady_state_window.update_plot(self.sim, self)
+
+        if hasattr(self, 'sim') and hasattr(self.sim, 'V') and self.sim.V is not None:
+            if getattr(self.sim, 'Ex', None) is None or getattr(self.sim, 'Ey', None) is None:
+                try:
+                    dy_m = float(getattr(self.sim, 'dy', 0.05)) * 1e-3
+                    dx_m = float(getattr(self.sim, 'dx', 0.05)) * 1e-3
+                    self.sim.Ey, self.sim.Ex = np.gradient(-self.sim.V, dy_m, dx_m)
+                except Exception:
+                    pass
 
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")

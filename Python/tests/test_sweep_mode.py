@@ -1943,6 +1943,10 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
 
         self.assertIn("Scenario 1", self.win.field_window.windowTitle())
         self.assertIn("Peak |E| (total):", self.win.field_window.lbl_e_max.text())
+        self.assertIsNotNone(self.win.sim.Ex)
+        self.assertIsNotNone(self.win.sim.Ey)
+        # Calling get_total_energy must not crash with TypeError
+        self.win.sim.get_total_energy()
 
         # 2. Switch to Scenario 2 (post-run done)
         V2 = np.ones((ny, nx), dtype=np.float32) * 1000.0
@@ -1961,6 +1965,9 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win._render_sweep_scenario_snapshot(2)
 
         self.assertIn("Scenario 2", self.win.field_window.windowTitle())
+        self.assertIsNotNone(self.win.sim.Ex)
+        self.assertIsNotNone(self.win.sim.Ey)
+        self.win.sim.get_total_energy()
 
         # 3. Re-open via menu refreshes to currently selected scenario (Scenario 2)
         self.win.field_window.close()
@@ -2060,6 +2067,18 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.steady_state_window.close()
         self.win.exit_sweep(confirm_choice="no")
         self.assertEqual(self.win.steady_state_window.windowTitle(), "Steady State Diagnostics — 50-Iteration Variation")
+
+    def test_compute_energy_budget_defensive_against_none_efield(self):
+        """Verify compute_energy_budget does not crash with TypeError if sim.Ex or sim.Ey is None."""
+        from diagnostics.metrics import compute_energy_budget
+        self.win.build_domain()
+        self.win.sim.Ex = None
+        self.win.sim.Ey = None
+        budget = compute_energy_budget(self.win.sim)
+        self.assertIsInstance(budget, dict)
+        self.assertIn("field_J", budget)
+        self.assertIsNotNone(self.win.sim.Ex)
+        self.assertIsNotNone(self.win.sim.Ey)
 
 
 if __name__ == "__main__":
