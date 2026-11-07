@@ -1903,6 +1903,164 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.exit_sweep(confirm_choice="no")
         self.assertEqual(self.win.iedf_window.windowTitle(), "Energy Distribution Function (IEDF & EEDF)")
 
+    def test_field_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Electric Field & Potential Diagnostics window in sweep mode (live & post-run)."""
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Field window
+        self.win.open_field_window()
+        self.assertIsNotNone(self.win.field_window)
+        self.assertTrue(self.win.field_window.isVisible())
+
+        # 1. Live status for Scenario 1
+        ny, nx = self.win.sim.ny, self.win.sim.nx
+        V1 = np.ones((ny, nx), dtype=np.float32) * 500.0
+        V1[:, -1] = 0.0
+
+        info_s1 = {
+            "status": "running",
+            "iter": 25,
+            "parameter_value": 1e17,
+            "V": V1,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.field_window.windowTitle())
+        self.assertIn("Peak |E| (total):", self.win.field_window.lbl_e_max.text())
+
+        # 2. Switch to Scenario 2 (post-run done)
+        V2 = np.ones((ny, nx), dtype=np.float32) * 1000.0
+        V2[:, -1] = -200.0
+        info_s2 = {
+            "status": "done",
+            "iter": 50,
+            "parameter_value": 2e17,
+            "V": V2,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.field_window.windowTitle())
+
+        # 3. Re-open via menu refreshes to currently selected scenario (Scenario 2)
+        self.win.field_window.close()
+        self.assertFalse(self.win.field_window.isVisible())
+        self.win.open_field_window()
+        self.assertTrue(self.win.field_window.isVisible())
+        self.assertIn("Scenario 2", self.win.field_window.windowTitle())
+
+        # 4. Clean exit
+        self.win.field_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.field_window.windowTitle(), "Electric Field & Potential Diagnostics")
+
+    def test_steady_state_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Steady State Diagnostics window in sweep mode (live & post-run)."""
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Steady State window
+        self.win.open_steady_state_window()
+        self.assertIsNotNone(self.win.steady_state_window)
+        self.assertTrue(self.win.steady_state_window.isVisible())
+
+        # 1. Live status for Scenario 1
+        N = 60
+        e_tot1 = [1e-6 * (1.0 + 0.05 * np.exp(-i / 10.0)) for i in range(N)]
+        q_net1 = [1e-11 * (1.0 + 0.02 * np.exp(-i / 10.0)) for i in range(N)]
+        fe1 = [5e-7 * (1.0 + 0.01 * np.exp(-i / 10.0)) for i in range(N)]
+        ebs1 = [150.0 * (1.0 - 0.03 * np.exp(-i / 10.0)) for i in range(N)]
+        i_exit1 = [0.05 * (1.0 - 0.02 * np.exp(-i / 10.0)) for i in range(N)]
+        div1 = [12.0 * (1.0 + 0.01 * np.exp(-i / 10.0)) for i in range(N)]
+        parts1 = [500.0 * (1.0 + 0.01 * np.exp(-i / 10.0)) for i in range(N)]
+
+        info_s1 = {
+            "status": "running",
+            "iter": N,
+            "parameter_value": 1e17,
+            "energy_history_tot": e_tot1,
+            "charge_history_q_net": q_net1,
+            "energy_history_fe": fe1,
+            "ebs_history": ebs1,
+            "ion_current_exit_history": i_exit1,
+            "div_history": div1,
+            "transmitted_ions_history": parts1,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.steady_state_window.windowTitle())
+        self.assertIn("TRANSIENT / DRIFTING", self.win.steady_state_window.lbl_status_text.text())
+
+        # 2. Switch to Scenario 2 (post-run done with flat stationary values)
+        info_s2 = {
+            "status": "done",
+            "iter": N,
+            "parameter_value": 2e17,
+            "energy_history_tot": [1.5e-6] * N,
+            "charge_history_q_net": [1.5e-11] * N,
+            "energy_history_fe": [7.5e-7] * N,
+            "ebs_history": [180.0] * N,
+            "ion_current_exit_history": [0.08] * N,
+            "div_history": [12.0] * N,
+            "transmitted_ions_history": [750.0] * N,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.steady_state_window.windowTitle())
+        self.assertIn("STEADY STATE ACHIEVED", self.win.steady_state_window.lbl_status_text.text())
+
+        # 3. Re-open via menu refreshes to currently selected scenario (Scenario 2)
+        self.win.steady_state_window.close()
+        self.assertFalse(self.win.steady_state_window.isVisible())
+        self.win.open_steady_state_window()
+        self.assertTrue(self.win.steady_state_window.isVisible())
+        self.assertIn("Scenario 2", self.win.steady_state_window.windowTitle())
+
+        # 4. Clean exit
+        self.win.steady_state_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.steady_state_window.windowTitle(), "Steady State Diagnostics — 50-Iteration Variation")
+
 
 if __name__ == "__main__":
     unittest.main()

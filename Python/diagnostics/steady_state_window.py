@@ -209,7 +209,11 @@ class SteadyStateWindow(QDialog):
 
     def _on_window_changed(self):
         w = self.spin_window.value()
-        self.setWindowTitle(f"Steady State Diagnostics — {w}-Iteration Variation")
+        if "Scenario" in self.windowTitle():
+            scen_part = self.windowTitle().split("—")[-1].strip()
+            self.setWindowTitle(f"Steady State Diagnostics ({w}-iter) — {scen_part}")
+        else:
+            self.setWindowTitle(f"Steady State Diagnostics — {w}-Iteration Variation")
         self._replot()
 
     def _on_threshold_changed(self):

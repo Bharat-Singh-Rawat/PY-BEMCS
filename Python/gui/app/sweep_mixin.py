@@ -767,6 +767,9 @@ class SweepMixin:
                 "X": sim_temp.X,
                 "Y": sim_temp.Y,
                 "V": sim_temp.V,
+                "Vdc": getattr(sim_temp, 'Vdc', sim_temp.V),
+                "Ex": getattr(sim_temp, 'Ex', None),
+                "Ey": getattr(sim_temp, 'Ey', None),
                 "Lx": float(sim_temp.Lx),
                 "Ly": float(sim_temp.Ly),
                 "dx": float(sim_temp.dx),
@@ -1239,6 +1242,20 @@ class SweepMixin:
             except Exception as exc:
                 print(f"[IEDF Snapshot Update Error] {exc}")
 
+        # 11. Update Electric Field & Potential Diagnostics Window for the selected scenario if open
+        if getattr(self, 'field_window', None) and self.field_window.isVisible():
+            try:
+                self._update_field_window_for_scenario(scenario_idx, info, d_data)
+            except Exception as exc:
+                print(f"[Field Snapshot Update Error] {exc}")
+
+        # 12. Update Steady State Diagnostics Window for the selected scenario if open
+        if getattr(self, 'steady_state_window', None) and self.steady_state_window.isVisible():
+            try:
+                self._update_steady_state_window_for_scenario(scenario_idx, info)
+            except Exception as exc:
+                print(f"[Steady State Snapshot Update Error] {exc}")
+
         QApplication.processEvents()
 
     def _update_ppc_window_for_scenario(self, scenario_idx, info):
@@ -1648,6 +1665,68 @@ class SweepMixin:
         except Exception as exc:
             print(f"[IEDF Window Warning] Error updating energy distribution for scenario {scenario_idx}: {exc}")
 
+    def _update_field_window_for_scenario(self, scenario_idx, info, d_data=None):
+        """Update Electric Field & Potential Diagnostics Window for the selected scenario."""
+        if not getattr(self, 'field_window', None) or not self.field_window.isVisible():
+            return
+        try:
+            if d_data:
+                for k in ("Lx", "Ly", "dx", "dy", "nx", "ny", "X", "Y", "isBound", "x_coords", "y_coords", "grids", "grid_x_starts", "grid_x_ends"):
+                    if d_data.get(k) is not None:
+                        setattr(self.sim, k, d_data[k])
+                if d_data.get("Vdc") is not None:
+                    self.sim.Vdc = d_data["Vdc"]
+                elif d_data.get("V") is not None:
+                    self.sim.Vdc = d_data["V"]
+
+            # If dynamic potential is present in info, use it; otherwise fallback to domain cache V
+            if info.get("V") is not None:
+                self.sim.V = info["V"]
+            elif d_data and d_data.get("V") is not None:
+                self.sim.V = d_data["V"]
+
+            # Reset Ex and Ey so field_window recomputes self-consistent gradients for the scenario's V
+            self.sim.Ex = None
+            self.sim.Ey = None
+            self.sim.iteration = int(info.get("iter", 0))
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.field_window.setWindowTitle(f"Electric Field & Potential Diagnostics — Scenario {scenario_idx}{param_str}")
+            self.field_window.update_plot(self.sim)
+            if hasattr(self.field_window, '_replot'):
+                self.field_window._replot()
+        except Exception as exc:
+            print(f"[Field Window Warning] Error updating field diagnostics for scenario {scenario_idx}: {exc}")
+
+    def _update_steady_state_window_for_scenario(self, scenario_idx, info):
+        """Update Steady State Diagnostics Window with variation history of selected scenario."""
+        if not getattr(self, 'steady_state_window', None) or not self.steady_state_window.isVisible():
+            return
+        try:
+            # Sync histories to self.sim
+            self.sim.energy_history_tot = list(info.get("energy_history_tot", []))
+            self.sim.charge_history_q_net = list(info.get("charge_history_q_net", []))
+            self.sim.energy_history_fe = list(info.get("energy_history_fe", []))
+            self.sim.potential_history = list(info.get("ebs_history", []))
+            self.sim.iteration = int(info.get("iter", 0))
+
+            # Sync histories to app (self)
+            self.ebs_history = list(info.get("ebs_history", []))
+            self.div_history = list(info.get("div_history", []))
+            self.ion_current_exit_history = list(info.get("ion_current_exit_history", []))
+            self.transmitted_ions_history = list(info.get("transmitted_ions_history", []))
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            w = self.steady_state_window.spin_window.value() if hasattr(self.steady_state_window, 'spin_window') else 50
+            self.steady_state_window.setWindowTitle(f"Steady State Diagnostics ({w}-iter) — Scenario {scenario_idx}{param_str}")
+            self.steady_state_window.update_plot(self.sim, self)
+        except Exception as exc:
+            print(f"[Steady State Window Warning] Error updating steady state monitor for scenario {scenario_idx}: {exc}")
+
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
             n_cores = getattr(self.parallel_sweep_worker, 'n_cores', '') if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker else ''
@@ -1907,6 +1986,9 @@ class SweepMixin:
             "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
             "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
             "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
+            "ion_current_exit_history": list(getattr(self, 'ion_current_exit_history', [])),
+            "transmitted_ions_history": list(getattr(self, 'transmitted_ions_history', [])),
+            "V": getattr(sim, 'V', None).copy() if getattr(sim, 'V', None) is not None else None,
             "result_row": result_row,
         }
 
@@ -2353,6 +2435,17 @@ class SweepMixin:
 
         if getattr(self, 'iedf_window', None):
             self.iedf_window.setWindowTitle("Energy Distribution Function (IEDF & EEDF)")
+
+        if getattr(self, 'field_window', None):
+            self.field_window.setWindowTitle("Electric Field & Potential Diagnostics")
+            if self.field_window.isVisible() and hasattr(self, 'sim'):
+                self.field_window.update_plot(self.sim)
+
+        if getattr(self, 'steady_state_window', None):
+            w = self.steady_state_window.spin_window.value() if hasattr(self.steady_state_window, 'spin_window') else 50
+            self.steady_state_window.setWindowTitle(f"Steady State Diagnostics — {w}-Iteration Variation")
+            if self.steady_state_window.isVisible() and hasattr(self, 'sim'):
+                self.steady_state_window.update_plot(self.sim, self)
 
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")

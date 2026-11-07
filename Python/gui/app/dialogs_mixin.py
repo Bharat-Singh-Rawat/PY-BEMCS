@@ -310,6 +310,14 @@ class DialogsMixin:
         self.field_window.show()
         self.field_window.raise_()
         self.field_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             self.field_window.update_plot(self.sim)
 
@@ -320,6 +328,14 @@ class DialogsMixin:
         self.steady_state_window.show()
         self.steady_state_window.raise_()
         self.steady_state_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             self.steady_state_window.update_plot(self.sim, self)
 

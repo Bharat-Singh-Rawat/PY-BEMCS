@@ -233,7 +233,7 @@ class FieldDiagnosticWindow(QDialog):
 
     def _replot(self):
         sim = self._current_sim
-        if sim is None or not hasattr(sim, "V") or sim.V is None:
+        if sim is None or not hasattr(sim, "V") or sim.V is None or getattr(sim.V, 'ndim', 0) != 2 or sim.V.shape[0] < 2 or sim.V.shape[1] < 2:
             self.ax.clear()
             self.ax.text(
                 0.5, 0.5,
@@ -255,25 +255,27 @@ class FieldDiagnosticWindow(QDialog):
             scale_e = 1e-6
             unit_label = "kV/mm"
 
+        # Dynamic Potential V
+        V = sim.V.copy()
+
         # Obtain coordinates in mm
         X = getattr(sim, "X", None)
         Y = getattr(sim, "Y", None)
-        if X is None or Y is None:
+        if X is None or Y is None or X.shape != V.shape:
             x_coords = getattr(sim, "x_coords", getattr(sim, "xpts", None))
             y_coords = getattr(sim, "y_coords", getattr(sim, "ypts", None))
-            if x_coords is None:
-                x_coords = np.linspace(0, sim.Lx, sim.nx)
-            if y_coords is None:
-                y_coords = np.linspace(0, sim.Ly, sim.ny)
+            if x_coords is None or len(x_coords) != V.shape[1]:
+                x_coords = np.linspace(0, getattr(sim, 'Lx', 3.0), V.shape[1])
+            if y_coords is None or len(y_coords) != V.shape[0]:
+                y_coords = np.linspace(0, getattr(sim, 'Ly', 3.0), V.shape[0])
             X, Y = np.meshgrid(x_coords, y_coords)
-
-        # Dynamic Potential V
-        V = sim.V.copy()
 
         # Vacuum Potential Vdc
         Vdc = getattr(sim, "Vdc", None)
         if Vdc is None or Vdc.shape != V.shape:
             Vdc = getattr(sim, "V_fixed", V).copy()
+        if Vdc.shape != V.shape:
+            Vdc = V.copy()
 
         # Compute dynamic Electric Field
         Ex = getattr(sim, "Ex", None)
@@ -486,7 +488,7 @@ class FieldDiagnosticWindow(QDialog):
             )
 
         # ── Draw Grid Electrodes ──
-        if self.chk_grids.isChecked() and hasattr(sim, "isBound") and sim.isBound is not None:
+        if self.chk_grids.isChecked() and hasattr(sim, "isBound") and sim.isBound is not None and sim.isBound.shape == X.shape:
             is_bound = sim.isBound.copy()
             is_bound[:, 0] = False  # skip inlet boundary line for electrode plotting
             gy, gx = np.where(is_bound)
@@ -507,12 +509,12 @@ class FieldDiagnosticWindow(QDialog):
     def _update_analytics(self, sim, E_mag, Ex, Ey, V, Vdc, scale_e, unit_label):
         max_idx = np.unravel_index(np.argmax(E_mag), E_mag.shape)
         max_e_val = E_mag[max_idx] * scale_e
-        x_at_max = sim.X[max_idx] if hasattr(sim, "X") else max_idx[1] * sim.dx
-        y_at_max = sim.Y[max_idx] if hasattr(sim, "Y") else max_idx[0] * sim.dy
+        x_at_max = sim.X[max_idx] if hasattr(sim, "X") and sim.X.shape == E_mag.shape else max_idx[1] * getattr(sim, 'dx', 0.05)
+        y_at_max = sim.Y[max_idx] if hasattr(sim, "Y") and sim.Y.shape == E_mag.shape else max_idx[0] * getattr(sim, 'dy', 0.05)
 
         # Vacuum field max
-        y_m = (sim.Y[:, 0] if hasattr(sim, "Y") else np.linspace(0, sim.Ly, sim.ny)) * 1e-3
-        x_m = (sim.X[0, :] if hasattr(sim, "X") else np.linspace(0, sim.Lx, sim.nx)) * 1e-3
+        y_m = (sim.Y[:, 0] if hasattr(sim, "Y") and sim.Y.shape == Vdc.shape else np.linspace(0, getattr(sim, 'Ly', 3.0), Vdc.shape[0])) * 1e-3
+        x_m = (sim.X[0, :] if hasattr(sim, "X") and sim.X.shape == Vdc.shape else np.linspace(0, getattr(sim, 'Lx', 3.0), Vdc.shape[1])) * 1e-3
         Ey_stat, Ex_stat = np.gradient(-Vdc, y_m, x_m)
         estat_max = np.max(np.sqrt(Ex_stat ** 2 + Ey_stat ** 2)) * scale_e
 

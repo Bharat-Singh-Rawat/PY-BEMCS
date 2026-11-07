@@ -252,6 +252,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     div_hist = []
     div_mid_hist = []
     ebs_hist = []
+    ion_current_hist = []
+    trans_ions_hist = []
     last_valid_div = 0.0
     last_valid_div_mid = 0.0
 
@@ -276,6 +278,9 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "div_history": [],
         "div_mid_history": [],
         "ebs_history": [],
+        "ion_current_exit_history": [],
+        "transmitted_ions_history": [],
+        "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
         "grids": scenario_params.get("grids", []),
@@ -349,6 +354,10 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         div_hist.append(div_c)
         div_mid_hist.append(div_m)
         ebs_hist.append(min_pot_c)
+        i_step_c = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
+        trans_ions_c = float(getattr(sim, 'transmitted_ions_step', 0.0))
+        ion_current_hist.append(i_step_c)
+        trans_ions_hist.append(trans_ions_c)
 
         if (status_dict is not None or state_file is not None) and (scenario_iters % 10 == 0 or scenario_iters <= 5):
             # Check if this scenario is currently being viewed in the GUI
@@ -367,7 +376,6 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                     pass
 
             t_us = (scenario_iters * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
-            i_step_c = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
             trans_c = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
             cur_comp_time = time.perf_counter() - t_start
 
@@ -393,6 +401,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "div_history": list(div_hist),
                 "div_mid_history": list(div_mid_hist),
                 "ebs_history": list(ebs_hist),
+                "ion_current_exit_history": list(ion_current_hist),
+                "transmitted_ions_history": list(trans_ions_hist),
                 "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
                 "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
                 "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
@@ -419,6 +429,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
                 "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
                 "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
+                "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
             }
             if status_dict is not None:
                 status_dict[scenario_idx] = run_state
@@ -531,6 +542,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "div_history": list(div_hist),
         "div_mid_history": list(div_mid_hist),
         "ebs_history": list(ebs_hist),
+        "ion_current_exit_history": list(ion_current_hist),
+        "transmitted_ions_history": list(trans_ions_hist),
         "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
         "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
         "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
@@ -557,6 +570,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
         "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
         "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
+        "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "result_row": res_row,
     }
 
