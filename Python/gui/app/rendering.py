@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication
 
 
 class RenderingMixin:
@@ -178,10 +179,11 @@ class RenderingMixin:
             self._gui_busy = False
 
             if self._pending_snap is not None:
-                if self._pending_snap.get('run_id', expected_run_id) == expected_run_id:
-                    QTimer.singleShot(0, lambda: self._on_step_result(self._pending_snap))
-                else:
-                    self._pending_snap = None
+                # If simulation stopped, ensure the very last pending frame is displayed after a brief yield
+                if not getattr(self, 'sim_isRunning', False):
+                    if self._pending_snap.get('run_id', expected_run_id) == expected_run_id:
+                        QTimer.singleShot(25, lambda: self._on_step_result(self._pending_snap))
+                self._pending_snap = None
 
     def _process_snap(self, snap):
         """Inner body of _on_step_result."""
@@ -470,7 +472,7 @@ class RenderingMixin:
             self._bg_live = None
 
         full_redraw_due = (
-            (now - self._last_full_redraw_t >= 0.10)
+            (now - self._last_full_redraw_t >= 0.33)
             or (not self.sim_isRunning)
             or remeshed
             or (self._bg_live is None)
@@ -510,6 +512,10 @@ class RenderingMixin:
 
         if getattr(self, 'is_sweep_active', False):
             self.check_sweep_steady_state()
+
+        if getattr(self, 'sweep_mode_armed', False) or getattr(self, 'is_sweep_active', False):
+            if hasattr(self, '_update_sweep_scenario_combo_items'):
+                self._update_sweep_scenario_combo_items()
 
     def _update_div_legend(self):
         """Build/update interactive clickable legend with [x] / [ ] checkmarks for ax_div."""

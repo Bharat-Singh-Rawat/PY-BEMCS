@@ -291,23 +291,25 @@ class UIBuilderMixin:
         self.combo_sweep_scenario.currentIndexChanged.connect(self._on_sweep_scenario_selected)
         top_bar_layout.addWidget(self.combo_sweep_scenario)
 
-        self.btn_stop_sweep = QPushButton("Stop Sweep")
+        # btn_stop_sweep is kept for backward programmatic compatibility, but not added to top_bar_layout
+        # as top-bar control is unified into the dynamic action button (Start Sweep / Pause Sweep / Resume Sweep).
+        self.btn_stop_sweep = QPushButton("Stop Sweep", top_bar)
         self.btn_stop_sweep.setVisible(False)
         self.btn_stop_sweep.setStyleSheet(
             "background-color: #fee2e2; color: #b91c1c; font-weight: bold; "
             "border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
         self.btn_stop_sweep.clicked.connect(self.stop_sweep)
-        top_bar_layout.addWidget(self.btn_stop_sweep)
 
-        self.btn_resume_sweep = QPushButton("Resume with Selected Parameters")
+        self.btn_resume_sweep = QPushButton("Start Sweep")
         self.btn_resume_sweep.setVisible(False)
-        self.btn_resume_sweep.setToolTip("Apply the selected scenario parameters and resume simulation / sweep")
+        self.btn_resume_sweep.setToolTip("Start parametric sweep simulation across all scenarios")
         self.btn_resume_sweep.setStyleSheet(
             "background-color: #f0fdf4; color: #15803d; font-weight: bold; "
             "border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
-        self.btn_resume_sweep.clicked.connect(self.resume_sweep_with_selected)
+        self.btn_resume_sweep.clicked.connect(self.on_sweep_action_clicked)
+        self.btn_start_sweep = self.btn_resume_sweep
         top_bar_layout.addWidget(self.btn_resume_sweep)
 
         self.btn_exit_sweep = QPushButton("Exit sweep")
@@ -488,8 +490,18 @@ class UIBuilderMixin:
 
         self.btn_build = QPushButton("1. BUILD DOMAIN")
         self.btn_build.clicked.connect(self.build_domain)
+        self.lbl_build_domain_info = QLabel("Build domain is valid for all scenarios")
+        self.lbl_build_domain_info.setAlignment(Qt.AlignCenter)
+        self.lbl_build_domain_info.setWordWrap(True)
+        self.lbl_build_domain_info.setStyleSheet("color: #64748b; font-size: 10px; font-style: italic; margin-top: 1px; margin-bottom: 2px;")
+        self.lbl_build_domain_info.setVisible(False)
         self.btn_toggle = QPushButton("2. START BEAM")
         self.btn_toggle.clicked.connect(self.toggle_sim)
+        self.lbl_beam_info = QLabel("Start/pause applies only to current scenario")
+        self.lbl_beam_info.setAlignment(Qt.AlignCenter)
+        self.lbl_beam_info.setWordWrap(True)
+        self.lbl_beam_info.setStyleSheet("color: #64748b; font-size: 10px; font-style: italic; margin-top: 1px; margin-bottom: 2px;")
+        self.lbl_beam_info.setVisible(False)
 
         export_row = QHBoxLayout()
         export_row.setSpacing(4)
@@ -535,7 +547,9 @@ class UIBuilderMixin:
         self.lbl_material.setWordWrap(True)
 
         control_layout.addWidget(self.btn_build)
+        control_layout.addWidget(self.lbl_build_domain_info)
         control_layout.addWidget(self.btn_toggle)
+        control_layout.addWidget(self.lbl_beam_info)
         control_layout.addLayout(export_row)
         control_layout.addWidget(self.chk_track_ptcls)
         control_layout.addLayout(export_trk_row)

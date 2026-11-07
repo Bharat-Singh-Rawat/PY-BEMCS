@@ -7,7 +7,7 @@ steady-state condition checks, scenario transitions, and results collection.
 import time
 import copy
 import numpy as np
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMessageBox, QApplication
 from PyQt5.QtCore import QTimer
 
 from ..dialogs import SweepSettingsDialog, SweepResultsDialog, ParallelSweepProgressDialog, format_sci_value
@@ -37,9 +37,11 @@ class SweepMixin:
         """Save sweep configuration and arm sweep mode without immediately launching."""
         self.sweep_config = config
         self.sweep_results = []
+        self._sweep_status_dict = {}
         self.sweep_current_idx = 0
         self.sweep_mode_armed = True
         self.is_sweep_active = False
+        self._sweep_domain_built = False
         self._sweep_paused_current = False
         self._sweep_base_params = copy.deepcopy(self.get_params()) if hasattr(self, 'get_params') else {}
         self._scenario_domain_cache = {}
@@ -87,21 +89,160 @@ class SweepMixin:
                 "border: 1px solid #c084fc; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
             )
         if hasattr(self, 'btn_stop_sweep'):
-            self.btn_stop_sweep.setVisible(True)
-        if hasattr(self, 'btn_exit_sweep'):
-            self.btn_exit_sweep.setVisible(True)
-        if hasattr(self, 'btn_resume_sweep'):
-            self.btn_resume_sweep.setVisible(True)
+            self.btn_stop_sweep.setVisible(False)
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(True)
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")
+        if hasattr(self, 'lbl_build_domain_info'):
+            self.lbl_build_domain_info.setVisible(True)
+        if hasattr(self, 'lbl_beam_info'):
+            self.lbl_beam_info.setVisible(True)
+
+        self._update_sweep_action_button_state()
 
         if hasattr(self, 'lbl_status'):
             self.lbl_status.setText(
                 f"Sweep settings saved for {param_label} ({total_scenarios} scenarios). "
-                f"Build domain (1. BUILD DOMAIN) and start simulation to begin sweep."
+                f"Click 'Start Sweep' to begin, or '2. START BEAM' to simulate the current scenario."
             )
+
+    def _update_sweep_action_button_state(self):
+        """Update text, tooltip, and style of top-bar sweep action button (Start / Pause / Resume)."""
+        btn = getattr(self, 'btn_resume_sweep', None)
+        if btn is None:
+            return
+
+        if getattr(self, 'sweep_config', None) is None:
+            btn.setVisible(False)
+            return
+
+        # If sweep is armed but not started:
+        if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
+            btn.setText("Start Sweep")
+            btn.setToolTip("Start parametric sweep simulation across all scenarios")
+            btn.setStyleSheet(
+                "background-color: #f0fdf4; color: #15803d; font-weight: bold; "
+                "border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+            btn.setVisible(True)
+            return
+
+        # If sweep is running:
+        is_parallel_running = (
+            hasattr(self, 'parallel_sweep_worker')
+            and self.parallel_sweep_worker is not None
+            and self.parallel_sweep_worker.isRunning()
+            and not getattr(self, '_sweep_stopped', False)
+        )
+        is_sequential_running = (
+            getattr(self, 'is_sweep_active', False)
+            and getattr(self, 'sim_isRunning', False)
+            and not getattr(self, '_sweep_stopped', False)
+            and not getattr(self, '_sweep_paused_current', False)
+        )
+
+        if is_parallel_running or is_sequential_running:
+            btn.setText("Pause Sweep")
+            btn.setToolTip("Pause all scenarios in the active parametric sweep")
+            btn.setStyleSheet(
+                "background-color: #fef3c7; color: #b45309; font-weight: bold; "
+                "border: 1px solid #fde68a; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+            btn.setVisible(True)
+            return
+
+        # If sweep is paused / stopped:
+        btn.setText("Resume Sweep")
+        btn.setToolTip("Resume the parametric sweep simulation")
+        btn.setStyleSheet(
+            "background-color: #f0fdf4; color: #15803d; font-weight: bold; "
+            "border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        btn.setVisible(True)
+
+    def is_domain_ready_for_sweep(self):
+        """Check if domain has been built after configuring the sweep and has valid field data."""
+        if not getattr(self, '_sweep_domain_built', False):
+            return False
+        if not hasattr(self, 'sim') or not hasattr(self.sim, 'Ex') or self.sim.Ex is None or not np.any(self.sim.Ex):
+            return False
+        return True
+
+    def on_sweep_action_clicked(self):
+        """Handler for top-bar sweep action button (Start Sweep / Pause Sweep / Resume Sweep)."""
+        if getattr(self, 'sweep_config', None) is None:
+            return
+
+        # Case 1: Sweep is armed (not yet started)
+        if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
+            if not self.is_domain_ready_for_sweep():
+                if hasattr(self, 'lbl_status'):
+                    self.lbl_status.setText("Status: Attention: build domain first")
+                QMessageBox.warning(self, "Attention", "Attention: build domain first")
+                return
+            self.start_sweep(self.sweep_config)
+            self._update_sweep_action_button_state()
+            return
+
+        # Case 2: Sweep is actively running -> PAUSE it
+        is_parallel_running = (
+            hasattr(self, 'parallel_sweep_worker')
+            and self.parallel_sweep_worker is not None
+            and self.parallel_sweep_worker.isRunning()
+            and not getattr(self, '_sweep_stopped', False)
+        )
+        is_sequential_running = (
+            getattr(self, 'is_sweep_active', False)
+            and getattr(self, 'sim_isRunning', False)
+            and not getattr(self, '_sweep_stopped', False)
+            and not getattr(self, '_sweep_paused_current', False)
+        )
+
+        if is_parallel_running:
+            self._bg_live = None
+            self.parallel_sweep_worker.pause_all_scenarios()
+            self._sweep_stopped = True
+            self._pause_simulation_timer()
+            if hasattr(self, 'lbl_sweep_badge'):
+                self.lbl_sweep_badge.setText("⚡ Sweep mode paused")
+                self.lbl_sweep_badge.setStyleSheet(
+                    "background-color: #fef3c7; color: #b45309; font-weight: bold; "
+                    "border: 1px solid #fde68a; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+                )
+            if hasattr(self, 'btn_toggle'):
+                self.btn_toggle.setText("RESUME BEAM")
+            self._update_sweep_action_button_state()
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText("Status: Parallel sweep paused.")
+            return
+
+        if is_sequential_running:
+            self._bg_live = None
+            self.sim_isRunning = False
+            self._sweep_paused_current = True
+            self._sweep_stopped = True
+            if hasattr(self, '_sim_worker'):
+                self._sim_worker.pause()
+            self._pause_simulation_timer()
+            if hasattr(self, 'lbl_sweep_badge'):
+                self.lbl_sweep_badge.setText("⚡ Sweep mode paused")
+                self.lbl_sweep_badge.setStyleSheet(
+                    "background-color: #fef3c7; color: #b45309; font-weight: bold; "
+                    "border: 1px solid #fde68a; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+                )
+            if hasattr(self, 'btn_toggle'):
+                self.btn_toggle.setText("RESUME BEAM")
+            self.update_sim_status_badge("PAUSED")
+            self._update_sweep_action_button_state()
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText("Status: Sweep paused.")
+            return
+
+        # Case 3: Sweep was stopped or paused -> RESUME it
+        if hasattr(self, 'resume_sweep_with_selected'):
+            self.resume_sweep_with_selected()
+            self._update_sweep_action_button_state()
 
     def resume_sweep_with_selected(self):
         """Resume simulation / sweep with parameters from the selected scenario in combo_sweep_scenario."""
@@ -122,6 +263,7 @@ class SweepMixin:
         # Apply the selected scenario parameter value
         self._apply_sweep_value(param_id, selected_val)
         self.sweep_current_idx = cur_idx
+        self._bg_live = None
 
         # Case A: Parallel sweep worker running/paused
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning():
@@ -159,9 +301,8 @@ class SweepMixin:
                     "border: 1px solid #d8b4fe; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
                 )
             if hasattr(self, 'btn_stop_sweep'):
-                self.btn_stop_sweep.setVisible(True)
-            if hasattr(self, 'btn_resume_sweep'):
-                self.btn_resume_sweep.setVisible(False)
+                self.btn_stop_sweep.setVisible(False)
+            self._update_sweep_action_button_state()
             if hasattr(self, 'btn_exit_sweep'):
                 self.btn_exit_sweep.setVisible(True)
             if hasattr(self, 'btn_toggle'):
@@ -232,9 +373,8 @@ class SweepMixin:
                 f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {val_str} {param_unit}]"
             )
         if hasattr(self, 'btn_stop_sweep'):
-            self.btn_stop_sweep.setVisible(True)
-        if hasattr(self, 'btn_resume_sweep'):
-            self.btn_resume_sweep.setVisible(False)
+            self.btn_stop_sweep.setVisible(False)
+        self._update_sweep_action_button_state()
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(True)
 
@@ -257,8 +397,21 @@ class SweepMixin:
 
     def start_sweep(self, config):
         """Initialize and launch the multi-scenario sweep."""
+        if not self.is_domain_ready_for_sweep():
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText("Status: Attention: build domain first")
+            QMessageBox.warning(self, "Attention", "Attention: build domain first")
+            return
+
+        if hasattr(self, '_sim_worker') and self._sim_worker.isRunning():
+            self._sim_worker.stop(wait_ms=1000)
+        self.sim_isRunning = False
+        self._sweep_paused_current = False
+        self._sweep_stopped = False
+
         self.sweep_config = config
         self.sweep_results = []
+        self._sweep_status_dict = {}
         self.sweep_current_idx = 0
         self.is_sweep_active = True
         self.sweep_mode_armed = False
@@ -313,7 +466,7 @@ class SweepMixin:
                 f"⚡ Sweep mode active [1/{total_scenarios} | {first_val_str} {config['param_unit']}]"
             )
         if hasattr(self, 'btn_stop_sweep'):
-            self.btn_stop_sweep.setVisible(True)
+            self.btn_stop_sweep.setVisible(False)
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(True)
 
@@ -325,14 +478,18 @@ class SweepMixin:
         # Apply initial scenario value
         self._apply_sweep_value(config["param_id"], first_val)
 
-        # Build domain and start simulation
-        self.build_domain()
+        # Domain was built by the user before starting the sweep
         self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
 
         if not getattr(self, 'sim_isRunning', False):
-            self.toggle_sim()
+            self.sim.injection_enabled = True
+            self.sim_isRunning = True
+            self._resume_simulation_timer()
+            self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
+            self.update_sim_status_badge("RUNNING")
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("PAUSE BEAM")
+        self._update_sweep_action_button_state()
 
     def _start_parallel_sweep(self, config, n_cores):
         """Launch parallel multi-core sweep using ProcessPoolExecutor and top-bar scenario selector."""
@@ -342,9 +499,13 @@ class SweepMixin:
         total_scenarios = len(config.get("values", []))
         param_label = config.get("param_label", "Parameter")
 
-        # Pause live simulator if currently running
-        if getattr(self, 'sim_isRunning', False):
-            self.toggle_sim()
+        # Stop live single simulator if currently running
+        if hasattr(self, '_sim_worker') and self._sim_worker.isRunning():
+            self._sim_worker.stop(wait_ms=1000)
+        self.sim_isRunning = False
+        self._sweep_paused_current = False
+        self._sweep_stopped = False
+        self._sweep_status_dict = {}
         if hasattr(self, '_resume_simulation_timer'):
             self._resume_simulation_timer()
 
@@ -376,11 +537,12 @@ class SweepMixin:
             self.combo_sweep_scenario.setVisible(True)
 
         if hasattr(self, 'btn_stop_sweep'):
-            self.btn_stop_sweep.setVisible(True)
+            self.btn_stop_sweep.setVisible(False)
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(True)
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("PAUSE BEAM")
+        self._update_sweep_action_button_state()
 
         if hasattr(self, 'lbl_status'):
             self.lbl_status.setText(
@@ -391,7 +553,7 @@ class SweepMixin:
         self._sweep_base_params = copy.deepcopy(base_params)
         self._scenario_domain_cache = {}
         self._current_rendered_scenario_grid_idx = None
-        scatter_limit = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 100000))
+        scatter_limit = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 2000))
 
         self.parallel_sweep_worker = ParallelSweepWorker(
             config, base_params, n_cores=n_cores, scatter_limit=scatter_limit, parent=self
@@ -434,6 +596,14 @@ class SweepMixin:
             val = values[index]
             self._apply_sweep_value(param_id, val)
 
+        if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
+            if getattr(self, 'sim_isRunning', False):
+                if hasattr(self, '_sim_worker'):
+                    self._sim_worker.pause()
+                self.sim_isRunning = False
+                self._sweep_paused_current = True
+            self.sweep_current_idx = index
+
         # 2. Sync grid spinboxes from cached scenario domain data
         d_data = self._get_scenario_domain_data(scenario_idx)
         scenario_grids = d_data.get("grids", [])
@@ -459,6 +629,7 @@ class SweepMixin:
 
         # 5. Render snapshot on canvas
         self._render_sweep_scenario_snapshot(scenario_idx)
+        self._update_sweep_scenario_combo_items()
 
     def _update_sweep_scenario_combo_items(self):
         """Update top-bar scenario dropdown items with real-time status and iteration count."""
@@ -512,6 +683,10 @@ class SweepMixin:
                         elif getattr(self, 'is_sweep_active', False):
                             status = "running"
                             scen_iter = getattr(self.sim, 'iteration', 0)
+                        else:
+                            status = "queued"
+                    else:
+                        status = "queued"
 
                 val_str = (
                     format_sci_value(val)
@@ -622,7 +797,16 @@ class SweepMixin:
             return
 
         if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
-            self.btn_toggle.setText("2. START BEAM")
+            cur_seq_idx = getattr(self, 'sweep_current_idx', 0)
+            if (scenario_idx - 1) == cur_seq_idx:
+                if getattr(self, 'sim_isRunning', False):
+                    self.btn_toggle.setText("PAUSE BEAM")
+                elif getattr(self, '_sweep_paused_current', False):
+                    self.btn_toggle.setText("RESUME BEAM")
+                else:
+                    self.btn_toggle.setText("2. START BEAM")
+            else:
+                self.btn_toggle.setText("2. START BEAM")
             return
 
         if not getattr(self, 'is_sweep_active', False):
@@ -669,9 +853,9 @@ class SweepMixin:
                 if hasattr(self, '_resume_simulation_timer'):
                     self._resume_simulation_timer()
                 if hasattr(self, 'btn_stop_sweep'):
-                    self.btn_stop_sweep.setVisible(True)
-                if hasattr(self, 'btn_resume_sweep'):
-                    self.btn_resume_sweep.setVisible(False)
+                    self.btn_stop_sweep.setVisible(False)
+                if hasattr(self, '_update_sweep_action_button_state'):
+                    self._update_sweep_action_button_state()
                 if hasattr(self, 'btn_toggle'):
                     self.btn_toggle.setText("PAUSE BEAM")
                 if hasattr(self, 'lbl_status'):
@@ -792,6 +976,7 @@ class SweepMixin:
                 if hasattr(self, 'scat_elec') and self.scat_elec is not None:
                     self.scat_elec.set_zorder(5)
                 self._current_rendered_scenario_grid_idx = scenario_idx
+                self._bg_live = None
 
         if bound_xy is not None and hasattr(self, 'scat_dmg_bound') and self.scat_dmg_bound is not None:
             self.scat_dmg_bound.set_offsets(bound_xy)
@@ -805,7 +990,7 @@ class SweepMixin:
         elec_xy = info.get("elec_xy")
 
         # Respect active scatter_limit (None = hide all, 0 = all, N = max N)
-        scatter_lim = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 100000))
+        scatter_lim = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 2000))
         if scatter_lim is None:
             prim_xy = np.empty((0, 2), dtype=np.float32)
             cex_xy = np.empty((0, 2), dtype=np.float32)
@@ -963,8 +1148,39 @@ class SweepMixin:
             num_elec = len(elec_xy) if elec_xy is not None else 0
             self.lblPerfPtcls.setText(f"Display Ptcls (i/e): {num_pts:,} / {num_elec:,} | State: {status_tag}")
 
-        if hasattr(self, 'canvas'):
+        # Draw particles using blitting for animated scatter artists
+        if hasattr(self, 'canvas') and hasattr(self, 'ax_live'):
+            if getattr(self, '_bg_live', None) is None:
+                # Keep scatter artists animated so canvas.draw() renders a clean domain background without particles
+                for a in (getattr(self, 'scat_prim', None), getattr(self, 'scat_cex', None), getattr(self, 'scat_elec', None)):
+                    if a is not None:
+                        a.set_animated(True)
+                self.canvas.draw()
+                try:
+                    self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
+                except Exception:
+                    self._bg_live = None
+
+            bg = getattr(self, '_bg_live', None)
+            if bg is not None:
+                try:
+                    self.canvas.restore_region(bg)
+                    if hasattr(self, 'scat_prim') and self.scat_prim is not None:
+                        self.ax_live.draw_artist(self.scat_prim)
+                    if hasattr(self, 'scat_cex') and self.scat_cex is not None:
+                        self.ax_live.draw_artist(self.scat_cex)
+                    if hasattr(self, 'scat_elec') and self.scat_elec is not None:
+                        self.ax_live.draw_artist(self.scat_elec)
+                    self.canvas.blit(self.ax_live.bbox)
+                except Exception:
+                    self._bg_live = None
+                    self.canvas.draw_idle()
+            else:
+                self.canvas.draw_idle()
+        elif hasattr(self, 'canvas'):
             self.canvas.draw_idle()
+
+        QApplication.processEvents()
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
@@ -1305,14 +1521,20 @@ class SweepMixin:
             next_val = values[self.sweep_current_idx]
             self._apply_sweep_value(cfg["param_id"], next_val)
             was_running = getattr(self, 'sim_isRunning', False)
-            self.build_domain()
+            self.build_domain(force=True)
             self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
             self.sweep_scenario_start_wall_time = time.perf_counter()
             self._sweep_paused_current = False
             if was_running:
-                self.toggle_sim()
+                if not getattr(self, 'sim_isRunning', False):
+                    self.sim.injection_enabled = True
+                    self.sim_isRunning = True
+                    self._resume_simulation_timer()
+                    self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
+                    self.update_sim_status_badge("RUNNING")
             if hasattr(self, 'btn_toggle'):
                 self.btn_toggle.setText("PAUSE BEAM" if getattr(self, 'sim_isRunning', False) else "2. START BEAM")
+            self._update_sweep_action_button_state()
         else:
             self.finish_sweep()
 
@@ -1364,14 +1586,13 @@ class SweepMixin:
             )
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(False)
-        if hasattr(self, 'btn_resume_sweep'):
-            self.btn_resume_sweep.setVisible(True)
+        self._update_sweep_action_button_state()
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(True)
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("RESUME BEAM")
         if hasattr(self, 'lbl_status'):
-            self.lbl_status.setText("Parametric sweep stopped. Select a scenario and click 'Resume with Selected Parameters' or 'RESUME BEAM' to continue.")
+            self.lbl_status.setText("Parametric sweep stopped. Click 'Resume Sweep' or select a scenario to continue.")
 
         self._update_sweep_scenario_combo_items()
 
@@ -1401,8 +1622,7 @@ class SweepMixin:
             )
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(False)
-        if hasattr(self, 'btn_resume_sweep'):
-            self.btn_resume_sweep.setVisible(True)
+        self._update_sweep_action_button_state()
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(True)
         if hasattr(self, 'btn_toggle'):
@@ -1581,6 +1801,7 @@ class SweepMixin:
         self.sweep_mode_armed = False
         self._sweep_stopped = False
         self._sweep_paused_current = False
+        self._sweep_domain_built = False
         self.sim_isRunning = False
         self.sweep_config = None
         self.sweep_results = []
@@ -1597,6 +1818,11 @@ class SweepMixin:
             self.btn_resume_sweep.setVisible(False)
         if hasattr(self, 'btn_exit_sweep'):
             self.btn_exit_sweep.setVisible(False)
+        if hasattr(self, 'lbl_build_domain_info'):
+            self.lbl_build_domain_info.setVisible(False)
+        if hasattr(self, 'lbl_beam_info'):
+            self.lbl_beam_info.setVisible(False)
+        self._bg_live = None
 
         # 5. Restore normal simulation controls and badge
         if hasattr(self, 'btn_toggle'):

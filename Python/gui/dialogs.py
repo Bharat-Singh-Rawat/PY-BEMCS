@@ -359,7 +359,7 @@ class GUISettingsDialog(QDialog):
         custom_row.addStretch()
         scatter_layout.addLayout(custom_row)
 
-        # Default to Custom limit with 100000 particles
+        # Default to Custom limit with 2000 particles
         self._rb_custom.setChecked(True)
         self._rb_custom.toggled.connect(self._spin_custom.setEnabled)
         self._spin_custom.setEnabled(True)
@@ -402,12 +402,12 @@ class GUISettingsDialog(QDialog):
         app = self._app
         if app is None:
             self._rb_custom.setChecked(True)
-            self._spin_custom.setValue(100000)
+            self._spin_custom.setValue(2000)
             self._spin_diag_ms.setValue(500)
             return
 
         # Scatter limit
-        lim = getattr(app, 'scatter_limit', getattr(getattr(app, '_sim_worker', None), '_scatter_limit', 100000))
+        lim = getattr(app, 'scatter_limit', getattr(getattr(app, '_sim_worker', None), '_scatter_limit', 2000))
         if lim is None:
             self._rb_none.setChecked(True)
         elif lim == 0:

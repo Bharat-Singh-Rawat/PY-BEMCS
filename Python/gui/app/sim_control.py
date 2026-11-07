@@ -126,12 +126,6 @@ class SimControlMixin:
         return current_sig != last_sig
 
     def toggle_sim(self):
-        # If sweep was stopped, resume the whole sweep with selected scenario
-        if getattr(self, '_sweep_stopped', False) and getattr(self, 'sweep_config', None) is not None:
-            if hasattr(self, 'resume_sweep_with_selected'):
-                self.resume_sweep_with_selected()
-                return
-
         # If sweep is active or parallel worker is running, toggle pause/resume for the scenario selected from tent menu
         if getattr(self, 'is_sweep_active', False) or (hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning()):
             if hasattr(self, 'toggle_sweep_scenario_pause'):
@@ -144,68 +138,33 @@ class SimControlMixin:
 
         self._validate_neut_x()
 
-        # If sweep settings were saved and sweep is armed:
-        if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
-            self.sweep_mode_armed = False
-            self.is_sweep_active = True
-            self._sweep_paused_current = False
-            self.sweep_start_wall_time = time.perf_counter()
-            self.sweep_scenario_start_wall_time = time.perf_counter()
-            self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
-
-            cfg = getattr(self, 'sweep_config', {})
-            total_scenarios = len(cfg.get("values", []))
-            param_label = cfg.get("param_label", "Parameter")
-            param_id = cfg.get("param_id", "")
-            param_unit = cfg.get("param_unit", "")
-            cur_idx = getattr(self, 'sweep_current_idx', 0)
-            cur_val = cfg["values"][cur_idx] if total_scenarios > cur_idx else 0.0
-
-            try:
-                from ..dialogs import format_sci_value
-            except Exception:
-                from gui.dialogs import format_sci_value
-
-            cur_val_str = (
-                format_sci_value(cur_val)
-                if (param_id in ("n0_plasma", "n0") or abs(cur_val) >= 1e4 or (0 < abs(cur_val) <= 1e-3))
-                else f"{cur_val:.3g}"
-            )
-
-            if hasattr(self, 'lbl_sweep_badge'):
-                self.lbl_sweep_badge.setVisible(True)
-                self.lbl_sweep_badge.setText(
-                    f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {param_unit}]"
-                )
-            if hasattr(self, 'btn_stop_sweep'):
-                self.btn_stop_sweep.setVisible(True)
-            if hasattr(self, 'btn_resume_sweep'):
-                self.btn_resume_sweep.setVisible(True)
-            if hasattr(self, 'btn_exit_sweep'):
-                self.btn_exit_sweep.setVisible(True)
-            if hasattr(self, 'btn_toggle'):
-                self.btn_toggle.setText("PAUSE BEAM")
-
-            if cfg.get("parallel", False) and total_scenarios > 0:
-                n_cores = int(cfg.get("n_cores", 8))
-                self._start_parallel_sweep(cfg, n_cores)
-                return
-
         if not self.sim_isRunning:
             self.sim.injection_enabled = True
             self.sim_isRunning = True
             self._sweep_paused_current = False
             self._resume_simulation_timer()
             self.btn_toggle.setText("PAUSE BEAM")
+            self.update_sim_status_badge("RUNNING")
             self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
         else:
             self.sim_isRunning = False
+            self._sweep_paused_current = True
             self.btn_toggle.setText("RESUME BEAM")
             self._sim_worker.pause()
             self._pause_simulation_timer()
+            self.update_sim_status_badge("PAUSED")
         self.update_simulation_timer()
+        if hasattr(self, '_update_sweep_scenario_combo_items') and (getattr(self, 'sweep_mode_armed', False) or getattr(self, 'is_sweep_active', False)):
+            self._update_sweep_scenario_combo_items()
 
-    def build_domain(self):
+    def build_domain(self, force=False):
+        if not force and self.is_simulation_running():
+            msg = "Stop the sweep before building"
+            print(f"[Build Domain] {msg}")
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Status: {msg}")
+            QMessageBox.warning(self, "Warning", msg)
+            return
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
             worker = self.parallel_sweep_worker
             self.parallel_sweep_worker = None
@@ -216,6 +175,8 @@ class SimControlMixin:
                 pass
 
         self._sim_worker.stop(wait_ms=3000)
+        if hasattr(self, 'sim') and self.sim is not None:
+            self.sim._stop_requested = False
         self._sim_run_id = getattr(self, '_sim_run_id', 0) + 1
         self._pending_snap = None
         self._sim_worker._last_damage_version = -1
@@ -359,6 +320,37 @@ class SimControlMixin:
 
         self._built_params_snapshot = self._extract_domain_signature()
         self._sweep_paused_current = False
+        self._sweep_domain_built = True
+
+        is_sweep = getattr(self, 'sweep_mode_armed', False) or getattr(self, 'is_sweep_active', False)
+        if hasattr(self, 'lbl_build_domain_info'):
+            self.lbl_build_domain_info.setVisible(is_sweep)
+        if hasattr(self, 'lbl_beam_info'):
+            self.lbl_beam_info.setVisible(is_sweep)
+
+        if getattr(self, 'sweep_mode_armed', False) and hasattr(self, 'lbl_sweep_badge'):
+            cfg = getattr(self, 'sweep_config', {})
+            total_scenarios = len(cfg.get("values", []))
+            param_id = cfg.get("param_id", "")
+            param_unit = cfg.get("param_unit", "")
+            cur_idx = getattr(self, 'sweep_current_idx', 0)
+            values = cfg.get("values", [])
+            cur_val = values[cur_idx] if len(values) > cur_idx else 0.0
+            try:
+                from ..dialogs import format_sci_value
+            except Exception:
+                from gui.dialogs import format_sci_value
+            cur_val_str = (
+                format_sci_value(cur_val)
+                if (param_id in ("n0_plasma", "n0") or abs(cur_val) >= 1e4 or (0 < abs(cur_val) <= 1e-3))
+                else f"{cur_val:.3g}"
+            )
+            self.lbl_sweep_badge.setVisible(True)
+            self.lbl_sweep_badge.setText(
+                f"⚡ Sweep mode armed [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {param_unit}]"
+            )
+            if hasattr(self, '_update_sweep_action_button_state'):
+                self._update_sweep_action_button_state()
 
     def _on_worker_finished(self):
         """Called when the SimulationWorker thread exits its run loop."""

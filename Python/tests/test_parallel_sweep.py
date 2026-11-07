@@ -205,8 +205,7 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
 
     def tearDown(self):
         if hasattr(self.win, '_sim_worker') and self.win._sim_worker.isRunning():
-            self.win._sim_worker.pause()
-            self.win._sim_worker.wait(2000)
+            self.win._sim_worker.stop(wait_ms=1000)
         if hasattr(self.win, 'parallel_sweep_worker') and self.win.parallel_sweep_worker is not None:
             if self.win.parallel_sweep_worker.isRunning():
                 self.win.parallel_sweep_worker.cancel()
@@ -228,56 +227,59 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
         }
 
         self.win.build_domain()
-        self.win.start_sweep(cfg)
-        self.assertTrue(self.win.is_sweep_active)
-        self.assertIsNotNone(self.win.parallel_sweep_worker)
-        self.assertIsNotNone(self.win.combo_sweep_scenario)
-        self.assertFalse(self.win.combo_sweep_scenario.isHidden())
-        self.assertEqual(self.win.combo_sweep_scenario.count(), 2)
-        self.assertFalse(self.win.lbl_sweep_badge.isHidden())
-        self.assertIn("Parallel Sweep", self.win.lbl_sweep_badge.text())
+        with patch.object(ParallelSweepWorker, "start"), \
+             patch.object(ParallelSweepWorker, "isRunning", return_value=True):
+            self.win.start_sweep(cfg)
+            self.assertTrue(self.win.is_sweep_active)
+            self.assertIsNotNone(self.win.parallel_sweep_worker)
+            self.assertIsNotNone(self.win.combo_sweep_scenario)
+            self.assertFalse(self.win.combo_sweep_scenario.isHidden())
+            self.assertEqual(self.win.combo_sweep_scenario.count(), 2)
+            self.assertFalse(self.win.lbl_sweep_badge.isHidden())
+            self.assertIn("Parallel Sweep", self.win.lbl_sweep_badge.text())
 
-        # Test stop sweep pauses scenarios and keeps worker ready for resume
-        self.win.stop_sweep()
-        self.assertFalse(self.win.is_sweep_active)
-        self.assertTrue(self.win._sweep_stopped)
-        self.assertIsNotNone(self.win.parallel_sweep_worker)
-        self.assertTrue(self.win.parallel_sweep_worker.is_scenario_paused(1))
-        self.assertTrue(self.win.parallel_sweep_worker.is_scenario_paused(2))
-        self.assertEqual(self.win.lbl_sweep_badge.text(), "Sweep mode stopped")
-        self.assertFalse(self.win.btn_resume_sweep.isHidden())
-        self.assertEqual(self.win.btn_toggle.text(), "RESUME BEAM")
-        self.assertIn("Paused", self.win.combo_sweep_scenario.itemText(0))
-        self.assertIn("Paused", self.win.combo_sweep_scenario.itemText(1))
+            # Test stop sweep pauses scenarios and keeps worker ready for resume
+            self.win.stop_sweep()
+            self.assertFalse(self.win.is_sweep_active)
+            self.assertTrue(self.win._sweep_stopped)
+            self.assertIsNotNone(self.win.parallel_sweep_worker)
+            self.assertTrue(self.win.parallel_sweep_worker.is_scenario_paused(1))
+            self.assertTrue(self.win.parallel_sweep_worker.is_scenario_paused(2))
+            self.assertEqual(self.win.lbl_sweep_badge.text(), "Sweep mode stopped")
+            self.assertFalse(self.win.btn_resume_sweep.isHidden())
+            self.assertEqual(self.win.btn_toggle.text(), "RESUME BEAM")
+            self.assertIn("Paused", self.win.combo_sweep_scenario.itemText(0))
+            self.assertIn("Paused", self.win.combo_sweep_scenario.itemText(1))
 
-        # Test resume via RESUME BEAM button (toggle_sim)
-        self.win.toggle_sim()
-        self.assertTrue(self.win.is_sweep_active)
-        self.assertFalse(self.win._sweep_stopped)
-        self.assertTrue(self.win.btn_resume_sweep.isHidden())
-        self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
-        self.assertFalse(self.win.btn_stop_sweep.isHidden())
-        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(1))
-        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(2))
-        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(0))
-        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(1))
+            # Test resume via top-bar action button (on_sweep_action_clicked)
+            self.win.on_sweep_action_clicked()
+            self.assertTrue(self.win.is_sweep_active)
+            self.assertFalse(self.win._sweep_stopped)
+            self.assertEqual(self.win.btn_resume_sweep.text(), "Pause Sweep")
+            self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
+            self.assertTrue(self.win.btn_stop_sweep.isHidden())
+            self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(1))
+            self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(2))
+            self.assertIn("Running", self.win.combo_sweep_scenario.itemText(0))
+            self.assertIn("Running", self.win.combo_sweep_scenario.itemText(1))
 
-        # Test stop again and resume via resume_sweep_with_selected
-        self.win.stop_sweep()
-        self.assertTrue(self.win._sweep_stopped)
-        self.assertFalse(self.win.btn_resume_sweep.isHidden())
-        self.win.resume_sweep_with_selected()
-        self.assertTrue(self.win.is_sweep_active)
-        self.assertFalse(self.win._sweep_stopped)
-        self.assertTrue(self.win.btn_resume_sweep.isHidden())
-        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(1))
-        self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(2))
-        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(0))
-        self.assertIn("Running", self.win.combo_sweep_scenario.itemText(1))
+            # Test stop again and resume via resume_sweep_with_selected
+            self.win.stop_sweep()
+            self.assertTrue(self.win._sweep_stopped)
+            self.assertEqual(self.win.btn_resume_sweep.text(), "Resume Sweep")
+            self.assertFalse(self.win.btn_resume_sweep.isHidden())
+            self.win.resume_sweep_with_selected()
+            self.assertTrue(self.win.is_sweep_active)
+            self.assertFalse(self.win._sweep_stopped)
+            self.assertEqual(self.win.btn_resume_sweep.text(), "Pause Sweep")
+            self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(1))
+            self.assertFalse(self.win.parallel_sweep_worker.is_scenario_paused(2))
+            self.assertIn("Running", self.win.combo_sweep_scenario.itemText(0))
+            self.assertIn("Running", self.win.combo_sweep_scenario.itemText(1))
 
-        # Test exit sweep cleans up worker
-        self.win.exit_sweep(confirm_choice="no")
-        self.assertIsNone(self.win.parallel_sweep_worker)
+            # Test exit sweep cleans up worker
+            self.win.exit_sweep(confirm_choice="no")
+            self.assertIsNone(self.win.parallel_sweep_worker)
 
     def test_scenario_dropdown_switch_updates_canvas(self):
         cfg = {
@@ -293,7 +295,8 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
             "min_iterations": 10,
         }
         self.win.build_domain()
-        self.win.start_sweep(cfg)
+        with patch.object(ParallelSweepWorker, "start"):
+            self.win.start_sweep(cfg)
         self.assertEqual(self.win.combo_sweep_scenario.count(), 3)
 
         # Manually inject mock scenario status

@@ -138,6 +138,7 @@ class DomainMixin:
                 self.laplacian_lu_gpu = None
 
     def build_domain(self, params, preserve_state=False):
+        self._stop_requested = False
         grids   = params.get("grids", [])
         if grids:
             total_grid_thickness = sum(g['t'] + g['gap'] for g in grids)

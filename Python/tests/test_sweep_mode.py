@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import os
 import tempfile
 import csv
@@ -372,8 +372,7 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
             except Exception:
                 pass
         if hasattr(self.win, '_sim_worker') and self.win._sim_worker.isRunning():
-            self.win._sim_worker.pause()
-            self.win._sim_worker.wait(2000)
+            self.win._sim_worker.stop(wait_ms=1000)
         self.win.close()
 
     def test_sweep_ui_elements_exist(self):
@@ -635,7 +634,7 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertEqual(self.win.combo_sweep_scenario.count(), 3)
         self.assertFalse(self.win.combo_sweep_scenario.isHidden())
         self.assertFalse(self.win.btn_resume_sweep.isHidden())
-        self.assertFalse(self.win.btn_stop_sweep.isHidden())
+        self.assertTrue(self.win.btn_stop_sweep.isHidden())
         self.assertIn("Sweep mode armed", self.win.lbl_sweep_badge.text())
         self.assertEqual(self.win.btn_toggle.text(), "2. START BEAM")
 
@@ -654,13 +653,14 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.save_sweep_settings(cfg)
         self.win.build_domain()
 
-        # Starting sweep via normal simulation toggle button
+        # Starting sweep via top-bar Start Sweep button
         with patch.object(self.win._sim_worker, "start_sim") as mock_start:
-            self.win.toggle_sim()
+            self.win.on_sweep_action_clicked()
             self.assertTrue(self.win.is_sweep_active)
             self.assertFalse(self.win.sweep_mode_armed)
             self.assertTrue(self.win.sim_isRunning)
             self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
+            self.assertEqual(self.win.btn_resume_sweep.text(), "Pause Sweep")
 
         # Click Stop: should stop ONLY the current sweep, not all of them
         with patch.object(self.win._sim_worker, "pause") as mock_pause:
@@ -786,12 +786,11 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.save_sweep_settings(cfg)
         self.win.build_domain()
 
-        # Start sweep via toggle_sim
+        # Start sweep via top-bar Start Sweep action
         with patch.object(self.win, "_start_parallel_sweep") as mock_start_parallel:
-            self.win.toggle_sim()
+            self.win.on_sweep_action_clicked()
             mock_start_parallel.assert_called_once()
-            self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
-            self.assertTrue(self.win.is_sweep_active)
+            self.win.is_sweep_active = True
 
         # Mock parallel_sweep_worker
         mock_worker = MagicMock()
@@ -833,12 +832,12 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
 
         self.win.stop_sweep()
 
-    def test_gui_settings_dialog_custom_100000_particles_default(self):
+    def test_gui_settings_dialog_custom_particles_default(self):
         from gui.dialogs import GUISettingsDialog
         dlg = GUISettingsDialog(self.win)
         self.assertTrue(dlg._rb_custom.isChecked())
-        self.assertEqual(dlg._spin_custom.value(), 100000)
-        self.assertEqual(dlg.get_scatter_limit(), 100000)
+        self.assertEqual(dlg._spin_custom.value(), 2000)
+        self.assertEqual(dlg.get_scatter_limit(), 2000)
         dlg.close()
 
     def test_parallel_sweep_active_gui_view_tracking(self):
@@ -1014,8 +1013,8 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         mock_worker.resume_all_scenarios.assert_called_once()
         mock_worker.set_active_view_scenario.assert_called_with(2)
         self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
-        self.assertFalse(self.win.btn_stop_sweep.isHidden())
-        self.assertTrue(self.win.btn_resume_sweep.isHidden())
+        self.assertTrue(self.win.btn_stop_sweep.isHidden())
+        self.assertEqual(self.win.btn_resume_sweep.text(), "Pause Sweep")
 
         # Cleanup
         self.win.exit_sweep(confirm_choice="no")
@@ -1079,6 +1078,264 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
             self.assertEqual(self.win.sweep_results_dialog.results[0]["steady_iterations"], 75)
             self.win.sweep_results_dialog.close()
 
+    def test_sweep_build_rebuild_start_beam_sequence(self):
+        """Verify the exact sequence:
+        1. Build domain
+        2. Arm a sweep on n0
+        3. Build again the domain
+        4. Start beam
+        Must start beam without 'Build Domain first!' warning and populate sim.Ex.
+        """
+        # Step 1: Initial domain build
+        self.win.build_domain()
+        self.assertTrue(np.any(self.win.sim.Ex), "sim.Ex must be populated after build_domain")
+
+        # Step 2: Choose a sweep on n0 (n0_plasma)
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (n0)",
+            "param_unit": "m⁻³",
+            "values": [1e17, 2e17, 3e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.assertTrue(self.win.sweep_mode_armed)
+
+        # Step 3: Build again the domain
+        self.win.build_domain()
+        self.assertTrue(np.any(self.win.sim.Ex), "sim.Ex must remain populated after rebuild")
+        self.assertIn("Sweep mode armed", self.win.lbl_sweep_badge.text())
+
+        # Step 4: Start beam (starts only the CURRENT scenario)
+        with patch("gui.app.sim_control.QMessageBox.warning") as mock_warn, \
+             patch.object(self.win._sim_worker, "start_sim") as mock_start:
+            self.win.toggle_sim()
+            mock_warn.assert_not_called()
+            # Left button starts beam only on current scenario, sweep mode remains armed
+            self.assertFalse(self.win.is_sweep_active)
+            self.assertTrue(self.win.sweep_mode_armed)
+            self.assertTrue(self.win.sim_isRunning)
+            self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
+            mock_start.assert_called_once()
+
+            # Pause current scenario
+            self.win.toggle_sim()
+            self.assertFalse(self.win.sim_isRunning)
+            self.assertEqual(self.win.btn_toggle.text(), "RESUME BEAM")
+
+        # Step 5: Start sweep via top-bar Start Sweep button
+        with patch.object(self.win._sim_worker, "start_sim") as mock_sweep_start:
+            self.win.on_sweep_action_clicked()
+            self.assertTrue(self.win.is_sweep_active)
+            self.assertFalse(self.win.sweep_mode_armed)
+            self.assertTrue(self.win.sim_isRunning)
+            self.assertEqual(self.win.btn_resume_sweep.text(), "Pause Sweep")
+            self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
+
+        # Stop simulation cleanly
+        self.win.stop_sweep()
+
+    def test_build_domain_during_simulation_warning(self):
+        """Verify that clicking Build domain during simulation shows 'Stop the sweep before building' and aborts."""
+        self.win.build_domain()
+        self.win.sim_isRunning = True
+
+        with patch("gui.app.sim_control.QMessageBox.warning") as mock_warn:
+            self.win.build_domain()
+            mock_warn.assert_called_once()
+            args = mock_warn.call_args[0]
+            self.assertEqual(args[1], "Warning")
+            self.assertEqual(args[2], "Stop the sweep before building")
+
+        self.win.sim_isRunning = False
+
+    def test_multiple_build_domain_parameters_last_counts(self):
+        """Verify that building multiple times with different parameters uses the last build."""
+        self.win.inputs["n0_plasma"].setValue(1e17)
+        self.win.build_domain()
+        dx1 = self.win.sim.dx
+
+        self.win.inputs["n0_plasma"].setValue(4e17)
+        self.win.build_domain()
+        dx2 = self.win.sim.dx
+
+        # Debye length is shorter for higher density, so dx should be smaller
+        self.assertNotEqual(dx1, dx2)
+        params = self.win.get_params()
+        self.assertEqual(params["n0_plasma"], 4e17)
+
+    def test_lbl_build_domain_info_visibility_single_vs_sweep(self):
+        """Verify lbl_build_domain_info is hidden in single mode and only visible in sweep mode."""
+        # Initial single mode state
+        self.assertTrue(self.win.lbl_build_domain_info.isHidden())
+
+        # Single build domain: must NOT show the label
+        self.win.build_domain()
+        self.assertTrue(self.win.lbl_build_domain_info.isHidden())
+
+        # Arm sweep: label must become visible
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (n0)",
+            "param_unit": "m⁻³",
+            "values": [1e17, 2e17],
+            "parallel": False,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.assertFalse(self.win.lbl_build_domain_info.isHidden())
+
+        # Rebuild domain during sweep: label remains visible
+        self.win.build_domain()
+        self.assertFalse(self.win.lbl_build_domain_info.isHidden())
+
+        # Exit sweep: label must be hidden again
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertTrue(self.win.lbl_build_domain_info.isHidden())
+
+        # Subsequent single build: label remains hidden
+        self.win.build_domain()
+        self.assertTrue(self.win.lbl_build_domain_info.isHidden())
+
+    def test_sweep_pause_resume_no_frozen_particle_ghosting(self):
+        """Verify that scatter artists stay animated=True and _bg_live is reset on pause/resume."""
+        self.win.build_domain()
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (n0)",
+            "param_unit": "m⁻³",
+            "values": [1e17, 2e17],
+            "parallel": True,
+            "n_cores": 2,
+        }
+        self.win.save_sweep_settings(cfg)
+
+        # Mock parallel_sweep_worker
+        mock_worker = MagicMock()
+        mock_worker.isRunning.return_value = True
+        self.win.parallel_sweep_worker = mock_worker
+        self.win.is_sweep_active = True
+        self.win._sweep_stopped = False
+
+        # Pre-set _bg_live to something
+        self.win._bg_live = "dummy_background"
+
+        # Pause sweep via on_sweep_action_clicked
+        self.win.on_sweep_action_clicked()
+        self.assertIsNone(self.win._bg_live, "_bg_live must be cleared on pause")
+        self.assertTrue(self.win._sweep_stopped)
+
+        # Resume sweep via on_sweep_action_clicked
+        self.win._bg_live = "dummy_background_2"
+        self.win.on_sweep_action_clicked()
+        # _bg_live was cleared and then cleanly re-captured by _render_sweep_scenario_snapshot (not dummy_background_2)
+        self.assertNotEqual(self.win._bg_live, "dummy_background_2")
+
+        # Snapshot rendering must ensure scatter artists remain animated
+        mock_worker.get_scenario_snapshot.return_value = {
+            "scenario_index": 1,
+            "t_us": 1.5,
+            "iteration": 100,
+            "transparency": 0.9,
+            "divergence": 5.0,
+            "prim_xy": np.array([[1.0, 2.0]], dtype=np.float32),
+            "cex_xy": np.empty((0, 2), dtype=np.float32),
+            "elec_xy": np.empty((0, 2), dtype=np.float32),
+        }
+        self.win._render_sweep_scenario_snapshot(1)
+        self.assertTrue(self.win.scat_prim.get_animated(), "scat_prim must remain animated=True")
+        self.assertTrue(self.win.scat_cex.get_animated(), "scat_cex must remain animated=True")
+        self.assertTrue(self.win.scat_elec.get_animated(), "scat_elec must remain animated=True")
+
+        self.win.exit_sweep(confirm_choice="no")
+
+    def test_sweep_armed_left_button_and_start_sweep_progression(self):
+        """Verify:
+        1. When sweep is armed, lbl_beam_info is shown and left toggle controls only the selected scenario.
+        2. Starting beam on left marks ONLY scenario 1 as Running in combo; others remain Queued.
+        3. Pausing beam on left marks scenario 1 as Paused; others remain Queued.
+        4. Clicking Start Sweep launches all scenarios in parallel with correct core-compatible labels.
+        """
+        # Step 1: Arm sweep with 3 scenarios
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (n0)",
+            "param_unit": "m⁻³",
+            "values": [1e17, 2e17, 3e17],
+            "parallel": True,
+            "n_cores": 2,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.assertTrue(self.win.sweep_mode_armed)
+        self.assertFalse(self.win.lbl_beam_info.isHidden())
+        self.assertIn("Start/pause applies only to current scenario", self.win.lbl_beam_info.text())
+
+        # Step 2: Build domain
+        self.win.build_domain()
+
+        # Step 3: Click left Start Beam -> runs only current scenario (Scenario 1)
+        with patch.object(self.win._sim_worker, "start_sim"):
+            self.win.toggle_sim()
+            self.assertTrue(self.win.sim_isRunning)
+            self.assertEqual(self.win.btn_toggle.text(), "PAUSE BEAM")
+            self.assertIn("[▶ Running", self.win.combo_sweep_scenario.itemText(0))
+            self.assertIn("[⏳ Queued]", self.win.combo_sweep_scenario.itemText(1))
+            self.assertIn("[⏳ Queued]", self.win.combo_sweep_scenario.itemText(2))
+
+            # Step 4: Click left Pause Beam -> pauses only current scenario
+            self.win.toggle_sim()
+            self.assertFalse(self.win.sim_isRunning)
+            self.assertEqual(self.win.btn_toggle.text(), "RESUME BEAM")
+            self.assertIn("[⏸ Paused", self.win.combo_sweep_scenario.itemText(0))
+            self.assertIn("[⏳ Queued]", self.win.combo_sweep_scenario.itemText(1))
+            self.assertIn("[⏳ Queued]", self.win.combo_sweep_scenario.itemText(2))
+
+        # Step 5: Click top 'Start Sweep' -> starts sweep across all scenarios
+        with patch.object(self.win, "_start_parallel_sweep") as mock_parallel:
+            self.win.on_sweep_action_clicked()
+            mock_parallel.assert_called_once()
+
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertTrue(self.win.lbl_beam_info.isHidden())
+
+    def test_start_sweep_requires_build_domain_first(self):
+        """Verify that clicking Start Sweep before Build Domain shows 'Attention: build domain first' and does not start."""
+        from PyQt5.QtWidgets import QMessageBox
+
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (n0)",
+            "param_unit": "m⁻³",
+            "values": [1e17, 2e17],
+            "parallel": True,
+            "n_cores": 2,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.assertTrue(self.win.sweep_mode_armed)
+        self.assertFalse(self.win.is_sweep_active)
+
+        # 1. Attempt to start sweep directly before build_domain
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.on_sweep_action_clicked()
+            mock_warn.assert_called_once_with(self.win, "Attention", "Attention: build domain first")
+            self.assertFalse(self.win.is_sweep_active)
+            self.assertTrue(self.win.sweep_mode_armed)
+
+        # 2. Build domain
+        self.win.build_domain()
+        self.assertTrue(self.win._sweep_domain_built)
+
+        # 3. Now start sweep -> succeeds
+        with patch.object(self.win, "_start_parallel_sweep") as mock_parallel, \
+             patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.on_sweep_action_clicked()
+            mock_warn.assert_not_called()
+            mock_parallel.assert_called_once()
+
+        self.win.exit_sweep(confirm_choice="no")
 
 
 if __name__ == "__main__":

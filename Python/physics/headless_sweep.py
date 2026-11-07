@@ -325,7 +325,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         div_mid_hist.append(div_m)
         ebs_hist.append(min_pot_c)
 
-        if (status_dict is not None or state_file is not None) and scenario_iters % 10 == 0:
+        if (status_dict is not None or state_file is not None) and (scenario_iters % 10 == 0 or scenario_iters <= 5):
             # Check if this scenario is currently being viewed in the GUI
             is_active_view = True
             if active_view_file and os.path.exists(active_view_file):

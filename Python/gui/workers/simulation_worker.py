@@ -40,14 +40,14 @@ class SimulationWorker(QThread):
     """
 
     # Maximum particles sent to scatter plots when no runtime override is active
-    MAX_SCATTER = 100000
+    MAX_SCATTER = 2000
 
     # Runtime scatter limit — set by the GUI Settings dialog:
     #   None  -> hide all particles (display nothing)
     #   0     -> no limit (show every particle, capped at 100k for blitted display)
     #   N > 0 -> show at most N particles (randomly subsampled)
     # When _scatter_limit is not set it falls back to MAX_SCATTER.
-    _scatter_limit: "int | None | 'all'" = 100000
+    _scatter_limit: "int | None | 'all'" = 2000
 
     # Signal carries a dict with ALL snapshot data for the GUI update
     step_done = pyqtSignal(dict)
@@ -347,7 +347,11 @@ class SimulationWorker(QThread):
             now = time.perf_counter()
             with self._lock:
                 is_running = self._running
-            should_emit_snap = (now - self._last_snap_time >= self._min_snap_interval) or (not is_running) or remeshed
+
+            # Dynamically adapt snapshot rate to match GUI rendering speed
+            last_gui_ms = float(params.get('_last_gui_ms', 20.0))
+            eff_snap_interval = max(self._min_snap_interval, (last_gui_ms * 1.1) / 1000.0)
+            should_emit_snap = (now - self._last_snap_time >= eff_snap_interval) or (not is_running) or remeshed
 
             if should_emit_snap:
                 self._last_snap_time = now
