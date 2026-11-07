@@ -1182,7 +1182,10 @@ class SweepMixin:
 
         # 4. Update PPC Window for the selected scenario if open
         if getattr(self, 'ppc_window', None) and self.ppc_window.isVisible():
-            self._update_ppc_window_for_scenario(scenario_idx, info)
+            try:
+                self._update_ppc_window_for_scenario(scenario_idx, info)
+            except Exception as exc:
+                print(f"[PPC Snapshot Update Error] {exc}")
 
         QApplication.processEvents()
 
@@ -1193,34 +1196,64 @@ class SweepMixin:
         if not hasattr(self, 'sim') or self.sim is None:
             return
 
-        ppc_map = info.get("current_ppc_map")
-        accum_map = info.get("accum_ppc_map")
-        ppc_steps = info.get("ppc_steps_count")
-        scenario_iter = info.get("iter", 0)
+        try:
+            # Sync domain geometry and mesh grids from cached scenario data to ensure dimensions match
+            d_data = self._get_scenario_domain_data(scenario_idx)
+            if d_data:
+                if d_data.get("X") is not None and d_data.get("Y") is not None:
+                    self.sim.X = d_data["X"]
+                    self.sim.Y = d_data["Y"]
+                    self.sim.nx = d_data["X"].shape[1]
+                    self.sim.ny = d_data["X"].shape[0]
+                if d_data.get("Lx") is not None:
+                    self.sim.Lx = float(d_data["Lx"])
+                if d_data.get("Ly") is not None:
+                    self.sim.Ly = float(d_data["Ly"])
 
-        if ppc_map is not None:
-            self.sim.current_ppc_map = ppc_map
-        elif scenario_iter == 0:
-            self.sim.current_ppc_map = np.zeros((self.sim.ny, self.sim.nx), dtype=int)
+            cur_ny = getattr(self.sim, 'ny', 1) or 1
+            cur_nx = getattr(self.sim, 'nx', 1) or 1
 
-        if accum_map is not None:
-            self.sim.accum_ppc_map = accum_map
-        elif scenario_iter == 0:
-            self.sim.accum_ppc_map = np.zeros((self.sim.ny, self.sim.nx), dtype=float)
+            ppc_map = info.get("current_ppc_map")
+            accum_map = info.get("accum_ppc_map")
+            ppc_steps = info.get("ppc_steps_count")
+            scenario_iter = info.get("iter", 0)
 
-        if ppc_steps is not None:
-            self.sim.ppc_steps_count = ppc_steps
-        elif scenario_iter == 0:
-            self.sim.ppc_steps_count = 0
+            # If ppc_map is provided from worker/snapshot, its shape is the true scenario shape
+            if ppc_map is not None and hasattr(ppc_map, 'shape') and len(ppc_map.shape) == 2:
+                cur_ny, cur_nx = ppc_map.shape
+                self.sim.ny = cur_ny
+                self.sim.nx = cur_nx
+                self.sim.current_ppc_map = ppc_map
+            else:
+                self.sim.current_ppc_map = np.zeros((cur_ny, cur_nx), dtype=int)
 
-        if scenario_iter > 0:
-            self.sim.iteration = scenario_iter
+            if accum_map is not None and getattr(accum_map, 'shape', None) == (cur_ny, cur_nx):
+                self.sim.accum_ppc_map = accum_map
+            else:
+                self.sim.accum_ppc_map = self.sim.current_ppc_map.astype(float)
 
-        param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
-        param_val = info.get("parameter_value", "")
-        param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
-        self.ppc_window.setWindowTitle(f"Macroparticle Distribution per Cell (PPC) — Scenario {scenario_idx}{param_str}")
-        self.ppc_window.update_plot(self.sim)
+            # Guarantee that X and Y match (cur_ny, cur_nx)
+            if (
+                not hasattr(self.sim, 'X')
+                or self.sim.X is None
+                or not hasattr(self.sim, 'Y')
+                or self.sim.Y is None
+                or self.sim.X.shape != (cur_ny, cur_nx)
+            ):
+                x_c = np.linspace(0, self.sim.Lx, cur_nx)
+                y_c = np.linspace(0, self.sim.Ly, cur_ny)
+                self.sim.X, self.sim.Y = np.meshgrid(x_c, y_c)
+
+            self.sim.ppc_steps_count = int(ppc_steps) if ppc_steps is not None else 0
+            self.sim.iteration = int(scenario_iter) if scenario_iter is not None else 0
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.ppc_window.setWindowTitle(f"Macroparticle Distribution per Cell (PPC) — Scenario {scenario_idx}{param_str}")
+            self.ppc_window.update_plot(self.sim)
+        except Exception as exc:
+            print(f"[PPC Window Warning] Error updating PPC plot for scenario {scenario_idx}: {exc}")
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):

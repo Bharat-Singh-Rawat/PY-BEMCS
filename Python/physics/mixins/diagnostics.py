@@ -18,11 +18,13 @@ class DiagnosticsMixin:
 
     def get_avg_ppc_map(self):
         """Returns the time-averaged 2D PPC map across accumulated steps."""
-        if hasattr(self, 'accum_ppc_map') and self.ppc_steps_count > 0:
+        if hasattr(self, 'accum_ppc_map') and self.accum_ppc_map is not None and getattr(self, 'ppc_steps_count', 0) > 0:
             return self.accum_ppc_map / float(self.ppc_steps_count)
-        if hasattr(self, 'current_ppc_map'):
+        if hasattr(self, 'current_ppc_map') and self.current_ppc_map is not None:
             return self.current_ppc_map.astype(np.float64)
-        return np.zeros((self.ny, self.nx), dtype=np.float64)
+        ny = int(getattr(self, 'ny', 1) or 1)
+        nx = int(getattr(self, 'nx', 1) or 1)
+        return np.zeros((ny, nx), dtype=np.float64)
 
     def get_density_map(self, species: str = 'ions') -> np.ndarray:
         """

@@ -110,6 +110,9 @@ class ParallelSweepWorker(QThread):
                 "div_history": [],
                 "div_mid_history": [],
                 "ebs_history": [],
+                "current_ppc_map": None,
+                "accum_ppc_map": None,
+                "ppc_steps_count": 0,
             }
             self.final_status_dict[scen_num] = init_st
             write_scenario_state(sf, init_st)

@@ -1402,7 +1402,27 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertIn("Active Cells: 25", self.win.ppc_window.lbl_stats.text())
         self.assertIn("Low PPC (< 3): 25 (100.0%)", self.win.ppc_window.lbl_stats.text())
 
-        # 3. Clean exit
+        # 3. Simulate user closing PPC window, switching scenario, then re-opening
+        self.win.ppc_window.close()
+        self.assertFalse(self.win.ppc_window.isVisible())
+
+        # Switch to scenario 1
+        self.win.combo_sweep_scenario.setCurrentIndex(0)
+
+        # User re-opens PPC window
+        self.win.open_ppc_window()
+        self.assertTrue(self.win.ppc_window.isVisible())
+        self.assertIn("Scenario 1", self.win.ppc_window.windowTitle())
+        self.assertIn("Active Cells: 100", self.win.ppc_window.lbl_stats.text())
+
+        # Mode switching works without crash
+        self.win.ppc_window.combo_mode.setCurrentIndex(1)  # Instantaneous
+        self.assertIn("Active Cells: 100", self.win.ppc_window.lbl_stats.text())
+        self.win.ppc_window.combo_mode.setCurrentIndex(2)  # Low PPC Mask
+        self.assertIn("Active Cells: 100", self.win.ppc_window.lbl_stats.text())
+        self.win.ppc_window.combo_mode.setCurrentIndex(0)  # Time-Averaged
+
+        # 4. Clean exit
         self.win.ppc_window.close()
         self.win.exit_sweep(confirm_choice="no")
 

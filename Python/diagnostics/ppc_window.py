@@ -172,10 +172,12 @@ class PPCWindow(QWidget):
             raw_ppc = sim.get_avg_ppc_map()
             title = f"Time-Averaged PPC — {getattr(sim, 'ppc_steps_count', 0)} steps"
         elif "Instantaneous" in mode:
-            raw_ppc = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx))).astype(float)
+            cur_map = getattr(sim, 'current_ppc_map', None)
+            raw_ppc = cur_map.astype(float) if cur_map is not None else np.zeros((sim.ny, sim.nx), dtype=float)
             title = f"Instantaneous PPC — Step {sim.iteration}"
         else:
-            raw_ppc = getattr(sim, 'current_ppc_map', np.zeros((sim.ny, sim.nx))).astype(float)
+            cur_map = getattr(sim, 'current_ppc_map', None)
+            raw_ppc = cur_map.astype(float) if cur_map is not None else np.zeros((sim.ny, sim.nx), dtype=float)
             title = f"Low PPC Warning Mask (< {thresh} particles/cell) — Step {sim.iteration}"
 
         # True active and low PPC masks based on actual particle numbers
@@ -240,7 +242,7 @@ class PPCWindow(QWidget):
 
             cmap = ListedColormap(['#eef1f6', '#2ca02c', '#d62728'])
             norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
-            if X is not None and Y is not None:
+            if X is not None and Y is not None and getattr(X, 'shape', None) == getattr(cat_map, 'shape', None):
                 im = self.ax.pcolormesh(X, Y, cat_map, cmap=cmap, norm=norm, shading='nearest')
             else:
                 extent = [0, sim.Lx, 0, sim.Ly]
@@ -248,7 +250,7 @@ class PPCWindow(QWidget):
                                     cmap=cmap, norm=norm, aspect='auto')
         else:
             vmax = max(10.0, float(np.percentile(raw_ppc[raw_ppc > 0], 98))) if np.any(raw_ppc > 0) else 10.0
-            if X is not None and Y is not None:
+            if X is not None and Y is not None and getattr(X, 'shape', None) == getattr(raw_ppc, 'shape', None):
                 im = self.ax.pcolormesh(X, Y, raw_ppc, cmap='turbo', vmin=0, vmax=vmax, shading='nearest')
             else:
                 extent = [0, sim.Lx, 0, sim.Ly]
