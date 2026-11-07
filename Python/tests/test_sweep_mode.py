@@ -1426,6 +1426,157 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.ppc_window.close()
         self.win.exit_sweep(confirm_choice="no")
 
+    def test_energy_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Total Energy Conservation monitor window functions in sweep mode (live & post-run)."""
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Physical Constraints / Total Energy window
+        self.win.open_phys_window()
+        self.assertIsNotNone(self.win.phys_window)
+        self.assertTrue(self.win.phys_window.isVisible())
+
+        # 1. Simulate Scenario 1 live status
+        info_s1 = {
+            "status": "running",
+            "iter": 50,
+            "parameter_value": 1e17,
+            "t_sim_us": 0.05,
+            "energy_history_t": [0.0, 2.5e-8, 5.0e-8],
+            "energy_history_ke_i": [1e-4, 1.1e-4, 1.2e-4],
+            "energy_history_ke_e": [5e-5, 5.1e-5, 5.2e-5],
+            "energy_history_fe": [2e-4, 1.9e-4, 1.8e-4],
+            "energy_history_tot": [3.5e-4, 3.51e-4, 3.52e-4],
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.phys_window.windowTitle())
+        self.assertIn("Total Energy:", self.win.phys_window.lbl_stats.text())
+
+        # 2. Simulate switching to Scenario 2 with completed post-run data
+        info_s2 = {
+            "status": "done",
+            "iter": 100,
+            "parameter_value": 2e17,
+            "t_sim_us": 0.10,
+            "energy_history_t": [0.0, 5.0e-8, 1.0e-7],
+            "energy_history_ke_i": [2e-4, 2.2e-4, 2.4e-4],
+            "energy_history_ke_e": [1e-4, 1.05e-4, 1.1e-4],
+            "energy_history_fe": [4e-4, 3.8e-4, 3.7e-4],
+            "energy_history_tot": [7.0e-4, 7.05e-4, 7.2e-4],
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.phys_window.windowTitle())
+        self.assertIn("Total Energy:", self.win.phys_window.lbl_stats.text())
+
+        # 3. Simulate closing and re-opening window via menu
+        self.win.phys_window.close()
+        self.assertFalse(self.win.phys_window.isVisible())
+
+        self.win.open_phys_window()
+        self.assertTrue(self.win.phys_window.isVisible())
+        self.assertIn("Scenario 2", self.win.phys_window.windowTitle())
+
+        # Toggle checkboxes without error
+        self.win.phys_window.chk_normalize.setChecked(True)
+        self.win.phys_window.chk_normalize.setChecked(False)
+
+        # 4. Clean exit
+        self.win.phys_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.phys_window.windowTitle(), "Total Energy Conservation Monitor")
+
+    def test_mesh_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Computational Domain & Mesh Grid inspector and Substeps monitor in sweep mode."""
+        cfg = {
+            "param_id": "grid_1_gap",
+            "param_label": "Grid 1-2 Gap (mm)",
+            "param_unit": "mm",
+            "values": [1.5, 2.5],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Mesh window
+        self.win.open_mesh_window()
+        self.assertIsNotNone(self.win.mesh_window)
+        self.assertTrue(self.win.mesh_window.isVisible())
+
+        # 1. Simulate Scenario 1 live status with substep history
+        info_s1 = {
+            "status": "running",
+            "iter": 30,
+            "parameter_value": 1.5,
+            "substep_history_iter": [10, 20, 30],
+            "substep_history_ion": [1, 1, 2],
+            "substep_history_e": [1, 2, 4],
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.mesh_window.windowTitle())
+        self.assertIn("Domain (Lx × Ly):", self.win.mesh_window.lbl_domain_size.text())
+
+        # 2. Simulate switching to Scenario 2
+        info_s2 = {
+            "status": "done",
+            "iter": 60,
+            "parameter_value": 2.5,
+            "substep_history_iter": [10, 20, 30, 40, 50, 60],
+            "substep_history_ion": [1, 1, 1, 1, 1, 1],
+            "substep_history_e": [1, 1, 2, 1, 2, 1],
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.mesh_window.windowTitle())
+
+        # 3. Test Displacement Substeps floating window
+        self.win.open_substep_window()
+        self.assertIsNotNone(self.win.substep_window)
+        self.assertTrue(self.win.substep_window.isVisible())
+        self.assertIn("Scenario 2", self.win.substep_window.windowTitle())
+
+        # 4. Clean exit restores window titles
+        self.win.mesh_window.close()
+        self.win.substep_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.mesh_window.windowTitle(), "Computational Domain & Mesh Grid Inspector")
+        self.assertEqual(self.win.substep_window.windowTitle(), "Displacement Substeps Monitor — (Iterations vs Required Substeps)")
+
 
 if __name__ == "__main__":
     unittest.main()

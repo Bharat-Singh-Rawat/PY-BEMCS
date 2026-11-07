@@ -201,6 +201,14 @@ class DialogsMixin:
         self.phys_window.show()
         self.phys_window.raise_()
         self.phys_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             self.phys_window.update_plot(self.sim)
 
@@ -231,6 +239,14 @@ class DialogsMixin:
         self.mesh_window.show()
         self.mesh_window.raise_()
         self.mesh_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             params = self.get_params() if hasattr(self, 'get_params') else None
             self.mesh_window.update_plot(self.sim, params=params)
@@ -242,6 +258,14 @@ class DialogsMixin:
         self.substep_window.show()
         self.substep_window.raise_()
         self.substep_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             self.substep_window.update_plot(self.sim)
 

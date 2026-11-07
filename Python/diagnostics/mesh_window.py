@@ -252,7 +252,8 @@ class SubstepGraphWidget(QWidget):
 
         self.ax.clear()
 
-        if not iters:
+        n_pts = min(len(iters or []), len(subs_i or []), len(subs_e or []))
+        if not iters or n_pts == 0:
             self.ax.text(
                 0.5, 0.5,
                 "No simulation steps recorded yet.\nClick '2. START BEAM' in main window to record sub-step diagnostics.",
@@ -276,7 +277,6 @@ class SubstepGraphWidget(QWidget):
         y_i = np.asarray(subs_i, dtype=int)
         y_e = np.asarray(subs_e, dtype=int)
 
-        n_pts = min(len(x), len(y_i), len(y_e))
         x = x[:n_pts]
         y_i = y_i[:n_pts]
         y_e = y_e[:n_pts]
@@ -705,13 +705,15 @@ class MeshWindow(QDialog):
             )
 
         # ── 3. Grid Electrodes Overlay ────────────────────────────────
-        if self.chk_electrodes.isChecked() and hasattr(sim, 'isBound') and np.any(sim.isBound):
+        if self.chk_electrodes.isChecked() and hasattr(sim, 'isBound') and sim.isBound is not None and np.any(sim.isBound):
             gy, gx = np.where(sim.isBound)
             if len(gx) > 0 and len(gy) > 0:
-                self.ax.scatter(
-                    x_coords[gx], y_coords[gy],
-                    s=7, c="#0f172a", marker="s", alpha=0.85, zorder=4, label="Grid Electrodes"
-                )
+                valid_m = (gx < len(x_coords)) & (gy < len(y_coords))
+                if np.any(valid_m):
+                    self.ax.scatter(
+                        x_coords[gx[valid_m]], y_coords[gy[valid_m]],
+                        s=7, c="#0f172a", marker="s", alpha=0.85, zorder=4, label="Grid Electrodes"
+                    )
 
         # ── 4. Physical Zones Delimiters ──────────────────────────────
         zone_configs = getattr(sim, 'zone_configs', None)

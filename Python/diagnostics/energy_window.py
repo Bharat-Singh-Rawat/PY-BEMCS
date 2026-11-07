@@ -197,11 +197,11 @@ class PhysicalConstraintsWindow(QWidget):
         if sim is None or not hasattr(sim, 'energy_history_t'):
             return
 
-        t = np.asarray(sim.energy_history_t, dtype=float)
-        ke_i = np.asarray(sim.energy_history_ke_i, dtype=float)
-        ke_e = np.asarray(sim.energy_history_ke_e, dtype=float)
-        fe = np.asarray(sim.energy_history_fe, dtype=float)
-        tot = np.asarray(sim.energy_history_tot, dtype=float)
+        t = np.asarray(getattr(sim, 'energy_history_t', []) or [], dtype=float)
+        ke_i = np.asarray(getattr(sim, 'energy_history_ke_i', []) or [], dtype=float)
+        ke_e = np.asarray(getattr(sim, 'energy_history_ke_e', []) or [], dtype=float)
+        fe = np.asarray(getattr(sim, 'energy_history_fe', []) or [], dtype=float)
+        tot = np.asarray(getattr(sim, 'energy_history_tot', []) or [], dtype=float)
 
         min_n = min(len(t), len(ke_i), len(ke_e), len(fe), len(tot))
         if min_n == 0:

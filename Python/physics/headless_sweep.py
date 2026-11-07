@@ -306,6 +306,11 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 write_scenario_state(state_file, resumed_state)
 
         sim.step(scenario_params)
+        if hasattr(sim, 'get_total_energy'):
+            try:
+                sim.get_total_energy()
+            except Exception:
+                pass
         scenario_iters += 1
 
         div_val = getattr(sim, 'current_div', np.nan)
@@ -367,6 +372,14 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "div_history": list(div_hist),
                 "div_mid_history": list(div_mid_hist),
                 "ebs_history": list(ebs_hist),
+                "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
+                "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
+                "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
+                "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
+                "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+                "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
+                "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
+                "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
                 "Lx": float(getattr(sim, 'Lx', 3.0)),
                 "Ly": float(getattr(sim, 'Ly', 3.0)),
                 "nx": int(getattr(sim, 'nx', 0)),
@@ -487,6 +500,14 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "div_history": list(div_hist),
         "div_mid_history": list(div_mid_hist),
         "ebs_history": list(ebs_hist),
+        "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
+        "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
+        "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
+        "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
+        "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+        "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
+        "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
+        "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
         "nx": int(getattr(sim, 'nx', 0)),

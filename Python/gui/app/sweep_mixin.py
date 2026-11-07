@@ -769,6 +769,14 @@ class SweepMixin:
                 "V": sim_temp.V,
                 "Lx": float(sim_temp.Lx),
                 "Ly": float(sim_temp.Ly),
+                "dx": float(sim_temp.dx),
+                "dy": float(sim_temp.dy),
+                "nx": int(sim_temp.nx),
+                "ny": int(sim_temp.ny),
+                "isBound": sim_temp.isBound,
+                "x_coords": getattr(sim_temp, 'x_coords', None),
+                "y_coords": getattr(sim_temp, 'y_coords', None),
+                "zone_configs": getattr(sim_temp, 'zone_configs', None),
                 "grids": scenario_params.get("grids", []),
                 "params": scenario_params,
             }
@@ -1187,6 +1195,20 @@ class SweepMixin:
             except Exception as exc:
                 print(f"[PPC Snapshot Update Error] {exc}")
 
+        # 5. Update Physical Constraints (Total Energy) Window for the selected scenario if open
+        if getattr(self, 'phys_window', None) and self.phys_window.isVisible():
+            try:
+                self._update_phys_window_for_scenario(scenario_idx, info)
+            except Exception as exc:
+                print(f"[Phys Snapshot Update Error] {exc}")
+
+        # 6. Update Computational Domain & Mesh Inspector Window for the selected scenario if open
+        if (getattr(self, 'mesh_window', None) and self.mesh_window.isVisible()) or (getattr(self, 'substep_window', None) and self.substep_window.isVisible()):
+            try:
+                self._update_mesh_window_for_scenario(scenario_idx, info, d_data)
+            except Exception as exc:
+                print(f"[Mesh Snapshot Update Error] {exc}")
+
         QApplication.processEvents()
 
     def _update_ppc_window_for_scenario(self, scenario_idx, info):
@@ -1254,6 +1276,120 @@ class SweepMixin:
             self.ppc_window.update_plot(self.sim)
         except Exception as exc:
             print(f"[PPC Window Warning] Error updating PPC plot for scenario {scenario_idx}: {exc}")
+
+    def _update_phys_window_for_scenario(self, scenario_idx, info):
+        """Update Total Energy Conservation Monitor with energy history for scenario_idx."""
+        if not getattr(self, 'phys_window', None) or not self.phys_window.isVisible():
+            return
+        if not hasattr(self, 'sim') or self.sim is None:
+            return
+
+        try:
+            t_hist = info.get("energy_history_t")
+            ke_i_hist = info.get("energy_history_ke_i")
+            ke_e_hist = info.get("energy_history_ke_e")
+            fe_hist = info.get("energy_history_fe")
+            tot_hist = info.get("energy_history_tot")
+
+            if tot_hist is not None and len(tot_hist) > 0:
+                self.sim.energy_history_t = list(t_hist) if t_hist is not None else []
+                self.sim.energy_history_ke_i = list(ke_i_hist) if ke_i_hist is not None else []
+                self.sim.energy_history_ke_e = list(ke_e_hist) if ke_e_hist is not None else []
+                self.sim.energy_history_fe = list(fe_hist) if fe_hist is not None else []
+                self.sim.energy_history_tot = list(tot_hist)
+            elif not getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_current_idx', 0) + 1 != scenario_idx:
+                e_tot = info.get("total_energy_J")
+                fe = info.get("field_energy_J", 0.0)
+                t_us = info.get("t_sim_us", 0.0)
+                if e_tot is not None and e_tot != 0.0:
+                    t_s = float(t_us) * 1e-6
+                    self.sim.energy_history_t = [t_s]
+                    self.sim.energy_history_ke_i = [0.0]
+                    self.sim.energy_history_ke_e = [0.0]
+                    self.sim.energy_history_fe = [float(fe)]
+                    self.sim.energy_history_tot = [float(e_tot)]
+                else:
+                    self.sim.energy_history_t = []
+                    self.sim.energy_history_ke_i = []
+                    self.sim.energy_history_ke_e = []
+                    self.sim.energy_history_fe = []
+                    self.sim.energy_history_tot = []
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.phys_window.setWindowTitle(f"Total Energy Conservation Monitor — Scenario {scenario_idx}{param_str}")
+            self.phys_window.update_plot(self.sim)
+        except Exception as exc:
+            print(f"[Phys Window Warning] Error updating energy plot for scenario {scenario_idx}: {exc}")
+
+    def _update_mesh_window_for_scenario(self, scenario_idx, info, d_data=None):
+        """Update Computational Domain & Mesh Grid Inspector and Substeps graphs for scenario_idx."""
+        has_mesh = getattr(self, 'mesh_window', None) and self.mesh_window.isVisible()
+        has_substep = getattr(self, 'substep_window', None) and self.substep_window.isVisible()
+        if not has_mesh and not has_substep:
+            return
+        if not hasattr(self, 'sim') or self.sim is None:
+            return
+
+        try:
+            if d_data is None:
+                d_data = self._get_scenario_domain_data(scenario_idx)
+
+            if d_data:
+                if d_data.get("X") is not None and d_data.get("Y") is not None:
+                    self.sim.X = d_data["X"]
+                    self.sim.Y = d_data["Y"]
+                    self.sim.nx = d_data["X"].shape[1]
+                    self.sim.ny = d_data["X"].shape[0]
+                if d_data.get("Lx") is not None:
+                    self.sim.Lx = float(d_data["Lx"])
+                if d_data.get("Ly") is not None:
+                    self.sim.Ly = float(d_data["Ly"])
+                if d_data.get("dx") is not None:
+                    self.sim.dx = float(d_data["dx"])
+                if d_data.get("dy") is not None:
+                    self.sim.dy = float(d_data["dy"])
+                if d_data.get("V") is not None:
+                    self.sim.V = d_data["V"]
+                if d_data.get("isBound") is not None:
+                    self.sim.isBound = d_data["isBound"]
+                if d_data.get("x_coords") is not None:
+                    self.sim.x_coords = d_data["x_coords"]
+                if d_data.get("y_coords") is not None:
+                    self.sim.y_coords = d_data["y_coords"]
+                if d_data.get("zone_configs") is not None:
+                    self.sim.zone_configs = d_data["zone_configs"]
+
+            # Substep history
+            subs_it = info.get("substep_history_iter")
+            subs_i = info.get("substep_history_ion")
+            subs_e = info.get("substep_history_e")
+            if subs_it is not None and len(subs_it) > 0:
+                self.sim.substep_history_iter = list(subs_it)
+                self.sim.substep_history_ion = list(subs_i) if subs_i is not None else []
+                self.sim.substep_history_e = list(subs_e) if subs_e is not None else []
+            elif not getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_current_idx', 0) + 1 != scenario_idx:
+                self.sim.substep_history_iter = []
+                self.sim.substep_history_ion = []
+                self.sim.substep_history_e = []
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+
+            scen_params = d_data.get("params", self.get_params() if hasattr(self, 'get_params') else None) if d_data else None
+
+            if has_mesh:
+                self.mesh_window.setWindowTitle(f"Computational Domain & Mesh Grid Inspector — Scenario {scenario_idx}{param_str}")
+                self.mesh_window.update_plot(self.sim, params=scen_params)
+
+            if has_substep:
+                self.substep_window.setWindowTitle(f"Displacement Substeps Monitor — Scenario {scenario_idx}{param_str}")
+                self.substep_window.update_plot(self.sim)
+
+        except Exception as exc:
+            print(f"[Mesh Window Warning] Error updating mesh plot for scenario {scenario_idx}: {exc}")
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
@@ -1488,6 +1624,14 @@ class SweepMixin:
             "div_history": list(self.div_history),
             "div_mid_history": list(self.div_mid_history),
             "ebs_history": list(self.ebs_history),
+            "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
+            "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
+            "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
+            "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
+            "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+            "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
+            "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
+            "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
             "Lx": float(getattr(sim, 'Lx', 3.0)),
             "Ly": float(getattr(sim, 'Ly', 3.0)),
             "nx": int(getattr(sim, 'nx', 0)),
@@ -1909,6 +2053,22 @@ class SweepMixin:
             self.ppc_window.setWindowTitle("Macroparticle Distribution per Cell (PPC)")
             if self.ppc_window.isVisible() and hasattr(self, 'sim'):
                 self.ppc_window.update_plot(self.sim)
+
+        if getattr(self, 'phys_window', None):
+            self.phys_window.setWindowTitle("Total Energy Conservation Monitor")
+            if self.phys_window.isVisible() and hasattr(self, 'sim'):
+                self.phys_window.update_plot(self.sim)
+
+        if getattr(self, 'mesh_window', None):
+            self.mesh_window.setWindowTitle("Computational Domain & Mesh Grid Inspector")
+            if self.mesh_window.isVisible() and hasattr(self, 'sim'):
+                params = self.get_params() if hasattr(self, 'get_params') else None
+                self.mesh_window.update_plot(self.sim, params=params)
+
+        if getattr(self, 'substep_window', None):
+            self.substep_window.setWindowTitle("Displacement Substeps Monitor — (Iterations vs Required Substeps)")
+            if self.substep_window.isVisible() and hasattr(self, 'sim'):
+                self.substep_window.update_plot(self.sim)
 
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")
