@@ -1180,7 +1180,47 @@ class SweepMixin:
         elif hasattr(self, 'canvas'):
             self.canvas.draw_idle()
 
+        # 4. Update PPC Window for the selected scenario if open
+        if getattr(self, 'ppc_window', None) and self.ppc_window.isVisible():
+            self._update_ppc_window_for_scenario(scenario_idx, info)
+
         QApplication.processEvents()
+
+    def _update_ppc_window_for_scenario(self, scenario_idx, info):
+        """Update PPC Window with instantaneous / accumulated PPC maps from scenario snapshot."""
+        if not getattr(self, 'ppc_window', None) or not self.ppc_window.isVisible():
+            return
+        if not hasattr(self, 'sim') or self.sim is None:
+            return
+
+        ppc_map = info.get("current_ppc_map")
+        accum_map = info.get("accum_ppc_map")
+        ppc_steps = info.get("ppc_steps_count")
+        scenario_iter = info.get("iter", 0)
+
+        if ppc_map is not None:
+            self.sim.current_ppc_map = ppc_map
+        elif scenario_iter == 0:
+            self.sim.current_ppc_map = np.zeros((self.sim.ny, self.sim.nx), dtype=int)
+
+        if accum_map is not None:
+            self.sim.accum_ppc_map = accum_map
+        elif scenario_iter == 0:
+            self.sim.accum_ppc_map = np.zeros((self.sim.ny, self.sim.nx), dtype=float)
+
+        if ppc_steps is not None:
+            self.sim.ppc_steps_count = ppc_steps
+        elif scenario_iter == 0:
+            self.sim.ppc_steps_count = 0
+
+        if scenario_iter > 0:
+            self.sim.iteration = scenario_iter
+
+        param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+        param_val = info.get("parameter_value", "")
+        param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+        self.ppc_window.setWindowTitle(f"Macroparticle Distribution per Cell (PPC) — Scenario {scenario_idx}{param_str}")
+        self.ppc_window.update_plot(self.sim)
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
@@ -1417,6 +1457,13 @@ class SweepMixin:
             "ebs_history": list(self.ebs_history),
             "Lx": float(getattr(sim, 'Lx', 3.0)),
             "Ly": float(getattr(sim, 'Ly', 3.0)),
+            "nx": int(getattr(sim, 'nx', 0)),
+            "ny": int(getattr(sim, 'ny', 0)),
+            "dx": float(getattr(sim, 'dx', 0.05)),
+            "dy": float(getattr(sim, 'dy', 0.05)),
+            "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
+            "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+            "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
             "result_row": result_row,
         }
 
@@ -1825,6 +1872,11 @@ class SweepMixin:
         self._bg_live = None
 
         # 5. Restore normal simulation controls and badge
+        if getattr(self, 'ppc_window', None):
+            self.ppc_window.setWindowTitle("Macroparticle Distribution per Cell (PPC)")
+            if self.ppc_window.isVisible() and hasattr(self, 'sim'):
+                self.ppc_window.update_plot(self.sim)
+
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")
         if hasattr(self, 'update_sim_status_badge'):

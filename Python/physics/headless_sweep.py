@@ -369,7 +369,14 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "ebs_history": list(ebs_hist),
                 "Lx": float(getattr(sim, 'Lx', 3.0)),
                 "Ly": float(getattr(sim, 'Ly', 3.0)),
+                "nx": int(getattr(sim, 'nx', 0)),
+                "ny": int(getattr(sim, 'ny', 0)),
+                "dx": float(getattr(sim, 'dx', 0.05)),
+                "dy": float(getattr(sim, 'dy', 0.05)),
                 "grids": scenario_params.get("grids", []),
+                "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
+                "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+                "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
             }
             if status_dict is not None:
                 status_dict[scenario_idx] = run_state
@@ -482,7 +489,14 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "ebs_history": list(ebs_hist),
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
+        "nx": int(getattr(sim, 'nx', 0)),
+        "ny": int(getattr(sim, 'ny', 0)),
+        "dx": float(getattr(sim, 'dx', 0.05)),
+        "dy": float(getattr(sim, 'dy', 0.05)),
         "grids": scenario_params.get("grids", []),
+        "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
+        "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+        "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
         "result_row": res_row,
     }
 

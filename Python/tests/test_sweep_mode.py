@@ -1337,6 +1337,75 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
 
         self.win.exit_sweep(confirm_choice="no")
 
+    def test_ppc_window_live_and_post_run_in_sweep_mode(self):
+        """Verify PPC window plots live snapshots and post-run completed scenarios in sweep mode without modifying PPCWindow."""
+        self.win.build_domain()
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (n0)",
+            "param_unit": "m⁻³",
+            "values": [1e17, 2e17],
+            "parallel": False,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open PPC Window
+        self.win.open_ppc_window()
+        self.assertIsNotNone(self.win.ppc_window)
+        self.assertTrue(self.win.ppc_window.isVisible())
+
+        # 1. Simulate live snapshot for Scenario 1
+        ny, nx = self.win.sim.ny, self.win.sim.nx
+        ppc_s1 = np.zeros((ny, nx), dtype=int)
+        ppc_s1[10:20, 10:20] = 5  # 100 active cells with PPC=5
+        info_s1 = {
+            "status": "running",
+            "iter": 50,
+            "parameter_value": 1e17,
+            "current_ppc_map": ppc_s1,
+            "accum_ppc_map": ppc_s1.astype(float),
+            "ppc_steps_count": 1,
+            "Lx": self.win.sim.Lx,
+            "Ly": self.win.sim.Ly,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.ppc_window.windowTitle())
+        self.assertIn("Active Cells: 100", self.win.ppc_window.lbl_stats.text())
+
+        # 2. Simulate switching to Scenario 2 with different post-run completed data
+        ppc_s2 = np.zeros((ny, nx), dtype=int)
+        ppc_s2[5:10, 5:10] = 2  # 25 active cells with PPC=2 (Low PPC < 3)
+        info_s2 = {
+            "status": "done",
+            "iter": 120,
+            "parameter_value": 2e17,
+            "current_ppc_map": ppc_s2,
+            "accum_ppc_map": ppc_s2.astype(float),
+            "ppc_steps_count": 10,
+            "Lx": self.win.sim.Lx,
+            "Ly": self.win.sim.Ly,
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.ppc_window.windowTitle())
+        self.assertIn("Active Cells: 25", self.win.ppc_window.lbl_stats.text())
+        self.assertIn("Low PPC (< 3): 25 (100.0%)", self.win.ppc_window.lbl_stats.text())
+
+        # 3. Clean exit
+        self.win.ppc_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+
 
 if __name__ == "__main__":
     unittest.main()

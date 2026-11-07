@@ -173,6 +173,14 @@ class DialogsMixin:
         self.ppc_window.show()
         self.ppc_window.raise_()
         self.ppc_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
         if hasattr(self, 'sim'):
             self.ppc_window.update_plot(self.sim)
 
