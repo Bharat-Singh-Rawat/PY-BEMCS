@@ -280,7 +280,7 @@ class DensityWindow(QWidget):
 
         X = getattr(sim, 'X', None)
         Y = getattr(sim, 'Y', None)
-        if X is not None and Y is not None:
+        if X is not None and Y is not None and X.shape == density_masked.shape:
             im = self.ax_2d.pcolormesh(X, Y, density_masked, cmap=cmap, norm=norm, shading='nearest')
         else:
             extent = [0, sim.Lx, 0, sim.Ly]
@@ -299,12 +299,14 @@ class DensityWindow(QWidget):
         self.ax_2d.set_ylim(0, sim.Ly)
 
         # Grid electrode bodies overlay
-        if hasattr(sim, 'isBound') and np.any(sim.isBound):
+        if hasattr(sim, 'isBound') and sim.isBound is not None and np.any(sim.isBound):
             gy, gx = np.where(sim.isBound)
             x_pts = getattr(sim, 'x_coords', getattr(sim, 'xpts', None))
             y_pts_grid = getattr(sim, 'y_coords', getattr(sim, 'ypts', None))
             if x_pts is not None and y_pts_grid is not None:
-                self.ax_2d.scatter(x_pts[gx], y_pts_grid[gy], s=2.5, c='silver', alpha=0.85)
+                valid_m = (gx < len(x_pts)) & (gy < len(y_pts_grid))
+                if np.any(valid_m):
+                    self.ax_2d.scatter(x_pts[gx[valid_m]], y_pts_grid[gy[valid_m]], s=2.5, c='silver', alpha=0.85)
             else:
                 self.ax_2d.scatter(gx * sim.dx, gy * sim.dy, s=2.5, c='silver', alpha=0.85)
 

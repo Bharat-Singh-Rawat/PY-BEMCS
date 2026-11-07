@@ -121,6 +121,8 @@ class ParallelSweepWorker(QThread):
                 "current_ppc_map": None,
                 "accum_ppc_map": None,
                 "ppc_steps_count": 0,
+                "macro_weight": float(getattr(self.base_params, 'get', lambda k, d: d)("macro_weight", 1e8) if hasattr(self.base_params, 'get') else 1e8),
+                "perf_history": [],
             }
             self.final_status_dict[scen_num] = init_st
             write_scenario_state(sf, init_st)

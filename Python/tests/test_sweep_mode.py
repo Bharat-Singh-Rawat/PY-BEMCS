@@ -1577,6 +1577,157 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertEqual(self.win.mesh_window.windowTitle(), "Computational Domain & Mesh Grid Inspector")
         self.assertEqual(self.win.substep_window.windowTitle(), "Displacement Substeps Monitor — (Iterations vs Required Substeps)")
 
+    def test_perf_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Runtime Performance & Profiling monitor window in sweep mode (live & post-run)."""
+        from diagnostics.performance_monitor import StepDiagnostics
+
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Performance window
+        self.win.open_perf_window()
+        self.assertIsNotNone(self.win.perf_window)
+        self.assertTrue(self.win.perf_window.isVisible())
+
+        # 1. Simulate Scenario 1 live status
+        diag1 = StepDiagnostics(iteration=25, sim_time_s=2.5e-8, num_ions=100, num_electrons=50, wall_time_ms=2.0, memory_rss_mb=120.0)
+        diag2 = StepDiagnostics(iteration=50, sim_time_s=5.0e-8, num_ions=200, num_electrons=100, wall_time_ms=2.1, memory_rss_mb=125.0)
+        info_s1 = {
+            "status": "running",
+            "iter": 50,
+            "parameter_value": 1e17,
+            "t_sim_us": 0.05,
+            "perf_history": [diag1, diag2],
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.perf_window.windowTitle())
+        self.assertIn("Iter: 50", self.win.perf_window.lbl_stats.text())
+        self.assertIn("Ions: 200", self.win.perf_window.lbl_stats.text())
+
+        # 2. Simulate switching to Scenario 2 with post-run completed data
+        diag3 = StepDiagnostics(iteration=100, sim_time_s=1.0e-7, num_ions=400, num_electrons=200, wall_time_ms=3.0, memory_rss_mb=150.0)
+        info_s2 = {
+            "status": "done",
+            "iter": 100,
+            "parameter_value": 2e17,
+            "t_sim_us": 0.10,
+            "perf_history": [diag1, diag2, diag3],
+            "prim_xy": np.empty((0, 2)),
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.perf_window.windowTitle())
+        self.assertIn("Iter: 100", self.win.perf_window.lbl_stats.text())
+        self.assertIn("Ions: 400", self.win.perf_window.lbl_stats.text())
+
+        # 3. Re-opening via menu refreshes to currently selected scenario
+        self.win.perf_window.close()
+        self.assertFalse(self.win.perf_window.isVisible())
+        self.win.open_perf_window()
+        self.assertTrue(self.win.perf_window.isVisible())
+        self.assertIn("Scenario 2", self.win.perf_window.windowTitle())
+
+        # 4. Clean exit
+        self.win.perf_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.perf_window.windowTitle(), "Runtime Performance & Particle Diagnostics Monitor")
+
+    def test_density_window_live_and_post_run_in_sweep_mode(self):
+        """Verify Plasma & Particle Density Diagnostics window in sweep mode (live & post-run)."""
+        cfg = {
+            "param_id": "n0_plasma",
+            "param_label": "Plasma Density (m^-3)",
+            "param_unit": "m^-3",
+            "values": [1e17, 2e17],
+            "parallel": False,
+            "window": 50,
+            "threshold": 1.0,
+            "max_iterations": 5000,
+            "min_iterations": 500,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+
+        # Open Density window
+        self.win.open_density_window()
+        self.assertIsNotNone(self.win.density_window)
+        self.assertTrue(self.win.density_window.isVisible())
+
+        # 1. Simulate Scenario 1 live status with particles
+        prim_s1 = np.array([[0.5, 0.5], [1.0, 0.8], [1.5, 1.0]], dtype=np.float32)
+        cex_s1 = np.array([[1.2, 0.6]], dtype=np.float32)
+        elec_s1 = np.array([[0.2, 0.3], [0.4, 0.4]], dtype=np.float32)
+
+        info_s1 = {
+            "status": "running",
+            "iter": 40,
+            "parameter_value": 1e17,
+            "t_sim_us": 0.04,
+            "macro_weight": 1e8,
+            "prim_xy": prim_s1,
+            "cex_xy": cex_s1,
+            "elec_xy": elec_s1,
+        }
+        self.win._sweep_status_dict = {1: info_s1}
+        self.win._render_sweep_scenario_snapshot(1)
+
+        self.assertIn("Scenario 1", self.win.density_window.windowTitle())
+        self.assertIn("Total Ion Density", self.win.density_window.lbl_stats.text())
+
+        # Switch species dropdown to Electron Density
+        self.win.density_window.combo_species.setCurrentIndex(3)
+        self.assertIn("Electron Density", self.win.density_window.lbl_stats.text())
+
+        # 2. Simulate switching to Scenario 2 with completed post-run data
+        prim_s2 = np.array([[0.6, 0.7], [1.1, 0.9]], dtype=np.float32)
+        info_s2 = {
+            "status": "done",
+            "iter": 80,
+            "parameter_value": 2e17,
+            "t_sim_us": 0.08,
+            "macro_weight": 2e8,
+            "prim_xy": prim_s2,
+            "cex_xy": np.empty((0, 2)),
+            "elec_xy": np.empty((0, 2)),
+        }
+        self.win._sweep_status_dict[2] = info_s2
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._render_sweep_scenario_snapshot(2)
+
+        self.assertIn("Scenario 2", self.win.density_window.windowTitle())
+
+        # 3. Re-opening via menu refreshes to currently selected scenario
+        self.win.density_window.close()
+        self.assertFalse(self.win.density_window.isVisible())
+        self.win.open_density_window()
+        self.assertTrue(self.win.density_window.isVisible())
+        self.assertIn("Scenario 2", self.win.density_window.windowTitle())
+
+        # 4. Clean exit
+        self.win.density_window.close()
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertEqual(self.win.density_window.windowTitle(), "Plasma & Particle Density Diagnostics")
+
 
 if __name__ == "__main__":
     unittest.main()

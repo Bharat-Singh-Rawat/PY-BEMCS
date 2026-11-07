@@ -777,6 +777,8 @@ class SweepMixin:
                 "x_coords": getattr(sim_temp, 'x_coords', None),
                 "y_coords": getattr(sim_temp, 'y_coords', None),
                 "zone_configs": getattr(sim_temp, 'zone_configs', None),
+                "grid_x_starts": getattr(sim_temp, 'grid_x_starts', None),
+                "grid_x_ends": getattr(sim_temp, 'grid_x_ends', None),
                 "grids": scenario_params.get("grids", []),
                 "params": scenario_params,
             }
@@ -1209,6 +1211,20 @@ class SweepMixin:
             except Exception as exc:
                 print(f"[Mesh Snapshot Update Error] {exc}")
 
+        # 7. Update Performance Monitor Window for the selected scenario if open
+        if getattr(self, 'perf_window', None) and self.perf_window.isVisible():
+            try:
+                self._update_perf_window_for_scenario(scenario_idx, info)
+            except Exception as exc:
+                print(f"[Perf Snapshot Update Error] {exc}")
+
+        # 8. Update Density Window for the selected scenario if open
+        if getattr(self, 'density_window', None) and self.density_window.isVisible():
+            try:
+                self._update_density_window_for_scenario(scenario_idx, info, d_data)
+            except Exception as exc:
+                print(f"[Density Snapshot Update Error] {exc}")
+
         QApplication.processEvents()
 
     def _update_ppc_window_for_scenario(self, scenario_idx, info):
@@ -1390,6 +1406,136 @@ class SweepMixin:
 
         except Exception as exc:
             print(f"[Mesh Window Warning] Error updating mesh plot for scenario {scenario_idx}: {exc}")
+
+    def _update_perf_window_for_scenario(self, scenario_idx, info):
+        """Update Performance & Profiling Monitor for scenario_idx."""
+        if not getattr(self, 'perf_window', None) or not self.perf_window.isVisible():
+            return
+        if not hasattr(self, 'sim') or self.sim is None:
+            return
+
+        try:
+            from diagnostics.performance_monitor import PerformanceMonitor
+            perf_hist = info.get("perf_history")
+            if perf_hist is not None and len(perf_hist) > 0:
+                if getattr(self.sim, '_perf_monitor', None) is None:
+                    self.sim._perf_monitor = PerformanceMonitor()
+                self.sim._perf_monitor.history = list(perf_hist)
+            elif not getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_current_idx', 0) + 1 != scenario_idx:
+                if getattr(self.sim, '_perf_monitor', None) is not None:
+                    self.sim._perf_monitor.history = []
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.perf_window.setWindowTitle(f"Runtime Performance & Particle Diagnostics Monitor — Scenario {scenario_idx}{param_str}")
+            self.perf_window.update_plot(self.sim)
+        except Exception as exc:
+            print(f"[Perf Window Warning] Error updating performance plot for scenario {scenario_idx}: {exc}")
+
+    def _update_density_window_for_scenario(self, scenario_idx, info, d_data=None):
+        """Update Plasma & Particle Density Diagnostics window for scenario_idx."""
+        if not getattr(self, 'density_window', None) or not self.density_window.isVisible():
+            return
+        if not hasattr(self, 'sim') or self.sim is None:
+            return
+
+        try:
+            if d_data is None:
+                d_data = self._get_scenario_domain_data(scenario_idx)
+
+            if d_data:
+                if d_data.get("X") is not None and d_data.get("Y") is not None:
+                    self.sim.X = d_data["X"]
+                    self.sim.Y = d_data["Y"]
+                    self.sim.nx = d_data["X"].shape[1]
+                    self.sim.ny = d_data["X"].shape[0]
+                if d_data.get("Lx") is not None:
+                    self.sim.Lx = float(d_data["Lx"])
+                if d_data.get("Ly") is not None:
+                    self.sim.Ly = float(d_data["Ly"])
+                if d_data.get("dx") is not None:
+                    self.sim.dx = float(d_data["dx"])
+                if d_data.get("dy") is not None:
+                    self.sim.dy = float(d_data["dy"])
+                if d_data.get("V") is not None:
+                    self.sim.V = d_data["V"]
+                if d_data.get("isBound") is not None:
+                    self.sim.isBound = d_data["isBound"]
+                if d_data.get("x_coords") is not None:
+                    self.sim.x_coords = d_data["x_coords"]
+                if d_data.get("y_coords") is not None:
+                    self.sim.y_coords = d_data["y_coords"]
+                if d_data.get("grid_x_starts") is not None:
+                    self.sim.grid_x_starts = d_data["grid_x_starts"]
+                if d_data.get("grid_x_ends") is not None:
+                    self.sim.grid_x_ends = d_data["grid_x_ends"]
+
+            cur_ny = getattr(self.sim, 'ny', 1) or 1
+            cur_nx = getattr(self.sim, 'nx', 1) or 1
+
+            # Sync particles from scenario snapshot
+            prim_xy = info.get("prim_xy")
+            cex_xy = info.get("cex_xy")
+            elec_xy = info.get("elec_xy")
+
+            n_prim = len(prim_xy) if prim_xy is not None else 0
+            n_cex = len(cex_xy) if cex_xy is not None else 0
+            n_tot = n_prim + n_cex
+
+            if n_tot > 0:
+                all_px = np.empty(n_tot, dtype=np.float32)
+                all_py = np.empty(n_tot, dtype=np.float32)
+                all_cex = np.zeros(n_tot, dtype=bool)
+                if n_prim > 0:
+                    all_px[:n_prim] = prim_xy[:, 0]
+                    all_py[:n_prim] = prim_xy[:, 1]
+                if n_cex > 0:
+                    all_px[n_prim:] = cex_xy[:, 0]
+                    all_py[n_prim:] = cex_xy[:, 1]
+                    all_cex[n_prim:] = True
+                self.sim.p_x = all_px
+                self.sim.p_y = all_py
+                self.sim.p_isCEX = all_cex
+                self.sim.num_p = n_tot
+            else:
+                self.sim.num_p = 0
+                self.sim.p_x = np.empty(0, dtype=np.float32)
+                self.sim.p_y = np.empty(0, dtype=np.float32)
+                self.sim.p_isCEX = np.empty(0, dtype=bool)
+
+            n_elec = len(elec_xy) if elec_xy is not None else 0
+            if n_elec > 0:
+                self.sim.e_x = elec_xy[:, 0]
+                self.sim.e_y = elec_xy[:, 1]
+                self.sim.num_e = n_elec
+            else:
+                self.sim.num_e = 0
+                self.sim.e_x = np.empty(0, dtype=np.float32)
+                self.sim.e_y = np.empty(0, dtype=np.float32)
+
+            self.sim.macro_weight = float(info.get("macro_weight", getattr(self.sim, 'macro_weight', 1e8)))
+            self.sim.iteration = int(info.get("iter", 0))
+
+            # Guarantee that X and Y match (cur_ny, cur_nx)
+            if (
+                not hasattr(self.sim, 'X')
+                or self.sim.X is None
+                or not hasattr(self.sim, 'Y')
+                or self.sim.Y is None
+                or self.sim.X.shape != (cur_ny, cur_nx)
+            ):
+                x_c = np.linspace(0, self.sim.Lx, cur_nx)
+                y_c = np.linspace(0, self.sim.Ly, cur_ny)
+                self.sim.X, self.sim.Y = np.meshgrid(x_c, y_c)
+
+            param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
+            param_val = info.get("parameter_value", "")
+            param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
+            self.density_window.setWindowTitle(f"Plasma & Particle Density Diagnostics — Scenario {scenario_idx}{param_str}")
+            self.density_window.update_plot(self.sim)
+        except Exception as exc:
+            print(f"[Density Window Warning] Error updating density plot for scenario {scenario_idx}: {exc}")
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
         if hasattr(self, 'lbl_sweep_badge'):
@@ -1641,6 +1787,8 @@ class SweepMixin:
             "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
             "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
             "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
+            "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
+            "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
             "result_row": result_row,
         }
 
@@ -2069,6 +2217,16 @@ class SweepMixin:
             self.substep_window.setWindowTitle("Displacement Substeps Monitor — (Iterations vs Required Substeps)")
             if self.substep_window.isVisible() and hasattr(self, 'sim'):
                 self.substep_window.update_plot(self.sim)
+
+        if getattr(self, 'perf_window', None):
+            self.perf_window.setWindowTitle("Runtime Performance & Particle Diagnostics Monitor")
+            if self.perf_window.isVisible() and hasattr(self, 'sim'):
+                self.perf_window.update_plot(self.sim)
+
+        if getattr(self, 'density_window', None):
+            self.density_window.setWindowTitle("Plasma & Particle Density Diagnostics")
+            if self.density_window.isVisible() and hasattr(self, 'sim'):
+                self.density_window.update_plot(self.sim)
 
         if hasattr(self, 'btn_toggle'):
             self.btn_toggle.setText("2. START BEAM")

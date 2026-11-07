@@ -217,6 +217,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
 
     sim = DigitalTwinSimulator()
     sim.build_domain(scenario_params)
+    if hasattr(sim, 'enable_perf_monitor'):
+        sim.enable_perf_monitor(log_every=50)
 
     window = int(steady_config.get("window", 50))
     thresh = float(steady_config.get("threshold", 1.0))
@@ -390,6 +392,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
                 "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
                 "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
+                "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
+                "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
             }
             if status_dict is not None:
                 status_dict[scenario_idx] = run_state
@@ -518,6 +522,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
         "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
         "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
+        "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
+        "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
         "result_row": res_row,
     }
 

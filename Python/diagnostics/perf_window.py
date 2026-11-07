@@ -314,11 +314,13 @@ class PerformanceMonitorWindow(QWidget):
         last = history[-1]
         warn_text = ""
         is_warn = False
-        if last.num_ions > mon.warn_particles or last.num_electrons > mon.warn_particles:
-            warn_text += f" | ⚠️ Particle Limit Exceeded (>{mon.warn_particles:,})"
+        warn_particles = getattr(mon, 'warn_particles', 500_000)
+        warn_memory_mb = getattr(mon, 'warn_memory_mb', 2000.0)
+        if last.num_ions > warn_particles or last.num_electrons > warn_particles:
+            warn_text += f" | ⚠️ Particle Limit Exceeded (>{warn_particles:,})"
             is_warn = True
-        if last.memory_rss_mb > mon.warn_memory_mb:
-            warn_text += f" | ⚠️ RAM Limit Exceeded (>{mon.warn_memory_mb:.0f} MB)"
+        if last.memory_rss_mb > warn_memory_mb:
+            warn_text += f" | ⚠️ RAM Limit Exceeded (>{warn_memory_mb:.0f} MB)"
             is_warn = True
         p_status = getattr(last, 'poisson_status', 'converged')
         if p_status == 'diverged':
