@@ -200,6 +200,7 @@ class UIBuilderMixin:
             "r": spin_r, "cham": spin_cham
         })
         self.update_rf_combo()
+        self._notify_grid_count_changed()
 
     def clear_grid_ui(self):
         while self.grid_widgets:
@@ -212,6 +213,18 @@ class UIBuilderMixin:
             gw = self.grid_widgets.pop()
             gw["gb"].deleteLater()
             self.update_rf_combo()
+            self._notify_grid_count_changed()
+
+    def _notify_grid_count_changed(self):
+        if getattr(self, "_loading_config", False):
+            return
+        self._grid_count_modified_since_build = True
+        self._sweep_domain_built = False
+        if hasattr(self, "_scenario_domain_cache") and isinstance(self._scenario_domain_cache, dict):
+            self._scenario_domain_cache.clear()
+        self._current_rendered_scenario_grid_idx = None
+        if hasattr(self, "on_grid_count_changed"):
+            self.on_grid_count_changed()
 
     def update_rf_combo(self):
         if hasattr(self, "combo_rf_grid"):
@@ -351,7 +364,7 @@ class UIBuilderMixin:
 
         # Upstream gap: distance from injection wall to left face of screen grid (mm)
         row, self.inputs["upstream_gap_mm"] = self.create_input(
-            "Upstream Gap (mm):", 0.0, 20.0, 0.1, 2
+            "Upstream Gap (mm):", 0.0, 50.0, 0.1, 3
         )
         self.btn_upstream_gap_settings = QPushButton("Settings")
         self.btn_upstream_gap_settings.setToolTip("Configure upstream gap calculation ratio or set a custom value")
@@ -390,12 +403,12 @@ class UIBuilderMixin:
         self.inputs["hole_boundary_dist_mm"].valueChanged.connect(self._on_hole_boundary_dist_changed)
 
         btn_layout = QHBoxLayout()
-        btn_add = QPushButton("+ Add Grid")
-        btn_rem = QPushButton("- Remove Grid")
-        btn_add.clicked.connect(lambda: self.add_grid_ui(0.0, 0.0, 0.0, 0.0, 0.0))
-        btn_rem.clicked.connect(self.remove_grid_ui)
-        btn_layout.addWidget(btn_add)
-        btn_layout.addWidget(btn_rem)
+        self.btn_add_grid = QPushButton("+ Add Grid")
+        self.btn_remove_grid = QPushButton("- Remove Grid")
+        self.btn_add_grid.clicked.connect(lambda: self.add_grid_ui(0.0, 0.0, 0.0, 0.0, 0.0))
+        self.btn_remove_grid.clicked.connect(self.remove_grid_ui)
+        btn_layout.addWidget(self.btn_add_grid)
+        btn_layout.addWidget(self.btn_remove_grid)
 
         self.grids_layout.addLayout(btn_layout)
         control_layout.addLayout(self.grids_layout)

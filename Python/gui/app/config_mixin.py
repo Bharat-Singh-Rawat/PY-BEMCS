@@ -75,10 +75,15 @@ class ConfigMixin:
 
         self.combo_geometry.setCurrentText("half_hole")
 
-        self.clear_grid_ui()
-        self.add_grid_ui(1100.0, 0.38, 0.64, 0.80, 0.0)   # Screen grid
-        self.add_grid_ui(-200.0, 0.38, 0.64, 0.70, 0.0)   # Accel grid
-        self.add_grid_ui(  0.0,  0.38, 2.00, 0.75, 0.0)   # Deccel grid
+        self._loading_config = True
+        try:
+            self.clear_grid_ui()
+            self.add_grid_ui(1100.0, 0.38, 0.64, 0.80, 0.0)   # Screen grid
+            self.add_grid_ui(-200.0, 0.38, 0.64, 0.70, 0.0)   # Accel grid
+            self.add_grid_ui(  0.0,  0.38, 2.00, 0.75, 0.0)   # Deccel grid
+        finally:
+            self._loading_config = False
+        self._grid_count_modified_since_build = False
 
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         self.adv_params["Lx"] = auto_Lx
@@ -224,6 +229,8 @@ class ConfigMixin:
 
     def _update_debye_gap(self):
         """Auto-update the Upstream Gap spinbox when n0 or Te_up change."""
+        if getattr(self, '_suppress_auto_upstream_gap', False):
+            return
         if not hasattr(self, '_last_auto_gap'):
             return
         current = round(self.inputs["upstream_gap_mm"].value(), 3)
@@ -400,14 +407,19 @@ class ConfigMixin:
         self.inputs["Te"].setValue(neut.get("Te", 2.0))
         self.inputs["neut_r"].setValue(neut.get("neut_r", adv.get("neut_r", 1.5)))
 
-        self.clear_grid_ui()
-        grids = config.get("grids", [])
-        if len(grids) == 0:
-            self._apply_defaults()
-            return
+        had_sweep = getattr(self, "sweep_config", None) is not None or getattr(self, "sweep_mode_armed", False)
+        self._loading_config = True
+        try:
+            self.clear_grid_ui()
+            grids = config.get("grids", [])
+            if len(grids) == 0:
+                self._apply_defaults()
+                return
 
-        for g in grids:
-            self.add_grid_ui(g["V"], g["t"], g["gap"], g["r"], g["cham"])
+            for g in grids:
+                self.add_grid_ui(g["V"], g["t"], g["gap"], g["r"], g["cham"])
+        finally:
+            self._loading_config = False
 
         rf_idx = rf["rf_grid_idx"]
         if 0 <= rf_idx < self.combo_rf_grid.count():
@@ -461,6 +473,15 @@ class ConfigMixin:
         self.lbl_temp.setText("Grid Temps: " + " | ".join([f"G{i+1}: ready" for i in range(len(grids))]))
         if hasattr(self, 'lbl_material'):
             self.lbl_material.setText(f"Grid Material: {self.mat_name}")
+
+        self._grid_count_modified_since_build = False
+        if had_sweep:
+            self._sweep_domain_built = False
+            if hasattr(self, "_scenario_domain_cache") and isinstance(self._scenario_domain_cache, dict):
+                self._scenario_domain_cache.clear()
+            self._current_rendered_scenario_grid_idx = None
+            if hasattr(self, "on_grid_count_changed"):
+                self.on_grid_count_changed()
 
     def reload_config(self):
         cfg_path = getattr(self, "current_config_path", None) or _config_path()
@@ -792,7 +813,18 @@ class ConfigMixin:
         params['div_xaxis_unit'] = getattr(self, 'div_xaxis_unit', 'iterations')
         params['xaxis_unit'] = getattr(self, 'xaxis_unit', 'iterations')
         params['div_plane_x'] = getattr(self, 'div_plane_x', None)
+        params['user_overrode_Lx'] = bool(getattr(self, '_user_overrode_Lx', False))
+        _last_neut = getattr(self, '_last_auto_neut_x', None)
+        if 'neut_x' in self.inputs:
+            _cur_neut = round(float(self.inputs['neut_x'].value()), 3)
+            params['user_overrode_neut_x'] = (
+                _last_neut is not None and (_last_neut < 0 or abs(_cur_neut - _last_neut) > 0.001)
+            )
+        else:
+            params['user_overrode_neut_x'] = False
         params['twiss_n_sigma'] = getattr(self, 'twiss_n_sigma', 1.0)
         params['iedf_visible'] = bool(getattr(self, 'iedf_window', None) and self.iedf_window.isVisible())
         params['scatter_limit'] = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 2000))
+        up_settings = getattr(self, 'upstream_gap_settings', None)
+        params['upstream_gap_settings'] = copy.deepcopy(up_settings) if isinstance(up_settings, dict) else None
         return params

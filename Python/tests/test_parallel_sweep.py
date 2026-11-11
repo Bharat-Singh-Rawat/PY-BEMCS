@@ -142,6 +142,218 @@ class TestHeadlessSweepUtilities(unittest.TestCase):
         self.assertIn("computation_time_s", res)
         self.assertGreater(res["computation_time_s"], 0.0)
 
+    def test_apply_sweep_upstream_gap_mm_updates_auto_geometry(self):
+        grids = [
+            {"V": 1000.0, "t": 0.4, "gap": 0.0, "r": 0.8, "cham": 0.0},
+            {"V": -200.0, "t": 0.5, "gap": 1.1, "r": 0.7, "cham": 0.0},
+        ]
+        # total_grid_thickness = 0.4 + 0.5 + 1.1 = 2.0, x_exit - gap = 0.9
+
+        # 1. Auto Lx and auto neut_x shrink and grow symmetrically with upstream_gap_mm
+        base_auto = {
+            "upstream_gap_mm": 1.0,
+            "Lx": 3.0,
+            "neut_x": 2.89,
+            "user_overrode_Lx": False,
+            "user_overrode_neut_x": False,
+            "grids": grids,
+        }
+        shrunk = apply_sweep_param_to_dict(base_auto, "upstream_gap_mm", 0.375)
+        self.assertAlmostEqual(shrunk["upstream_gap_mm"], 0.375, places=6)
+        self.assertAlmostEqual(shrunk["Lx"], 2.375, places=3)
+        # x_exit = 0.375 + 0.9 = 1.275, plume = 1.1 -> neut_x = 1.275 + 0.99 = 2.265
+        self.assertAlmostEqual(shrunk["neut_x"], 2.265, places=3)
+        self.assertEqual(base_auto["upstream_gap_mm"], 1.0)
+
+        grown = apply_sweep_param_to_dict(base_auto, "upstream_gap_mm", 2.5)
+        self.assertAlmostEqual(grown["Lx"], 4.5, places=3)
+        self.assertAlmostEqual(grown["neut_x"], round(3.4 + 0.9 * 1.1, 3), places=3)
+
+        # 2. User-overridden Lx and neut_x remain respected
+        base_fixed = {
+            "upstream_gap_mm": 0.6,
+            "Lx": 6.0,
+            "neut_x": 4.25,
+            "user_overrode_Lx": True,
+            "user_overrode_neut_x": True,
+            "grids": grids,
+        }
+        fixed = apply_sweep_param_to_dict(base_fixed, "upstream_gap_mm", 0.3)
+        self.assertAlmostEqual(fixed["upstream_gap_mm"], 0.3, places=6)
+        self.assertEqual(fixed["Lx"], 6.0)
+        self.assertEqual(fixed["neut_x"], 4.25)
+
+    def test_run_single_sweep_scenario_worker_upstream_gap_mm(self):
+        base_params = {
+            "Te_up": 2.0, "n0_plasma": 1e16, "Ti": 0.5, "n0": 1e17, "Tn": 300.0,
+            "Te": 2.0, "upstream_gap_mm": 0.8, "Lx": 3.8,
+            "user_overrode_Lx": False, "user_overrode_neut_x": False, "neut_x": 3.65,
+            "grids": [
+                {"V": 1000.0, "t": 0.5, "gap": 1.0, "r": 1.0, "cham": 0.0},
+                {"V": -200.0, "t": 0.5, "gap": 1.0, "r": 0.8, "cham": 0.0},
+            ],
+        }
+        status_dict = {}
+        res1 = run_single_sweep_scenario_worker({
+            "scenario_idx": 1,
+            "param_id": "upstream_gap_mm",
+            "parameter_value": 0.45,
+            "base_params": base_params,
+            "steady_config": {"window": 5, "threshold": 5.0, "max_iterations": 6, "min_iterations": 5},
+            "status_dict": status_dict,
+        })
+        res2 = run_single_sweep_scenario_worker({
+            "scenario_idx": 2,
+            "param_id": "upstream_gap_mm",
+            "parameter_value": 1.35,
+            "base_params": base_params,
+            "steady_config": {"window": 5, "threshold": 5.0, "max_iterations": 6, "min_iterations": 5},
+            "status_dict": status_dict,
+        })
+        self.assertAlmostEqual(res1["parameter_value"], 0.45, places=6)
+        self.assertAlmostEqual(res2["parameter_value"], 1.35, places=6)
+        self.assertAlmostEqual(status_dict[1]["Lx"], 3.45, places=3)
+        self.assertAlmostEqual(status_dict[2]["Lx"], 4.35, places=3)
+
+    def test_apply_sweep_param_dynamic_grids_1_and_3(self):
+        """Verify 1-grid and 3-grid parameter mapping & auto Lx/neut_x synchronization."""
+        single_base = {
+            "upstream_gap_mm": 0.6,
+            "Lx": 2.0,
+            "neut_x": 1.9,
+            "user_overrode_Lx": False,
+            "user_overrode_neut_x": False,
+            "grids": [{"V": 1000.0, "t": 0.4, "gap": 1.0, "r": 0.8, "cham": 0.0}],
+        }
+        s1_cham = apply_sweep_param_to_dict(single_base, "grid_1_cham", 22.5)
+        self.assertAlmostEqual(s1_cham["grids"][0]["cham"], 22.5)
+        self.assertEqual(s1_cham["Lx"], 2.0)
+
+        s1_gap = apply_sweep_param_to_dict(single_base, "grid_1_gap", 2.0)
+        self.assertAlmostEqual(s1_gap["grids"][0]["gap"], 2.0)
+        self.assertAlmostEqual(s1_gap["Lx"], 3.0, places=3)
+        self.assertAlmostEqual(s1_gap["neut_x"], 2.8, places=3)
+
+        three_base = {
+            "upstream_gap_mm": 0.6,
+            "Lx": 4.28,
+            "neut_x": 4.03,
+            "user_overrode_Lx": False,
+            "user_overrode_neut_x": False,
+            "grids": [
+                {"V": 1100.0, "t": 0.38, "gap": 0.64, "r": 0.80, "cham": 0.0},
+                {"V": -200.0, "t": 0.38, "gap": 0.64, "r": 0.70, "cham": 0.0},
+                {"V": 0.0, "t": 0.38, "gap": 1.26, "r": 0.75, "cham": 0.0},
+            ],
+        }
+        g3_v = apply_sweep_param_to_dict(three_base, "grid_3_V", -75.0)
+        self.assertAlmostEqual(g3_v["grids"][2]["V"], -75.0)
+        self.assertAlmostEqual(g3_v["grids"][0]["V"], 1100.0)
+
+        g3_r = apply_sweep_param_to_dict(three_base, "grid_3_r", 0.95)
+        self.assertAlmostEqual(g3_r["grids"][2]["r"], 0.95)
+
+        g3_cham = apply_sweep_param_to_dict(three_base, "grid_3_cham", 30.0)
+        self.assertAlmostEqual(g3_cham["grids"][2]["cham"], 30.0)
+
+        g3_t = apply_sweep_param_to_dict(three_base, "grid_3_t", 0.58)
+        self.assertAlmostEqual(g3_t["grids"][2]["t"], 0.58)
+        self.assertAlmostEqual(g3_t["Lx"], 4.48, places=3)
+
+    def test_run_single_sweep_scenario_worker_1_and_3_grids(self):
+        """Run headless scenario worker with 1-grid chamfer sweep and 3-grid gap sweep."""
+        one_grid_base = {
+            "Te_up": 2.0, "n0_plasma": 1e16, "Ti": 0.5, "n0": 1e17, "Tn": 300.0,
+            "Te": 2.0, "upstream_gap_mm": 0.6, "Lx": 2.5,
+            "user_overrode_Lx": False, "user_overrode_neut_x": False, "neut_x": 2.35,
+            "grids": [{"V": 1000.0, "t": 0.5, "gap": 1.4, "r": 0.8, "cham": 0.0}],
+        }
+        status_1 = {}
+        res_1 = run_single_sweep_scenario_worker({
+            "scenario_idx": 1,
+            "param_id": "grid_1_cham",
+            "parameter_value": 25.0,
+            "base_params": one_grid_base,
+            "steady_config": {"window": 5, "threshold": 5.0, "max_iterations": 6, "min_iterations": 5},
+            "status_dict": status_1,
+        })
+        self.assertEqual(res_1["scenario_idx"], 1)
+        self.assertAlmostEqual(res_1["parameter_value"], 25.0, places=6)
+        self.assertTrue(np.isfinite(res_1["total_energy_J"]))
+
+        three_grid_base = {
+            "Te_up": 2.0, "n0_plasma": 1e16, "Ti": 0.5, "n0": 1e17, "Tn": 300.0,
+            "Te": 2.0, "upstream_gap_mm": 0.6, "Lx": 4.28,
+            "user_overrode_Lx": False, "user_overrode_neut_x": False, "neut_x": 4.03,
+            "grids": [
+                {"V": 1100.0, "t": 0.38, "gap": 0.64, "r": 0.80, "cham": 0.0},
+                {"V": -200.0, "t": 0.38, "gap": 0.64, "r": 0.70, "cham": 0.0},
+                {"V": 0.0, "t": 0.38, "gap": 1.26, "r": 0.75, "cham": 0.0},
+            ],
+        }
+        status_3 = {}
+        res_3 = run_single_sweep_scenario_worker({
+            "scenario_idx": 1,
+            "param_id": "grid_3_gap",
+            "parameter_value": 2.26,
+            "base_params": three_grid_base,
+            "steady_config": {"window": 5, "threshold": 5.0, "max_iterations": 6, "min_iterations": 5},
+            "status_dict": status_3,
+        })
+        self.assertAlmostEqual(res_3["parameter_value"], 2.26, places=6)
+        self.assertAlmostEqual(status_3[1]["Lx"], 5.28, places=3)
+        self.assertTrue(np.isfinite(res_3["total_energy_J"]))
+
+    def test_apply_sweep_param_and_worker_auto_upstream_gap(self):
+        """Verify apply_sweep_param_to_dict and worker honor auto_update_upstream_gap True vs False."""
+        base_params = {
+            "Te_up": 3.0, "n0_plasma": 1e16, "Ti": 0.5, "n0": 1e17, "Tn": 300.0,
+            "Te": 2.0, "upstream_gap_mm": 0.6, "Lx": 3.6, "neut_x": 3.45,
+            "user_overrode_Lx": False, "user_overrode_neut_x": False,
+            "upstream_gap_settings": {"method": "ratio", "ratio_base": "screen_r", "ratio": 0.75},
+            "grids": [
+                {"V": 1000.0, "t": 0.5, "gap": 1.0, "r": 0.8, "cham": 0.0},
+                {"V": -200.0, "t": 0.5, "gap": 1.0, "r": 0.7, "cham": 0.0},
+            ],
+        }
+        # 1. Auto-update enabled -> r1=1.6 => upstream_gap_mm=1.2, Lx=4.2
+        sw_var = {
+            "auto_update_upstream_gap": True,
+            "upstream_gap_coupling": {"base": "screen_r", "ratio": 0.75},
+        }
+        out_var = apply_sweep_param_to_dict(base_params, "grid_1_r", 1.6, sweep_config=sw_var)
+        self.assertAlmostEqual(out_var["upstream_gap_mm"], 1.2, places=3)
+        self.assertAlmostEqual(out_var["Lx"], 4.2, places=3)
+        self.assertAlmostEqual(out_var["neut_x"], 4.1, places=3)
+
+        # 2. Auto-update disabled -> upstream_gap_mm stays 0.6, Lx stays 3.6
+        sw_fixed = {
+            "auto_update_upstream_gap": False,
+            "upstream_gap_coupling": {"base": "screen_r", "ratio": 0.75},
+        }
+        out_fixed = apply_sweep_param_to_dict(base_params, "grid_1_r", 1.6, sweep_config=sw_fixed)
+        self.assertAlmostEqual(out_fixed["upstream_gap_mm"], 0.6, places=3)
+        self.assertAlmostEqual(out_fixed["Lx"], 3.6, places=3)
+
+        # 3. Worker end-to-end executes with synced upstream_gap_mm
+        status_var, status_fixed = {}, {}
+        run_single_sweep_scenario_worker({
+            "scenario_idx": 1, "param_id": "grid_1_r", "parameter_value": 1.6,
+            "base_params": base_params, "sweep_config": sw_var,
+            "steady_config": {"window": 5, "threshold": 5.0, "max_iterations": 6, "min_iterations": 5},
+            "status_dict": status_var,
+        })
+        run_single_sweep_scenario_worker({
+            "scenario_idx": 1, "param_id": "grid_1_r", "parameter_value": 1.6,
+            "base_params": base_params, "sweep_config": sw_fixed,
+            "steady_config": {"window": 5, "threshold": 5.0, "max_iterations": 6, "min_iterations": 5},
+            "status_dict": status_fixed,
+        })
+        self.assertAlmostEqual(status_var[1]["upstream_gap_mm"], 1.2, places=3)
+        self.assertAlmostEqual(status_var[1]["Lx"], 4.2, places=3)
+        self.assertAlmostEqual(status_fixed[1]["upstream_gap_mm"], 0.6, places=3)
+        self.assertAlmostEqual(status_fixed[1]["Lx"], 3.6, places=3)
+
 
 class TestParallelSweepWorkerExecution(unittest.TestCase):
     @classmethod

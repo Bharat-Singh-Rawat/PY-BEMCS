@@ -10,13 +10,143 @@ import numpy as np
 from PyQt5.QtWidgets import QMessageBox, QApplication
 from PyQt5.QtCore import QTimer
 
-from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value
+from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value, parse_grid_sweep_param
 from ..workers import ParallelSweepWorker
 from diagnostics.metrics import compute_rolling_variation
 
 
 class SweepMixin:
     """Mixin managing the Parametric Sweep simulation workflow."""
+
+    def _set_grid_edit_buttons_enabled(self, enabled: bool):
+        """Enable or disable `+ Add Grid` / `- Remove Grid` buttons during active sweeps."""
+        for attr in ("btn_add_grid", "btn_remove_grid"):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                btn.setEnabled(bool(enabled))
+
+    def _hide_sweep_top_bar_controls(self):
+        for attr in (
+            "lbl_sweep_badge",
+            "combo_sweep_scenario",
+            "btn_stop_sweep",
+            "btn_resume_sweep",
+            "btn_exit_sweep",
+            "lbl_build_domain_info",
+            "lbl_beam_info",
+        ):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setVisible(False)
+
+    def _validate_sweep_grid_consistency(self, config=None, require_built_domain=False):
+        """Verify UI grids, built simulator grids, and sweep target agree."""
+        n_widgets = len(getattr(self, 'grid_widgets', []))
+        if getattr(self, '_grid_count_modified_since_build', False):
+            return (
+                "Grid configuration changed after adding or removing grids.\n\n"
+                "Please click '1. BUILD DOMAIN' first so the computational domain matches the current grids."
+            )
+
+        cfg = config if config is not None else getattr(self, 'sweep_config', None)
+        sim = getattr(self, 'sim', None)
+        sim_grids = getattr(sim, 'grids', None)
+        domain_checked = require_built_domain or getattr(self, '_sweep_domain_built', False)
+
+        if cfg is not None:
+            param_id = cfg.get("param_id", "")
+            grid_idx, _ = parse_grid_sweep_param(param_id)
+            if grid_idx is not None:
+                if n_widgets > 0 and grid_idx > n_widgets:
+                    return (
+                        f"Sweep target '{param_id}' refers to Grid {grid_idx}, "
+                        f"which does not exist in the current {n_widgets}-grid configuration."
+                    )
+                if domain_checked and sim_grids is not None and len(sim_grids) > 0 and grid_idx > len(sim_grids):
+                    return (
+                        f"Sweep target '{param_id}' refers to Grid {grid_idx}, "
+                        f"but the built computational domain only has {len(sim_grids)} grid(s).\n\n"
+                        "Please click '1. BUILD DOMAIN' and reconfigure the sweep."
+                    )
+
+        if n_widgets > 0 and domain_checked and sim_grids is not None and len(sim_grids) > 0:
+            if len(sim_grids) != n_widgets:
+                return (
+                    f"Grid count discrepancy detected: UI defines {n_widgets} grid(s), "
+                    f"while the built computational domain has {len(sim_grids)} grid(s).\n\n"
+                    "Please click '1. BUILD DOMAIN' before running the sweep."
+                )
+
+        if require_built_domain and n_widgets > 0:
+            base_params = getattr(self, '_sweep_base_params', None)
+            if isinstance(base_params, dict) and isinstance(base_params.get("grids"), list):
+                if len(base_params["grids"]) != n_widgets:
+                    return (
+                        f"Grid count discrepancy detected: sweep baseline has {len(base_params['grids'])} grid(s), "
+                        f"while UI defines {n_widgets} grid(s).\n\n"
+                        "Please click '1. BUILD DOMAIN' first."
+                    )
+        return None
+
+    def _warn_sweep_grid_discrepancy(self, msg: str, title: str = "Sweep / Domain Discrepancy"):
+        if hasattr(self, 'lbl_status'):
+            self.lbl_status.setText("Status: Grid/sweep discrepancy — rebuild domain or update sweep settings.")
+        QMessageBox.warning(self, title, msg)
+
+    def on_grid_count_changed(self):
+        """Handle grid additions/removals outside config loading."""
+        n_grids = len(getattr(self, 'grid_widgets', []))
+        cfg = getattr(self, 'sweep_config', None)
+        if cfg is None:
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(
+                    f"Grid count changed ({n_grids} grid(s)). Click '1. BUILD DOMAIN' before opening Sweep settings."
+                )
+            return
+
+        param_id = cfg.get("param_id", "")
+        grid_idx, _ = parse_grid_sweep_param(param_id)
+        if grid_idx is not None and grid_idx > n_grids:
+            self.sweep_mode_armed = False
+            self.is_sweep_active = False
+            self._sweep_domain_built = False
+            self._sweep_paused_current = False
+            self._sweep_stopped = False
+            self.sweep_config = None
+            self.sweep_results = []
+            self._sweep_status_dict = {}
+            self._hide_sweep_top_bar_controls()
+            self._set_grid_edit_buttons_enabled(True)
+            msg = (
+                f"Grid {grid_idx} was removed, so the configured sweep on '{param_id}' is no longer valid "
+                f"for the current {n_grids}-grid setup.\n\n"
+                "The invalid sweep has been disarmed. Please click '1. BUILD DOMAIN' and then open "
+                "'Settings -> Sweep...' to configure a valid sweep."
+            )
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(
+                    f"Grid {grid_idx} removed — invalid sweep '{param_id}' disarmed. Click '1. BUILD DOMAIN' first."
+                )
+            QMessageBox.warning(self, "Sweep Target Invalidated", msg)
+            return
+
+        self.is_sweep_active = False
+        self.sweep_mode_armed = True
+        self._sweep_domain_built = False
+        self._sweep_stopped = False
+        self._set_grid_edit_buttons_enabled(True)
+        if hasattr(self, 'lbl_sweep_badge'):
+            self.lbl_sweep_badge.setVisible(True)
+            self.lbl_sweep_badge.setText("⚡ Sweep invalidated — click 1. BUILD DOMAIN")
+            self.lbl_sweep_badge.setStyleSheet(
+                "background-color: #fef3c7; color: #b45309; font-weight: bold; "
+                "border: 1px solid #fde68a; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+        if hasattr(self, 'lbl_status'):
+            self.lbl_status.setText(
+                f"Grid count changed ({n_grids} grid(s)). Click '1. BUILD DOMAIN' to rebuild before starting sweep."
+            )
+        self._update_sweep_action_button_state()
 
     def open_sweep_dialog(self):
         """Open modal configuration dialog to save sweep settings."""
@@ -28,6 +158,16 @@ class SweepMixin:
             )
             return
 
+        if getattr(self, '_grid_count_modified_since_build', False):
+            msg = (
+                "Grid configuration changed after adding or removing grids.\n\n"
+                "Please click '1. BUILD DOMAIN' first before setting sweep parameters."
+            )
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText("Status: Attention: build domain first")
+            QMessageBox.warning(self, "Build Domain First", msg)
+            return
+
         dialog = SweepSettingsDialog(self)
         if dialog.exec_() == SweepSettingsDialog.Accepted:
             cfg = dialog.get_config()
@@ -35,6 +175,11 @@ class SweepMixin:
 
     def save_sweep_settings(self, config):
         """Save sweep configuration and arm sweep mode without immediately launching."""
+        err = self._validate_sweep_grid_consistency(config, require_built_domain=False)
+        if err:
+            self._warn_sweep_grid_discrepancy(err, title="Sweep Configuration Discrepancy")
+            return False
+
         self.sweep_config = config
         self.sweep_results = []
         self._sweep_status_dict = {}
@@ -176,10 +321,18 @@ class SweepMixin:
 
         # Case 1: Sweep is armed (not yet started)
         if getattr(self, 'sweep_mode_armed', False) and not getattr(self, 'is_sweep_active', False):
+            err = self._validate_sweep_grid_consistency(self.sweep_config, require_built_domain=False)
+            if err:
+                self._warn_sweep_grid_discrepancy(err)
+                return
             if not self.is_domain_ready_for_sweep():
                 if hasattr(self, 'lbl_status'):
                     self.lbl_status.setText("Status: Attention: build domain first")
                 QMessageBox.warning(self, "Attention", "Attention: build domain first")
+                return
+            err = self._validate_sweep_grid_consistency(self.sweep_config, require_built_domain=True)
+            if err:
+                self._warn_sweep_grid_discrepancy(err)
                 return
             self.start_sweep(self.sweep_config)
             self._update_sweep_action_button_state()
@@ -249,6 +402,11 @@ class SweepMixin:
         if not hasattr(self, 'combo_sweep_scenario') or self.sweep_config is None:
             return
 
+        err = self._validate_sweep_grid_consistency(self.sweep_config, require_built_domain=True)
+        if err:
+            self._warn_sweep_grid_discrepancy(err)
+            return
+
         cur_idx = self.combo_sweep_scenario.currentIndex()
         values = self.sweep_config.get("values", [])
         if cur_idx < 0 or cur_idx >= len(values):
@@ -270,6 +428,7 @@ class SweepMixin:
             self.is_sweep_active = True
             self._sweep_stopped = False
             self._sweep_paused_current = False
+            self._set_grid_edit_buttons_enabled(False)
             self.parallel_sweep_worker.set_active_view_scenario(scen_num)
             self.parallel_sweep_worker.resume_all_scenarios()
 
@@ -357,6 +516,7 @@ class SweepMixin:
         self.is_sweep_active = True
         self._sweep_stopped = False
         self._sweep_paused_current = False
+        self._set_grid_edit_buttons_enabled(False)
         self.sweep_scenario_start_wall_time = time.perf_counter()
         self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
         if hasattr(self, '_sweep_status_dict') and self._sweep_status_dict:
@@ -397,10 +557,20 @@ class SweepMixin:
 
     def start_sweep(self, config):
         """Initialize and launch the multi-scenario sweep."""
+        err = self._validate_sweep_grid_consistency(config, require_built_domain=False)
+        if err:
+            self._warn_sweep_grid_discrepancy(err)
+            return
+
         if not self.is_domain_ready_for_sweep():
             if hasattr(self, 'lbl_status'):
                 self.lbl_status.setText("Status: Attention: build domain first")
             QMessageBox.warning(self, "Attention", "Attention: build domain first")
+            return
+
+        err = self._validate_sweep_grid_consistency(config, require_built_domain=True)
+        if err:
+            self._warn_sweep_grid_discrepancy(err)
             return
 
         if hasattr(self, '_sim_worker') and self._sim_worker.isRunning():
@@ -416,6 +586,7 @@ class SweepMixin:
         self.is_sweep_active = True
         self.sweep_mode_armed = False
         self._sweep_paused_current = False
+        self._set_grid_edit_buttons_enabled(False)
         self._sweep_base_params = copy.deepcopy(self.get_params()) if hasattr(self, 'get_params') else {}
         self._scenario_domain_cache = {}
         self._current_rendered_scenario_grid_idx = None
@@ -604,8 +775,39 @@ class SweepMixin:
                 self._sweep_paused_current = True
             self.sweep_current_idx = index
 
-        # 2. Sync grid spinboxes from cached scenario domain data
+        # 2. Sync grid spinboxes and auto-computed inputs from cached scenario domain data
         d_data = self._get_scenario_domain_data(scenario_idx)
+        scenario_params = d_data.get("params", {}) if d_data else {}
+        if (
+            scenario_params
+            and "upstream_gap_mm" in scenario_params
+            and hasattr(self, 'inputs')
+            and "upstream_gap_mm" in self.inputs
+        ):
+            try:
+                gap_val = float(scenario_params["upstream_gap_mm"])
+                self.inputs["upstream_gap_mm"].blockSignals(True)
+                self.inputs["upstream_gap_mm"].setValue(gap_val)
+                self.inputs["upstream_gap_mm"].blockSignals(False)
+                if cfg.get("auto_update_upstream_gap", False):
+                    self._last_auto_gap = round(gap_val, 3)
+            except Exception:
+                pass
+        if (
+            scenario_params
+            and not scenario_params.get("user_overrode_neut_x", True)
+            and "neut_x" in scenario_params
+            and hasattr(self, 'inputs')
+            and "neut_x" in self.inputs
+        ):
+            try:
+                neut_val = float(scenario_params["neut_x"])
+                self.inputs["neut_x"].blockSignals(True)
+                self.inputs["neut_x"].setValue(neut_val)
+                self.inputs["neut_x"].blockSignals(False)
+                self._last_auto_neut_x = round(neut_val, 3)
+            except Exception:
+                pass
         scenario_grids = d_data.get("grids", [])
         if hasattr(self, 'grid_widgets') and scenario_grids:
             for g_idx, g_dict in enumerate(scenario_grids):
@@ -747,7 +949,7 @@ class SweepMixin:
             base_params = {}
 
         from physics.headless_sweep import apply_sweep_param_to_dict
-        scenario_params = apply_sweep_param_to_dict(base_params, param_id, val)
+        scenario_params = apply_sweep_param_to_dict(base_params, param_id, val, sweep_config=cfg)
 
         try:
             from physics.simulator import DigitalTwinSimulator
@@ -780,6 +982,7 @@ class SweepMixin:
                 "x_coords": getattr(sim_temp, 'x_coords', None),
                 "y_coords": getattr(sim_temp, 'y_coords', None),
                 "zone_configs": getattr(sim_temp, 'zone_configs', None),
+                "upstream_gap_mm": float(getattr(sim_temp, 'upstream_gap_mm', 0.0)),
                 "grid_x_starts": getattr(sim_temp, 'grid_x_starts', None),
                 "grid_x_ends": getattr(sim_temp, 'grid_x_ends', None),
                 "grids": scenario_params.get("grids", []),
@@ -789,6 +992,30 @@ class SweepMixin:
             return data
         except Exception:
             return {}
+
+    def _sync_sim_domain_from_scenario_data(self, d_data, include_fields=False):
+        """Synchronize self.sim geometry and mesh metadata from a cached scenario domain dict."""
+        if not d_data or not hasattr(self, 'sim') or self.sim is None:
+            return
+        if d_data.get("X") is not None and d_data.get("Y") is not None:
+            self.sim.X = d_data["X"]
+            self.sim.Y = d_data["Y"]
+            self.sim.nx = d_data["X"].shape[1]
+            self.sim.ny = d_data["X"].shape[0]
+        for k in ("dx", "dy", "upstream_gap_mm"):
+            if d_data.get(k) is not None:
+                setattr(self.sim, k, float(d_data[k]))
+        for k in ("Lx", "Ly"):
+            if d_data.get(k) is not None:
+                setattr(self.sim, k, float(d_data[k]))
+        for k in ("V", "isBound", "x_coords", "y_coords", "zone_configs", "grid_x_starts", "grid_x_ends", "grids"):
+            if d_data.get(k) is not None:
+                setattr(self.sim, k, d_data[k])
+        if include_fields:
+            if d_data.get("Vdc") is not None:
+                self.sim.Vdc = d_data["Vdc"]
+            elif d_data.get("V") is not None:
+                self.sim.Vdc = d_data["V"]
 
     def _update_toggle_btn_for_scenario(self, scenario_idx):
         """Update btn_toggle text ('PAUSE BEAM' or 'RESUME BEAM') based on selected scenario state."""
@@ -1132,6 +1359,9 @@ class SweepMixin:
                 self.ax_ebs.set_xlim(0, 100)
                 self.ax_ebs.set_ylim(-100, 100)
 
+        if d_data and not getattr(self, 'sim_isRunning', False):
+            self._sync_sim_domain_from_scenario_data(d_data)
+
         if hasattr(self, '_update_div_plane_line'):
             self._update_div_plane_line()
 
@@ -1278,16 +1508,7 @@ class SweepMixin:
         try:
             # Sync domain geometry and mesh grids from cached scenario data to ensure dimensions match
             d_data = self._get_scenario_domain_data(scenario_idx)
-            if d_data:
-                if d_data.get("X") is not None and d_data.get("Y") is not None:
-                    self.sim.X = d_data["X"]
-                    self.sim.Y = d_data["Y"]
-                    self.sim.nx = d_data["X"].shape[1]
-                    self.sim.ny = d_data["X"].shape[0]
-                if d_data.get("Lx") is not None:
-                    self.sim.Lx = float(d_data["Lx"])
-                if d_data.get("Ly") is not None:
-                    self.sim.Ly = float(d_data["Ly"])
+            self._sync_sim_domain_from_scenario_data(d_data)
 
             cur_ny = getattr(self.sim, 'ny', 1) or 1
             cur_nx = getattr(self.sim, 'nx', 1) or 1
@@ -1393,30 +1614,7 @@ class SweepMixin:
             if d_data is None:
                 d_data = self._get_scenario_domain_data(scenario_idx)
 
-            if d_data:
-                if d_data.get("X") is not None and d_data.get("Y") is not None:
-                    self.sim.X = d_data["X"]
-                    self.sim.Y = d_data["Y"]
-                    self.sim.nx = d_data["X"].shape[1]
-                    self.sim.ny = d_data["X"].shape[0]
-                if d_data.get("Lx") is not None:
-                    self.sim.Lx = float(d_data["Lx"])
-                if d_data.get("Ly") is not None:
-                    self.sim.Ly = float(d_data["Ly"])
-                if d_data.get("dx") is not None:
-                    self.sim.dx = float(d_data["dx"])
-                if d_data.get("dy") is not None:
-                    self.sim.dy = float(d_data["dy"])
-                if d_data.get("V") is not None:
-                    self.sim.V = d_data["V"]
-                if d_data.get("isBound") is not None:
-                    self.sim.isBound = d_data["isBound"]
-                if d_data.get("x_coords") is not None:
-                    self.sim.x_coords = d_data["x_coords"]
-                if d_data.get("y_coords") is not None:
-                    self.sim.y_coords = d_data["y_coords"]
-                if d_data.get("zone_configs") is not None:
-                    self.sim.zone_configs = d_data["zone_configs"]
+            self._sync_sim_domain_from_scenario_data(d_data)
 
             # Substep history
             subs_it = info.get("substep_history_iter")
@@ -1485,32 +1683,7 @@ class SweepMixin:
             if d_data is None:
                 d_data = self._get_scenario_domain_data(scenario_idx)
 
-            if d_data:
-                if d_data.get("X") is not None and d_data.get("Y") is not None:
-                    self.sim.X = d_data["X"]
-                    self.sim.Y = d_data["Y"]
-                    self.sim.nx = d_data["X"].shape[1]
-                    self.sim.ny = d_data["X"].shape[0]
-                if d_data.get("Lx") is not None:
-                    self.sim.Lx = float(d_data["Lx"])
-                if d_data.get("Ly") is not None:
-                    self.sim.Ly = float(d_data["Ly"])
-                if d_data.get("dx") is not None:
-                    self.sim.dx = float(d_data["dx"])
-                if d_data.get("dy") is not None:
-                    self.sim.dy = float(d_data["dy"])
-                if d_data.get("V") is not None:
-                    self.sim.V = d_data["V"]
-                if d_data.get("isBound") is not None:
-                    self.sim.isBound = d_data["isBound"]
-                if d_data.get("x_coords") is not None:
-                    self.sim.x_coords = d_data["x_coords"]
-                if d_data.get("y_coords") is not None:
-                    self.sim.y_coords = d_data["y_coords"]
-                if d_data.get("grid_x_starts") is not None:
-                    self.sim.grid_x_starts = d_data["grid_x_starts"]
-                if d_data.get("grid_x_ends") is not None:
-                    self.sim.grid_x_ends = d_data["grid_x_ends"]
+            self._sync_sim_domain_from_scenario_data(d_data)
 
             cur_ny = getattr(self.sim, 'ny', 1) or 1
             cur_nx = getattr(self.sim, 'nx', 1) or 1
@@ -1680,14 +1853,7 @@ class SweepMixin:
         if not getattr(self, 'field_window', None) or not self.field_window.isVisible():
             return
         try:
-            if d_data:
-                for k in ("Lx", "Ly", "dx", "dy", "nx", "ny", "X", "Y", "isBound", "x_coords", "y_coords", "grids", "grid_x_starts", "grid_x_ends"):
-                    if d_data.get(k) is not None:
-                        setattr(self.sim, k, d_data[k])
-                if d_data.get("Vdc") is not None:
-                    self.sim.Vdc = d_data["Vdc"]
-                elif d_data.get("V") is not None:
-                    self.sim.Vdc = d_data["V"]
+            self._sync_sim_domain_from_scenario_data(d_data, include_fields=True)
 
             # If dynamic potential is present in info, use it; otherwise fallback to domain cache V
             if info.get("V") is not None:
@@ -1787,22 +1953,51 @@ class SweepMixin:
 
     def _apply_sweep_value(self, param_id, value):
         """Applies a target parameter value to the GUI inputs and simulator."""
-        if hasattr(self, 'inputs') and param_id in self.inputs:
-            try:
-                self.inputs[param_id].setValue(value)
-            except Exception:
-                pass
-        elif param_id.startswith("grid_") and hasattr(self, 'grid_widgets'):
-            parts = param_id.split("_")
-            if len(parts) >= 3:
+        self._suppress_auto_upstream_gap = True
+        try:
+            if hasattr(self, 'inputs') and param_id in self.inputs:
                 try:
-                    grid_idx = int(parts[1]) - 1
-                    prop_key = parts[2]
-                    if 0 <= grid_idx < len(self.grid_widgets):
-                        if prop_key in self.grid_widgets[grid_idx]:
-                            self.grid_widgets[grid_idx][prop_key].setValue(value)
+                    self.inputs[param_id].setValue(value)
                 except Exception:
                     pass
+            elif param_id.startswith("grid_") and hasattr(self, 'grid_widgets'):
+                parts = param_id.split("_")
+                if len(parts) >= 3:
+                    try:
+                        grid_idx = int(parts[1]) - 1
+                        prop_key = parts[2]
+                        if 0 <= grid_idx < len(self.grid_widgets):
+                            if prop_key in self.grid_widgets[grid_idx]:
+                                self.grid_widgets[grid_idx][prop_key].setValue(value)
+                    except Exception:
+                        pass
+        finally:
+            self._suppress_auto_upstream_gap = False
+
+        cfg = getattr(self, 'sweep_config', None)
+        if (
+            isinstance(cfg, dict)
+            and cfg.get("param_id") == param_id
+            and hasattr(self, 'inputs')
+            and "upstream_gap_mm" in self.inputs
+        ):
+            base_params = getattr(self, '_sweep_base_params', None)
+            if not isinstance(base_params, dict):
+                base_params = self.get_params() if hasattr(self, 'get_params') else {}
+            if cfg.get("auto_update_upstream_gap", False):
+                from physics.headless_sweep import apply_sweep_param_to_dict
+                resolved = apply_sweep_param_to_dict(base_params, param_id, value, sweep_config=cfg)
+                if "upstream_gap_mm" in resolved:
+                    gap_val = float(resolved["upstream_gap_mm"])
+                    self.inputs["upstream_gap_mm"].blockSignals(True)
+                    self.inputs["upstream_gap_mm"].setValue(gap_val)
+                    self.inputs["upstream_gap_mm"].blockSignals(False)
+                    self._last_auto_gap = round(gap_val, 3)
+            elif cfg.get("auto_update_upstream_gap") is False and "upstream_gap_mm" in base_params:
+                gap_val = float(base_params["upstream_gap_mm"])
+                self.inputs["upstream_gap_mm"].blockSignals(True)
+                self.inputs["upstream_gap_mm"].setValue(gap_val)
+                self.inputs["upstream_gap_mm"].blockSignals(False)
 
     def check_sweep_steady_state(self):
         """
@@ -2181,6 +2376,7 @@ class SweepMixin:
         if hasattr(self, 'lbl_status'):
             self.lbl_status.setText("Parametric sweep stopped. Click 'Resume Sweep' or select a scenario to continue.")
 
+        self._set_grid_edit_buttons_enabled(True)
         self._update_sweep_scenario_combo_items()
 
     def finish_sweep(self):
@@ -2188,6 +2384,7 @@ class SweepMixin:
         self.is_sweep_active = False
         self.sweep_mode_armed = False
         self._sweep_paused_current = False
+        self._set_grid_edit_buttons_enabled(True)
 
         total_time = time.perf_counter() - getattr(self, 'sweep_start_wall_time', time.perf_counter())
         if self.sweep_config is not None and "total_computation_time_s" not in self.sweep_config:
@@ -2395,20 +2592,8 @@ class SweepMixin:
         self._sweep_status_dict = {}
 
         # 4. Hide all sweep top-bar UI elements
-        if hasattr(self, 'lbl_sweep_badge'):
-            self.lbl_sweep_badge.setVisible(False)
-        if hasattr(self, 'combo_sweep_scenario'):
-            self.combo_sweep_scenario.setVisible(False)
-        if hasattr(self, 'btn_stop_sweep'):
-            self.btn_stop_sweep.setVisible(False)
-        if hasattr(self, 'btn_resume_sweep'):
-            self.btn_resume_sweep.setVisible(False)
-        if hasattr(self, 'btn_exit_sweep'):
-            self.btn_exit_sweep.setVisible(False)
-        if hasattr(self, 'lbl_build_domain_info'):
-            self.lbl_build_domain_info.setVisible(False)
-        if hasattr(self, 'lbl_beam_info'):
-            self.lbl_beam_info.setVisible(False)
+        self._hide_sweep_top_bar_controls()
+        self._set_grid_edit_buttons_enabled(True)
         self._bg_live = None
 
         # 5. Restore normal simulation controls and badge

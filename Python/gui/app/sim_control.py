@@ -1,6 +1,7 @@
 """
 Simulation control loop, duration timing, domain build, and worker thread lifecycle.
 """
+import copy
 import time
 import numpy as np
 from PyQt5.QtWidgets import QMessageBox, QApplication
@@ -157,6 +158,34 @@ class SimControlMixin:
         if hasattr(self, '_update_sweep_scenario_combo_items') and (getattr(self, 'sweep_mode_armed', False) or getattr(self, 'is_sweep_active', False)):
             self._update_sweep_scenario_combo_items()
 
+    def _validate_grids_geometry(self):
+        """Return validation error strings for all active grids (1..N) before domain build."""
+        grid_widgets = getattr(self, 'grid_widgets', [])
+        n_grids = len(grid_widgets)
+        if n_grids == 0:
+            return ["At least one grid must be defined."]
+
+        errors = []
+        for idx, gw in enumerate(grid_widgets, start=1):
+            t_val = float(gw["t"].value())
+            gap_val = float(gw["gap"].value())
+            r_val = float(gw["r"].value())
+            cham_val = float(gw["cham"].value())
+
+            if t_val <= 0.0:
+                errors.append(f"Grid {idx}: Thickness (t = {t_val:.3g} mm) must be > 0 mm.")
+            if r_val <= 0.0:
+                errors.append(f"Grid {idx}: Aperture Radius (r = {r_val:.3g} mm) must be > 0 mm.")
+            if idx < n_grids and gap_val <= 0.0:
+                errors.append(
+                    f"Grid {idx}: Gap to Grid {idx + 1} (gap = {gap_val:.3g} mm) must be > 0 mm."
+                )
+            elif gap_val < 0.0:
+                errors.append(f"Grid {idx}: Downstream gap (gap = {gap_val:.3g} mm) cannot be negative.")
+            if cham_val < 0.0 or cham_val > 45.0:
+                errors.append(f"Grid {idx}: Chamfer ({cham_val:.3g}°) must be between 0° and 45°.")
+        return errors
+
     def build_domain(self, force=False):
         if not force and self.is_simulation_running():
             msg = "Stop the sweep before building"
@@ -165,6 +194,18 @@ class SimControlMixin:
                 self.lbl_status.setText(f"Status: {msg}")
             QMessageBox.warning(self, "Warning", msg)
             return
+        if not force:
+            grid_errors = self._validate_grids_geometry()
+            if grid_errors:
+                msg = (
+                    "Cannot build domain due to invalid grid geometry:\n\n"
+                    + "\n".join(f"• {e}" for e in grid_errors)
+                )
+                print(f"[Build Domain] Invalid grid geometry: {'; '.join(grid_errors)}")
+                if hasattr(self, 'lbl_status'):
+                    self.lbl_status.setText("Status: Invalid grid geometry — check grid parameters.")
+                QMessageBox.warning(self, "Invalid Grid Geometry", msg)
+                return
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
             worker = self.parallel_sweep_worker
             self.parallel_sweep_worker = None
@@ -272,8 +313,20 @@ class SimControlMixin:
             _neut_auto = round(self.sim.Lx - 0.5, 3)
         _last = getattr(self, '_last_auto_neut_x', None)
         _current_neut = round(self.inputs["neut_x"].value(), 3)
-        if _current_neut > self.sim.Lx or _current_neut < 0.0:
-            if not getattr(self, 'is_sweep_active', False) and getattr(self, 'isVisible', lambda: False)():
+        _is_auto_neut = (_last is None) or (_last >= 0.0 and abs(_current_neut - _last) <= 0.001)
+        if _is_auto_neut:
+            self._last_auto_neut_x = _neut_auto
+            self.inputs["neut_x"].blockSignals(True)
+            self.inputs["neut_x"].setValue(_neut_auto)
+            self.inputs["neut_x"].blockSignals(False)
+            print(f"[Build Domain] neut_x auto-set to {_neut_auto:.3f} mm  "
+                  f"(90% into plume: x_exit={_x_exit if hasattr(self.sim, 'grid_x_ends') and self.sim.grid_x_ends else '?':.3f} mm, Lx={self.sim.Lx:.3f} mm)")
+        elif _current_neut > self.sim.Lx or _current_neut < 0.0:
+            if (
+                not getattr(self, 'is_sweep_active', False)
+                and not getattr(self, 'sweep_mode_armed', False)
+                and getattr(self, 'isVisible', lambda: False)()
+            ):
                 QMessageBox.warning(
                     self,
                     "Neutralizer Warning",
@@ -286,13 +339,6 @@ class SimControlMixin:
             self.inputs["neut_x"].setValue(round(self.sim.Lx, 3))
             self.inputs["neut_x"].blockSignals(False)
             self._last_auto_neut_x = -999.0
-        elif _last is None or abs(_current_neut - _last) <= 0.001:
-            self._last_auto_neut_x = _neut_auto
-            self.inputs["neut_x"].blockSignals(True)
-            self.inputs["neut_x"].setValue(_neut_auto)
-            self.inputs["neut_x"].blockSignals(False)
-            print(f"[Build Domain] neut_x auto-set to {_neut_auto:.3f} mm  "
-                  f"(90% into plume: x_exit={_x_exit if hasattr(self.sim, 'grid_x_ends') and self.sim.grid_x_ends else '?':.3f} mm, Lx={self.sim.Lx:.3f} mm)")
 
         self.draw_static_domain()
 
@@ -319,6 +365,7 @@ class SimControlMixin:
             self.substep_window.update_plot(self.sim)
 
         self._built_params_snapshot = self._extract_domain_signature()
+        self._grid_count_modified_since_build = False
         self._sweep_paused_current = False
         self._sweep_domain_built = True
 
@@ -329,6 +376,8 @@ class SimControlMixin:
             self.lbl_beam_info.setVisible(is_sweep)
 
         if getattr(self, 'sweep_mode_armed', False) and hasattr(self, 'lbl_sweep_badge'):
+            self._sweep_base_params = copy.deepcopy(self.get_params())
+            self._scenario_domain_cache = {}
             cfg = getattr(self, 'sweep_config', {})
             total_scenarios = len(cfg.get("values", []))
             param_id = cfg.get("param_id", "")

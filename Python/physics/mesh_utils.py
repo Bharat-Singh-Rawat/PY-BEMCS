@@ -39,6 +39,108 @@ def compute_debye_upstream_gap(n0: float, Te_up: float) -> float:
     return n_debye * debye_mm
 
 
+def compute_upstream_gap_value(
+    screen_r: float = 0.80,
+    n0: float = 1e17,
+    Te_up: float = 3.0,
+    entire_bulk_plasma: bool = False,
+    upstream_gap_settings: dict = None,
+    force_base: str = None,
+    ratio_override: float = None,
+):
+    """Compute coupled upstream gap [mm] matching GUI ratio/Debye rules, or None if invalid/custom."""
+    if force_base == "screen_r":
+        if screen_r <= 0.0:
+            return None
+        ratio = 0.75 if ratio_override is None else float(ratio_override)
+        return round(ratio * float(screen_r), 3)
+
+    if force_base == "debye":
+        if n0 <= 0.0 or Te_up <= 0.0:
+            return None
+        if ratio_override is not None:
+            debye_mm = float(np.sqrt(8.854e-12 * float(Te_up) / (1.6e-19 * float(n0) * 0.61)) * 1e3)
+            return round(float(ratio_override) * debye_mm, 3)
+        return round(float(compute_debye_upstream_gap(float(n0), float(Te_up))), 3)
+
+    if isinstance(upstream_gap_settings, dict):
+        method = upstream_gap_settings.get("method")
+        if method == "custom":
+            return None
+        if method == "ratio":
+            base = upstream_gap_settings.get("ratio_base", "screen_r")
+            ratio = float(upstream_gap_settings.get("ratio", 0.75))
+            return compute_upstream_gap_value(
+                screen_r=screen_r,
+                n0=n0,
+                Te_up=Te_up,
+                entire_bulk_plasma=entire_bulk_plasma,
+                force_base=base,
+                ratio_override=ratio,
+            )
+
+    if entire_bulk_plasma:
+        return compute_upstream_gap_value(n0=n0, Te_up=Te_up, force_base="debye")
+    return compute_upstream_gap_value(screen_r=screen_r, force_base="screen_r", ratio_override=0.75)
+
+
+def get_upstream_gap_coupling_for_param(
+    param_id: str,
+    upstream_gap_settings: dict = None,
+    entire_bulk_plasma: bool = False,
+):
+    """Return coupling descriptor `{'base', 'ratio'}` if `param_id` influences upstream_gap_mm, else None."""
+    settings = upstream_gap_settings if isinstance(upstream_gap_settings, dict) else {}
+    method = settings.get("method")
+    ratio_base = settings.get("ratio_base")
+
+    if param_id == "grid_1_r":
+        ratio = float(settings.get("ratio", 0.75)) if (method == "ratio" and ratio_base == "screen_r") else 0.75
+        return {"base": "screen_r", "ratio": ratio}
+
+    if param_id in ("n0_plasma", "Te_up"):
+        if method == "ratio" and ratio_base == "debye":
+            return {"base": "debye", "ratio": float(settings.get("ratio", 30.0))}
+        if entire_bulk_plasma and method not in ("custom", "ratio"):
+            return {"base": "debye", "ratio": None}
+
+    return None
+
+
+def resolve_swept_upstream_gap(param_id: str, params: dict, coupling_meta: dict = None):
+    """Compute the updated upstream_gap_mm for a swept scenario dict, or None if not applicable."""
+    if not isinstance(params, dict):
+        return None
+    coupling = (
+        coupling_meta
+        if (isinstance(coupling_meta, dict) and coupling_meta.get("base") in ("screen_r", "debye"))
+        else get_upstream_gap_coupling_for_param(
+            param_id,
+            upstream_gap_settings=params.get("upstream_gap_settings"),
+            entire_bulk_plasma=bool(params.get("entire_bulk_plasma", False)),
+        )
+    )
+    if not coupling:
+        return None
+
+    base = coupling.get("base")
+    if not (
+        (param_id == "grid_1_r" and base == "screen_r")
+        or (param_id in ("n0_plasma", "Te_up") and base == "debye")
+    ):
+        return None
+
+    grids = params.get("grids", [])
+    screen_r = float(grids[0].get("r", 0.80)) if grids else 0.80
+    return compute_upstream_gap_value(
+        screen_r=screen_r,
+        n0=float(params.get("n0_plasma", 1e17)),
+        Te_up=float(params.get("Te_up", 3.0)),
+        force_base=base,
+        ratio_override=coupling.get("ratio"),
+    )
+
+
 def compute_efield_constrained_spacing(
     grids,
     n0: float,

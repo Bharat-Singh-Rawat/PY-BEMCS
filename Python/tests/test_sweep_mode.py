@@ -4,9 +4,15 @@ import os
 import tempfile
 import csv
 import numpy as np
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QToolButton, QWidget
 
-from gui.dialogs import SweepSettingsDialog, SweepResultsDialog, SWEEP_PARAMETERS
+from gui.dialogs import (
+    SweepSettingsDialog,
+    SweepResultsDialog,
+    SWEEP_PARAMETERS,
+    build_sweep_parameters,
+    find_sweep_param_def,
+)
 from gui.app.main_window import DigitalTwinApp
 
 
@@ -271,6 +277,161 @@ class TestSweepDialogs(unittest.TestCase):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         res_dlg.close()
+
+    def test_sweep_dialog_upstream_gap_parameter(self):
+        """Verify Upstream Gap (mm) is selectable in SweepSettingsDialog with 3-decimal mm precision."""
+        self.assertIn("upstream_gap_mm", [p["id"] for p in SWEEP_PARAMETERS])
+
+        dlg = SweepSettingsDialog()
+        idx = dlg.combo_param.findData("upstream_gap_mm")
+        self.assertGreaterEqual(idx, 0)
+        dlg.combo_param.setCurrentIndex(idx)
+
+        self.assertFalse(dlg.spin_start.scientific)
+        self.assertEqual(dlg.spin_start.decimals(), 3)
+        self.assertEqual(dlg.spin_start.suffix(), " mm")
+        self.assertEqual(dlg.combo_scale.currentData(), "linear")
+
+        dlg.spin_start.setValue(0.375)
+        dlg.spin_end.setValue(1.625)
+        dlg.spin_n.setValue(3)
+
+        cfg = dlg.get_config()
+        self.assertEqual(cfg["param_id"], "upstream_gap_mm")
+        self.assertEqual(cfg["param_unit"], "mm")
+        self.assertEqual(cfg["values"], [0.375, 1.0, 1.625])
+        self.assertIn("0.375", dlg.lbl_preview.text())
+        self.assertIn("1.62", dlg.lbl_preview.text())
+        dlg.close()
+
+    def test_build_sweep_parameters_dynamic_5_props_per_grid(self):
+        """Verify build_sweep_parameters exposes all 5 properties for grids 1..N."""
+        for n_grids in (1, 3, 4):
+            catalog = build_sweep_parameters(n_grids)
+            ids = [p["id"] for p in catalog]
+            for g in range(1, n_grids + 1):
+                for prop in ("V", "t", "gap", "r", "cham"):
+                    self.assertIn(f"grid_{g}_{prop}", ids)
+            self.assertNotIn(f"grid_{n_grids + 1}_V", ids)
+            self.assertIn("upstream_gap_mm", ids)
+
+        dummy_parent = QWidget()
+        dummy_parent.grid_widgets = [{}, {}, {}]
+        dlg = SweepSettingsDialog(dummy_parent)
+        combo_ids = [dlg.combo_param.itemData(i) for i in range(dlg.combo_param.count())]
+        for g in (1, 2, 3):
+            for prop in ("V", "t", "gap", "r", "cham"):
+                self.assertIn(f"grid_{g}_{prop}", combo_ids)
+        self.assertNotIn("grid_4_V", combo_ids)
+
+        idx_cham = dlg.combo_param.findData("grid_3_cham")
+        self.assertGreaterEqual(idx_cham, 0)
+        dlg.combo_param.setCurrentIndex(idx_cham)
+        self.assertEqual(dlg.spin_start.suffix(), " °")
+        self.assertEqual(dlg.spin_start.decimals(), 2)
+        dlg.close()
+
+        pdef_g4 = find_sweep_param_def("grid_4_cham")
+        self.assertIsNotNone(pdef_g4)
+        self.assertEqual(pdef_g4["unit"], "°")
+
+        res_dlg = SweepResultsDialog(
+            {"param_id": "grid_3_cham", "param_label": "Grid 3 Chamfer (°)", "param_unit": "°"},
+            [{
+                "scenario_idx": 1, "parameter_value": 15.0, "steady_state_reached": True,
+                "steady_iterations": 100, "saddle_potential_V": -10.0, "divergence_deg": 5.0,
+                "exit_ion_current_A": 0.02, "transparency": 0.9, "total_energy_J": 1e-4,
+            }],
+        )
+        self.assertEqual(res_dlg.table.rowCount(), 1)
+        res_dlg.close()
+
+    def test_sweep_dialog_workflow_help_dot(self):
+        """Verify Group 1 has a '?' help dot explaining the grid-build/sweep workflow."""
+        dlg = SweepSettingsDialog()
+        self.assertTrue(hasattr(dlg, "btn_param_help"))
+        self.assertIsInstance(dlg.btn_param_help, QToolButton)
+        self.assertEqual(dlg.btn_param_help.text(), "?")
+        self.assertIn("1. BUILD DOMAIN", dlg.btn_param_help.toolTip())
+        with patch.object(QMessageBox, "information") as mock_info:
+            dlg.btn_param_help.click()
+            mock_info.assert_called_once()
+            self.assertIn("1. BUILD DOMAIN", mock_info.call_args[0][2])
+        dlg.close()
+
+    def test_sweep_dialog_validation_blocks_invalid_geometric_ranges(self):
+        """Verify saving invalid geometric bounds in SweepSettingsDialog is blocked via warning popup."""
+        dummy_parent = QWidget()
+        dummy_parent.grid_widgets = [{}, {}, {}]
+        dlg = SweepSettingsDialog(dummy_parent)
+
+        invalid_cases = [
+            ("upstream_gap_mm", 0.0, 1.0),
+            ("grid_2_t", 0.0, 0.5),
+            ("grid_2_r", -0.1, 0.5),
+            ("grid_2_gap", 0.0, 0.5),   # internal gap <= 0
+            ("grid_3_gap", -0.2, 0.5),  # final gap < 0
+            ("grid_3_cham", 0.0, 50.0), # chamfer > 45
+        ]
+        for param_id, start, end in invalid_cases:
+            idx = dlg.combo_param.findData(param_id)
+            dlg.combo_param.setCurrentIndex(idx)
+            dlg.spin_start.setValue(start)
+            dlg.spin_end.setValue(end)
+            with patch.object(QMessageBox, "warning") as mock_warn:
+                dlg.btn_start.click()
+                mock_warn.assert_called_once()
+                self.assertNotEqual(dlg.result(), QDialog.Accepted)
+
+        # Valid downstream gap == 0.0 on final grid (Grid 3 of 3) is allowed
+        dlg.combo_param.setCurrentIndex(dlg.combo_param.findData("grid_3_gap"))
+        dlg.spin_start.setValue(0.0)
+        dlg.spin_end.setValue(0.5)
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            dlg.btn_start.click()
+            mock_warn.assert_not_called()
+            self.assertEqual(dlg.result(), QDialog.Accepted)
+        dlg.close()
+
+    def test_sweep_dialog_contextual_auto_upstream_gap_toggle(self):
+        """Verify auto-update upstream gap checkbox appears only for influencing params and defaults to True."""
+        # 1. Presheath mode (default): visible for grid_1_r, hidden for Te_up and grid_1_V / grid_2_r
+        parent_pre = QWidget()
+        parent_pre.grid_widgets = [{}, {}]
+        parent_pre.adv_params = {"entire_bulk_plasma": False}
+        parent_pre.upstream_gap_settings = {"method": "ratio", "ratio_base": "screen_r", "ratio": 0.75}
+
+        dlg = SweepSettingsDialog(parent_pre)
+        for pid in ("Te_up", "grid_1_V", "grid_2_r"):
+            dlg.combo_param.setCurrentIndex(dlg.combo_param.findData(pid))
+            self.assertTrue(dlg.box_auto_upstream_gap.isHidden())
+            self.assertFalse(dlg.get_config()["auto_update_upstream_gap"])
+
+        dlg.combo_param.setCurrentIndex(dlg.combo_param.findData("grid_1_r"))
+        self.assertFalse(dlg.box_auto_upstream_gap.isHidden())
+        self.assertTrue(dlg.chk_auto_upstream_gap.isChecked())
+        self.assertIn("Variable", dlg.lbl_auto_gap_hint.text())
+        cfg_var = dlg.get_config()
+        self.assertTrue(cfg_var["auto_update_upstream_gap"])
+        self.assertEqual(cfg_var["upstream_gap_coupling"], {"base": "screen_r", "ratio": 0.75})
+
+        dlg.chk_auto_upstream_gap.setChecked(False)
+        self.assertIn("Fixed", dlg.lbl_auto_gap_hint.text())
+        cfg_fixed = dlg.get_config()
+        self.assertFalse(cfg_fixed["auto_update_upstream_gap"])
+        dlg.close()
+
+        # 2. Debye bulk-plasma mode: visible for n0_plasma & Te_up too
+        parent_debye = QWidget()
+        parent_debye.grid_widgets = [{}, {}]
+        parent_debye.adv_params = {"entire_bulk_plasma": True}
+        dlg_d = SweepSettingsDialog(parent_debye)
+        for pid in ("n0_plasma", "Te_up", "grid_1_r"):
+            dlg_d.combo_param.setCurrentIndex(dlg_d.combo_param.findData(pid))
+            self.assertFalse(dlg_d.box_auto_upstream_gap.isHidden())
+            self.assertTrue(dlg_d.chk_auto_upstream_gap.isChecked())
+            self.assertTrue(dlg_d.get_config()["auto_update_upstream_gap"])
+        dlg_d.close()
 
     def test_sweep_divergence_second_plane_output(self):
         cfg = {
@@ -2079,6 +2240,301 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertIn("field_J", budget)
         self.assertIsNotNone(self.win.sim.Ex)
         self.assertIsNotNone(self.win.sim.Ey)
+
+    def test_upstream_gap_sweep_gui_preview_and_sequential_transition(self):
+        """Verify sweeping upstream_gap_mm updates GUI inputs, domain geometry, Lx, and auto neut_x consistently."""
+        from PyQt5.QtWidgets import QMessageBox
+
+        # Start with auto-tracked neut_x (not manually locked to config.json's neut_x)
+        self.win._last_auto_neut_x = round(self.win.inputs["neut_x"].value(), 3)
+
+        cfg = {
+            "param_id": "upstream_gap_mm",
+            "param_label": "Upstream Gap (mm)",
+            "param_unit": "mm",
+            "start": 1.255,
+            "end": 0.455,
+            "n_sims": 2,
+            "scale": "linear",
+            "values": [1.255, 0.455],
+            "window": 10,
+            "threshold": 5.0,
+            "max_iterations": 20,
+            "min_iterations": 10,
+            "parallel": False,
+            "n_cores": 1,
+        }
+
+        self.win.save_sweep_settings(cfg)
+        self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 1.255, places=3)
+
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.build_domain(force=True)
+            mock_warn.assert_not_called()
+
+        self.assertAlmostEqual(self.win.sim.upstream_gap_mm, 1.255, places=3)
+        self.assertAlmostEqual(self.win.sim.grid_x_starts[0], 1.255, places=3)
+        lx_1 = self.win.sim.Lx
+        expected_neut_1 = round(
+            self.win.sim.grid_x_ends[-1] + 0.9 * (lx_1 - self.win.sim.grid_x_ends[-1]), 3
+        )
+        self.assertAlmostEqual(self.win.inputs["neut_x"].value(), expected_neut_1, places=3)
+
+        # Preview Scenario 2 (smaller gap = 0.455 mm): domain geometry & neut_x shrink cleanly
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._on_sweep_scenario_selected(1)
+        self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 0.455, places=3)
+        d2 = self.win._get_scenario_domain_data(2)
+        self.assertAlmostEqual(d2["upstream_gap_mm"], 0.455, places=3)
+        self.assertAlmostEqual(d2["grid_x_starts"][0], 0.455, places=3)
+        self.assertAlmostEqual(lx_1 - d2["Lx"], 0.8, places=3)
+        self.assertAlmostEqual(self.win.ax_live.get_xlim()[1], d2["Lx"], places=3)
+        expected_neut_2 = round(
+            d2["grid_x_ends"][-1] + 0.9 * (d2["Lx"] - d2["grid_x_ends"][-1]), 3
+        )
+        self.assertAlmostEqual(d2["params"]["neut_x"], expected_neut_2, places=3)
+        self.assertAlmostEqual(self.win.inputs["neut_x"].value(), expected_neut_2, places=3)
+
+        # Switch back to Scenario 1 and verify sequential advance_sweep_scenario downward transition
+        self.win.combo_sweep_scenario.setCurrentIndex(0)
+        self.win._on_sweep_scenario_selected(0)
+        self.win.sweep_current_idx = 0
+        self.win.is_sweep_active = True
+        self.win.sweep_mode_armed = False
+
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.advance_sweep_scenario()
+            mock_warn.assert_not_called()
+
+        self.assertAlmostEqual(self.win.sim.upstream_gap_mm, 0.455, places=3)
+        self.assertAlmostEqual(self.win.sim.grid_x_starts[0], 0.455, places=3)
+        self.assertAlmostEqual(lx_1 - self.win.sim.Lx, 0.8, places=3)
+        self.assertAlmostEqual(self.win._last_auto_neut_x, expected_neut_2, places=3)
+        self.assertAlmostEqual(self.win.inputs["neut_x"].value(), expected_neut_2, places=3)
+        self.win.exit_sweep(confirm_choice="no")
+
+    def test_build_domain_validates_all_grids_uniformly(self):
+        """Verify SimControlMixin.build_domain blocks invalid geometry on any grid 1..N with QMessageBox."""
+        n_before = len(self.win.grid_widgets)
+        self.win.btn_add_grid.click()
+        self.assertEqual(len(self.win.grid_widgets), n_before + 1)
+        new_gw = self.win.grid_widgets[-1]
+        self.assertEqual(new_gw["t"].value(), 0.0)
+        self.assertEqual(new_gw["r"].value(), 0.0)
+
+        # 1. Newly added zeroed Grid N+1 must fail validation without mutating domain readiness
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.build_domain()
+            mock_warn.assert_called_once()
+            warn_msg = mock_warn.call_args[0][2]
+            self.assertIn(f"Grid {n_before + 1}", warn_msg)
+            self.assertFalse(self.win._sweep_domain_built)
+
+        # 2. Give new grid valid geometry, but break Grid 2 internal gap & Grid 3 aperture radius
+        new_gw["V"].setValue(0.0)
+        new_gw["t"].setValue(0.38)
+        new_gw["gap"].setValue(1.5)
+        new_gw["r"].setValue(0.75)
+        new_gw["cham"].setValue(0.0)
+        orig_g2_gap = self.win.grid_widgets[1]["gap"].value()
+        orig_g3_r = self.win.grid_widgets[2]["r"].value()
+        self.win.grid_widgets[1]["gap"].setValue(0.0)
+        self.win.grid_widgets[2]["r"].setValue(0.0)
+
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.build_domain()
+            mock_warn.assert_called_once()
+            warn_msg = mock_warn.call_args[0][2]
+            self.assertIn("Grid 2", warn_msg)
+            self.assertIn("Grid 3", warn_msg)
+
+        # 3. Restore valid values across all grids -> build succeeds cleanly
+        self.win.grid_widgets[1]["gap"].setValue(orig_g2_gap)
+        self.win.grid_widgets[2]["r"].setValue(orig_g3_r)
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.build_domain()
+            mock_warn.assert_not_called()
+        self.assertTrue(self.win._sweep_domain_built)
+        self.assertFalse(self.win._grid_count_modified_since_build)
+        self.assertEqual(len(self.win.sim.grids), n_before + 1)
+
+    def test_add_remove_grid_requires_build_domain_before_sweep_and_blocks_discrepancies(self):
+        """Verify adding/removing grids enforces build-domain-first and blocks deleted-grid sweeps."""
+        self.win.build_domain()
+        self.assertFalse(self.win._grid_count_modified_since_build)
+
+        # 1. Removing a grid marks domain stale -> open_sweep_dialog and save_sweep_settings block until rebuild
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.btn_remove_grid.click()
+            mock_warn.assert_not_called()
+        self.assertTrue(self.win._grid_count_modified_since_build)
+        self.assertFalse(self.win._sweep_domain_built)
+
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.open_sweep_dialog()
+            mock_warn.assert_called_once()
+            self.assertIn("1. BUILD DOMAIN", mock_warn.call_args[0][2])
+
+        n_grids_now = len(self.win.grid_widgets)
+        cfg_grid2 = {
+            "param_id": f"grid_{n_grids_now}_cham",
+            "param_label": f"Grid {n_grids_now} Chamfer (°)",
+            "param_unit": "°",
+            "values": [0.0, 15.0],
+            "parallel": True,
+            "n_cores": 2,
+        }
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            saved = self.win.save_sweep_settings(cfg_grid2)
+            mock_warn.assert_called_once()
+            self.assertFalse(saved)
+            self.assertIsNone(self.win.sweep_config)
+
+        # 2. Build domain first -> sweep settings accepted
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.build_domain()
+            mock_warn.assert_not_called()
+        self.assertFalse(self.win._grid_count_modified_since_build)
+
+        self.win.save_sweep_settings(cfg_grid2)
+        self.assertTrue(self.win.sweep_mode_armed)
+        self.assertEqual(self.win.sweep_config["param_id"], f"grid_{n_grids_now}_cham")
+
+        # 3. Removing the targeted grid immediately warns and disarms the invalid sweep target
+        if n_grids_now > 1:
+            with patch.object(QMessageBox, "warning") as mock_warn:
+                self.win.btn_remove_grid.click()
+                mock_warn.assert_called_once()
+                self.assertIn("removed", mock_warn.call_args[0][2].lower())
+            self.assertIsNone(self.win.sweep_config)
+            self.assertFalse(self.win.sweep_mode_armed)
+
+        # 4. Arm valid global sweep after rebuilding, then add another grid without rebuilding -> Start Sweep blocked
+        self.win.grid_widgets[-1]["t"].setValue(0.38)
+        self.win.grid_widgets[-1]["r"].setValue(0.75)
+        self.win.grid_widgets[-1]["gap"].setValue(1.5)
+        self.win.build_domain()
+        cfg_global = {
+            "param_id": "Te_up", "param_label": "Te_up (eV)", "param_unit": "eV",
+            "values": [2.0, 4.0], "parallel": True, "n_cores": 2,
+        }
+        self.win.save_sweep_settings(cfg_global)
+        self.win.build_domain()
+
+        self.win.btn_add_grid.click()
+        self.win.grid_widgets[-1]["t"].setValue(0.38)
+        self.win.grid_widgets[-1]["r"].setValue(0.75)
+        self.win.grid_widgets[-1]["gap"].setValue(1.5)
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.on_sweep_action_clicked()
+            mock_warn.assert_called_once()
+            self.assertFalse(self.win.is_sweep_active)
+
+        self.win.build_domain()
+        with patch.object(self.win, "_start_parallel_sweep") as mock_parallel, \
+             patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.on_sweep_action_clicked()
+            mock_warn.assert_not_called()
+            mock_parallel.assert_called_once()
+        self.win.exit_sweep(confirm_choice="no")
+
+    def test_grid_edit_buttons_disabled_during_active_sweep(self):
+        """Verify + Add Grid and - Remove Grid lock while sweeping and unlock on stop/finish/exit."""
+        cfg = {
+            "param_id": "Te_up", "param_label": "Te_up (eV)", "param_unit": "eV",
+            "values": [2.0, 4.0], "parallel": True, "n_cores": 2,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain()
+        self.assertTrue(self.win.btn_add_grid.isEnabled())
+        self.assertTrue(self.win.btn_remove_grid.isEnabled())
+
+        with patch.object(self.win, "_start_parallel_sweep"):
+            self.win.start_sweep(cfg)
+        self.assertTrue(self.win.is_sweep_active)
+        self.assertFalse(self.win.btn_add_grid.isEnabled())
+        self.assertFalse(self.win.btn_remove_grid.isEnabled())
+
+        self.win.stop_sweep()
+        self.assertTrue(self.win.btn_add_grid.isEnabled())
+        self.assertTrue(self.win.btn_remove_grid.isEnabled())
+
+        self.win.exit_sweep(confirm_choice="no")
+        self.assertTrue(self.win.btn_add_grid.isEnabled())
+        self.assertTrue(self.win.btn_remove_grid.isEnabled())
+
+    def test_grid1_r_sweep_auto_updates_upstream_gap_toggle_and_fixed(self):
+        """Verify grid_1_r sweep updates upstream_gap_mm dynamically when checked and keeps it fixed when unchecked."""
+        self.win.upstream_gap_settings = {"method": "ratio", "ratio_base": "screen_r", "ratio": 0.75}
+        self.win.grid_widgets[0]["r"].setValue(0.8)
+        self.win.inputs["upstream_gap_mm"].setValue(0.6)
+        self.win._last_auto_gap = 0.6
+        self.win._user_overrode_Lx = False
+        self.win._last_auto_neut_x = self.win.inputs["neut_x"].value()
+
+        # Case A: auto_update_upstream_gap = True -> varies 0.6 -> 1.2 mm
+        cfg_var = {
+            "param_id": "grid_1_r",
+            "param_label": "Grid 1 Aperture Radius (mm)",
+            "param_unit": "mm",
+            "values": [0.8, 1.6],
+            "auto_update_upstream_gap": True,
+            "upstream_gap_coupling": {"base": "screen_r", "ratio": 0.75},
+            "window": 10, "threshold": 5.0, "max_iterations": 20, "min_iterations": 10,
+            "parallel": False, "n_cores": 1,
+        }
+        self.win.save_sweep_settings(cfg_var)
+        self.win.build_domain(force=True)
+        lx_1 = self.win.sim.Lx
+        self.assertAlmostEqual(self.win.sim.upstream_gap_mm, 0.6, places=3)
+
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._on_sweep_scenario_selected(1)
+        d2_var = self.win._get_scenario_domain_data(2)
+        self.assertAlmostEqual(d2_var["upstream_gap_mm"], 1.2, places=3)
+        self.assertAlmostEqual(d2_var["Lx"] - lx_1, 0.6, places=3)
+        self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 1.2, places=3)
+
+        self.win.combo_sweep_scenario.setCurrentIndex(0)
+        self.win._on_sweep_scenario_selected(0)
+        self.win.sweep_current_idx = 0
+        self.win.is_sweep_active = True
+        self.win.sweep_mode_armed = False
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.advance_sweep_scenario()
+            mock_warn.assert_not_called()
+        self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 1.2, places=3)
+        self.assertAlmostEqual(self.win.sim.upstream_gap_mm, 1.2, places=3)
+        self.win.exit_sweep(confirm_choice="no")
+
+        # Case B: auto_update_upstream_gap = False -> stays strictly fixed at 0.6 mm across preview & sequential step
+        self.win.grid_widgets[0]["r"].setValue(0.8)
+        self.win.inputs["upstream_gap_mm"].setValue(0.6)
+        self.win._last_auto_gap = 0.6
+        cfg_fixed = dict(cfg_var)
+        cfg_fixed["auto_update_upstream_gap"] = False
+        self.win.save_sweep_settings(cfg_fixed)
+        self.win.build_domain(force=True)
+        lx_fixed_1 = self.win.sim.Lx
+
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.win._on_sweep_scenario_selected(1)
+        d2_fixed = self.win._get_scenario_domain_data(2)
+        self.assertAlmostEqual(d2_fixed["upstream_gap_mm"], 0.6, places=3)
+        self.assertAlmostEqual(d2_fixed["Lx"], lx_fixed_1, places=3)
+        self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 0.6, places=3)
+
+        self.win.combo_sweep_scenario.setCurrentIndex(0)
+        self.win._on_sweep_scenario_selected(0)
+        self.win.sweep_current_idx = 0
+        self.win.is_sweep_active = True
+        self.win.sweep_mode_armed = False
+        with patch.object(QMessageBox, "warning") as mock_warn:
+            self.win.advance_sweep_scenario()
+            mock_warn.assert_not_called()
+        self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 0.6, places=3)
+        self.assertAlmostEqual(self.win.sim.upstream_gap_mm, 0.6, places=3)
+        self.win.exit_sweep(confirm_choice="no")
 
 
 if __name__ == "__main__":

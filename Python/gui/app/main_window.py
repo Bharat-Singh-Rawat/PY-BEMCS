@@ -120,6 +120,8 @@ class DigitalTwinApp(
         self.sweep_scenario_start_iter = 0
         self.btn_resume_sweep = None
         self._built_params_snapshot = None
+        self._grid_count_modified_since_build = False
+        self._loading_config = False
         self.substep_history_iter = []
         self.substep_history_ion = []
         self.substep_history_e = []

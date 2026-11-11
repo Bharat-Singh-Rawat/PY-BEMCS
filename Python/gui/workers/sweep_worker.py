@@ -317,6 +317,10 @@ class ParallelSweepWorker(QThread):
                 "param_id": param_id,
                 "parameter_value": float(val),
                 "base_params": self.base_params,
+                "sweep_config": {
+                    "auto_update_upstream_gap": bool(self.sweep_config.get("auto_update_upstream_gap", False)),
+                    "upstream_gap_coupling": self.sweep_config.get("upstream_gap_coupling"),
+                },
                 "steady_config": steady_cfg,
                 "cancel_file": self.cancel_file,
                 "pause_file": self.pause_files.get(scen_idx),

@@ -3,6 +3,7 @@ Modal configuration dialogs for PY-BEMCS.
 Includes Beam Species, Grid Material, Advanced Physics/Mesh, and GUI Settings dialogs.
 """
 import os
+import re
 import math
 import numpy as np
 from PyQt5.QtCore import Qt
@@ -13,9 +14,10 @@ from PyQt5.QtWidgets import (
     QCheckBox, QGroupBox, QButtonGroup, QRadioButton,
     QMessageBox, QScrollArea, QWidget, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QProgressBar
+    QProgressBar, QToolButton
 )
 from .workers.simulation_worker import SimulationWorker
+from physics.mesh_utils import compute_upstream_gap_value, get_upstream_gap_coupling_for_param
 
 
 class BeamSpeciesDialog(QDialog):
@@ -1194,7 +1196,7 @@ class UpstreamGapDialog(QDialog):
             return gap, settings
 
 
-SWEEP_PARAMETERS = [
+GLOBAL_SWEEP_PARAMETERS = [
     {
         "id": "Te_up",
         "label": "Upstream Electron Temp Te_up (eV)",
@@ -1261,32 +1263,6 @@ SWEEP_PARAMETERS = [
         "scientific": False,
     },
     {
-        "id": "grid_1_V",
-        "label": "Grid 1 DC Voltage (V)",
-        "unit": "V",
-        "default_start": 800.0,
-        "default_end": 1600.0,
-        "default_n": 5,
-        "min": -5000.0,
-        "max": 15000.0,
-        "step": 100.0,
-        "decimals": 1,
-        "scientific": False,
-    },
-    {
-        "id": "grid_2_V",
-        "label": "Grid 2 DC Voltage (V)",
-        "unit": "V",
-        "default_start": -400.0,
-        "default_end": -100.0,
-        "default_n": 5,
-        "min": -5000.0,
-        "max": 5000.0,
-        "step": 50.0,
-        "decimals": 1,
-        "scientific": False,
-    },
-    {
         "id": "Te",
         "label": "Neutralizer Electron Temp Te (eV)",
         "unit": "eV",
@@ -1300,71 +1276,123 @@ SWEEP_PARAMETERS = [
         "scientific": False,
     },
     {
-        "id": "grid_1_r",
-        "label": "Grid 1 Aperture Radius (mm)",
-        "unit": "mm",
-        "default_start": 0.6,
-        "default_end": 1.2,
-        "default_n": 5,
-        "min": 0.05,
-        "max": 20.0,
-        "step": 0.1,
-        "decimals": 3,
-        "scientific": False,
-    },
-    {
-        "id": "grid_1_t",
-        "label": "Grid 1 Thickness (mm)",
-        "unit": "mm",
-        "default_start": 0.2,
-        "default_end": 0.8,
-        "default_n": 5,
-        "min": 0.05,
-        "max": 10.0,
-        "step": 0.05,
-        "decimals": 3,
-        "scientific": False,
-    },
-    {
-        "id": "grid_2_gap",
-        "label": "Grid 2 Gap / Separation (mm)",
+        "id": "upstream_gap_mm",
+        "label": "Upstream Gap (mm)",
         "unit": "mm",
         "default_start": 0.4,
-        "default_end": 1.5,
+        "default_end": 2.0,
         "default_n": 5,
         "min": 0.05,
-        "max": 20.0,
+        "max": 50.0,
         "step": 0.1,
-        "decimals": 3,
-        "scientific": False,
-    },
-    {
-        "id": "grid_2_r",
-        "label": "Grid 2 Aperture Radius (mm)",
-        "unit": "mm",
-        "default_start": 0.5,
-        "default_end": 1.0,
-        "default_n": 5,
-        "min": 0.05,
-        "max": 20.0,
-        "step": 0.1,
-        "decimals": 3,
-        "scientific": False,
-    },
-    {
-        "id": "grid_2_t",
-        "label": "Grid 2 Thickness (mm)",
-        "unit": "mm",
-        "default_start": 0.2,
-        "default_end": 0.8,
-        "default_n": 5,
-        "min": 0.05,
-        "max": 10.0,
-        "step": 0.05,
         "decimals": 3,
         "scientific": False,
     },
 ]
+
+_GRID_PARAM_RE = re.compile(r"^grid_(\d+)_(V|t|gap|r|cham)$")
+
+
+def parse_grid_sweep_param(param_id: str):
+    """Return `(grid_index_1based, prop_key)` for `grid_<i>_<prop>` IDs, or `(None, None)`."""
+    m = _GRID_PARAM_RE.match(param_id or "")
+    if not m:
+        return None, None
+    return int(m.group(1)), m.group(2)
+
+
+def build_sweep_parameters(n_grids: int = 2) -> list:
+    """Build the ordered sweep parameter catalog for `n_grids` active grids (1..N)."""
+    count = max(1, int(n_grids))
+    params = [dict(p) for p in GLOBAL_SWEEP_PARAMETERS]
+    for i in range(1, count + 1):
+        v_defaults = (800.0, 1600.0, 100.0) if i == 1 else ((-400.0, -100.0, 50.0) if i == 2 else (-100.0, 100.0, 50.0))
+        r_defaults = (0.6, 1.2) if i == 1 else (0.5, 1.0)
+        params.extend([
+            {
+                "id": f"grid_{i}_V",
+                "label": f"Grid {i} DC Voltage (V)",
+                "unit": "V",
+                "default_start": v_defaults[0],
+                "default_end": v_defaults[1],
+                "default_n": 5,
+                "min": -5000.0,
+                "max": 15000.0,
+                "step": v_defaults[2],
+                "decimals": 1,
+                "scientific": False,
+            },
+            {
+                "id": f"grid_{i}_t",
+                "label": f"Grid {i} Thickness (mm)",
+                "unit": "mm",
+                "default_start": 0.2,
+                "default_end": 0.8,
+                "default_n": 5,
+                "min": 0.05,
+                "max": 10.0,
+                "step": 0.05,
+                "decimals": 3,
+                "scientific": False,
+            },
+            {
+                "id": f"grid_{i}_gap",
+                "label": f"Grid {i} Gap to Next (mm)",
+                "unit": "mm",
+                "default_start": 0.4,
+                "default_end": 1.5,
+                "default_n": 5,
+                "min": 0.05,
+                "max": 20.0,
+                "step": 0.1,
+                "decimals": 3,
+                "scientific": False,
+            },
+            {
+                "id": f"grid_{i}_r",
+                "label": f"Grid {i} Aperture Radius (mm)",
+                "unit": "mm",
+                "default_start": r_defaults[0],
+                "default_end": r_defaults[1],
+                "default_n": 5,
+                "min": 0.05,
+                "max": 20.0,
+                "step": 0.1,
+                "decimals": 3,
+                "scientific": False,
+            },
+            {
+                "id": f"grid_{i}_cham",
+                "label": f"Grid {i} Chamfer (°)",
+                "unit": "°",
+                "default_start": 0.0,
+                "default_end": 30.0,
+                "default_n": 5,
+                "min": 0.0,
+                "max": 45.0,
+                "step": 2.0,
+                "decimals": 2,
+                "scientific": False,
+            },
+        ])
+    return params
+
+
+def find_sweep_param_def(param_id: str, parameters: list = None):
+    """Look up a sweep parameter definition across built or dynamic grid catalogs."""
+    if parameters:
+        for p in parameters:
+            if p.get("id") == param_id:
+                return p
+    m = _GRID_PARAM_RE.match(param_id or "")
+    n_needed = int(m.group(1)) if m else 2
+    for p in build_sweep_parameters(max(2, n_needed)):
+        if p["id"] == param_id:
+            return p
+    return None
+
+
+SWEEP_PARAMETERS = build_sweep_parameters(2)
 
 
 def format_sci_value(val):
@@ -1432,11 +1460,26 @@ class SweepSettingsDialog(QDialog):
     """
     Dialog allowing the user to configure a parametric sweep across multiple scenarios.
     """
+    _WORKFLOW_HELP_TEXT = (
+        "How Multi-Grid Parametric Sweeps Work:\n\n"
+        "1. Add or remove grids in '1. MULTI-GRID OPTICS' first if changing the grid count.\n"
+        "2. Click '1. BUILD DOMAIN' so the computational domain reflects the active grids.\n"
+        "3. Open 'Settings -> Sweep...' to pick parameters for the active grids (Grid 1..N) "
+        "and click 'Save Sweep Settings'.\n"
+        "4. Click 'Start Sweep' to run all scenarios.\n\n"
+        "Note: Adding/removing grids invalidates an unbuilt sweep, and targeting a deleted grid "
+        "will block execution until updated."
+    )
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Parametric Sweep Configuration")
         self.setMinimumWidth(480)
         self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
+
+        self.n_grids = self._resolve_parent_grid_count(parent)
+        self.sweep_parameters = build_sweep_parameters(self.n_grids)
+        self._parent_up_context = self._resolve_parent_upstream_context(parent)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -1451,12 +1494,46 @@ class SweepSettingsDialog(QDialog):
         layout.addWidget(info_lbl)
 
         # ── Group 1: Parameter & Range ────────────────────────────────
-        gb_param = QGroupBox("1. Parameter & Sweep Range")
-        form_param = QFormLayout(gb_param)
+        gb_param = QGroupBox()
+        gb_param_layout = QVBoxLayout(gb_param)
+        gb_param_layout.setContentsMargins(10, 8, 10, 10)
+        gb_param_layout.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        lbl_group1 = QLabel("<b>1. Parameter & Sweep Range</b>")
+        lbl_group1.setStyleSheet("color: #0f172a;")
+        self.btn_param_help = QToolButton()
+        self.btn_param_help.setObjectName("btn_sweep_workflow_help")
+        self.btn_param_help.setText("?")
+        self.btn_param_help.setFixedSize(18, 18)
+        self.btn_param_help.setCursor(Qt.PointingHandCursor)
+        self.btn_param_help.setToolTip(self._WORKFLOW_HELP_TEXT)
+        self.btn_param_help.setStyleSheet(
+            "QToolButton {"
+            "  border: 1px solid #94a3b8;"
+            "  border-radius: 9px;"
+            "  background-color: #e2e8f0;"
+            "  color: #1e293b;"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QToolButton:hover {"
+            "  background-color: #cbd5e1;"
+            "  border-color: #475569;"
+            "}"
+        )
+        self.btn_param_help.clicked.connect(self._show_workflow_help)
+        header_row.addWidget(lbl_group1)
+        header_row.addWidget(self.btn_param_help)
+        header_row.addStretch()
+        gb_param_layout.addLayout(header_row)
+
+        form_param = QFormLayout()
         form_param.setLabelAlignment(Qt.AlignRight)
 
         self.combo_param = QComboBox()
-        for pdef in SWEEP_PARAMETERS:
+        for pdef in self.sweep_parameters:
             self.combo_param.addItem(pdef["label"], pdef["id"])
         self.combo_param.currentIndexChanged.connect(self._on_param_changed)
         form_param.addRow("Quantity to Sweep:", self.combo_param)
@@ -1488,6 +1565,35 @@ class SweepSettingsDialog(QDialog):
         self.lbl_preview = QLabel()
         self.lbl_preview.setStyleSheet("color: #475569; font-style: italic; font-size: 11px;")
         form_param.addRow("Values Preview:", self.lbl_preview)
+
+        gb_param_layout.addLayout(form_param)
+
+        self.box_auto_upstream_gap = QFrame()
+        self.box_auto_upstream_gap.setObjectName("box_auto_upstream_gap")
+        self.box_auto_upstream_gap.setStyleSheet(
+            "QFrame#box_auto_upstream_gap {"
+            "  background-color: #f1f5f9;"
+            "  border: 1px solid #cbd5e1;"
+            "  border-radius: 4px;"
+            "}"
+        )
+        auto_gap_layout = QVBoxLayout(self.box_auto_upstream_gap)
+        auto_gap_layout.setContentsMargins(8, 6, 8, 6)
+        auto_gap_layout.setSpacing(2)
+
+        self.chk_auto_upstream_gap = QCheckBox("Auto-update Upstream Gap with geometry")
+        self.chk_auto_upstream_gap.setChecked(True)
+        self.chk_auto_upstream_gap.setStyleSheet("font-weight: bold; color: #0f172a;")
+        self.chk_auto_upstream_gap.stateChanged.connect(self._update_preview)
+        auto_gap_layout.addWidget(self.chk_auto_upstream_gap)
+
+        self.lbl_auto_gap_hint = QLabel()
+        self.lbl_auto_gap_hint.setWordWrap(True)
+        self.lbl_auto_gap_hint.setStyleSheet("color: #475569; font-size: 11px; padding-left: 18px;")
+        auto_gap_layout.addWidget(self.lbl_auto_gap_hint)
+
+        self.box_auto_upstream_gap.setVisible(False)
+        gb_param_layout.addWidget(self.box_auto_upstream_gap)
 
         layout.addWidget(gb_param)
 
@@ -1576,13 +1682,118 @@ class SweepSettingsDialog(QDialog):
 
         self.btn_start = QPushButton("Save Sweep Settings")
         self.btn_start.setStyleSheet("font-weight: bold; background-color: #7e22ce; color: white; padding: 6px 14px; border-radius: 4px;")
-        self.btn_start.clicked.connect(self.accept)
+        self.btn_start.clicked.connect(self._validate_and_accept)
         btn_box.addWidget(self.btn_start)
 
         layout.addLayout(btn_box)
 
         # Initialize with first parameter
         self._on_param_changed()
+
+    @staticmethod
+    def _resolve_parent_grid_count(parent) -> int:
+        if parent is not None:
+            gw = getattr(parent, "grid_widgets", None)
+            if gw:
+                return max(1, len(gw))
+            sim = getattr(parent, "sim", None)
+            if sim is not None and getattr(sim, "grids", None):
+                return max(1, len(sim.grids))
+        return 2
+
+    @staticmethod
+    def _resolve_parent_upstream_context(parent) -> dict:
+        ctx = {
+            "upstream_gap_mm": 0.60,
+            "n0_plasma": 1e17,
+            "Te_up": 3.0,
+            "screen_r": 0.80,
+            "entire_bulk_plasma": False,
+            "upstream_gap_settings": None,
+        }
+        if parent is None:
+            return ctx
+        inputs = getattr(parent, "inputs", None)
+        if isinstance(inputs, dict):
+            if "upstream_gap_mm" in inputs:
+                ctx["upstream_gap_mm"] = float(inputs["upstream_gap_mm"].value())
+            if "n0_plasma" in inputs:
+                ctx["n0_plasma"] = float(inputs["n0_plasma"].value())
+            if "Te_up" in inputs:
+                ctx["Te_up"] = float(inputs["Te_up"].value())
+        gw = getattr(parent, "grid_widgets", None)
+        if gw and isinstance(gw[0], dict) and "r" in gw[0]:
+            ctx["screen_r"] = float(gw[0]["r"].value())
+        adv = getattr(parent, "adv_params", None)
+        if isinstance(adv, dict):
+            ctx["entire_bulk_plasma"] = bool(adv.get("entire_bulk_plasma", False))
+        settings = getattr(parent, "upstream_gap_settings", None)
+        if isinstance(settings, dict):
+            ctx["upstream_gap_settings"] = dict(settings)
+        return ctx
+
+    def _get_current_upstream_gap_coupling(self, param_id: str):
+        return get_upstream_gap_coupling_for_param(
+            param_id,
+            upstream_gap_settings=self._parent_up_context.get("upstream_gap_settings"),
+            entire_bulk_plasma=bool(self._parent_up_context.get("entire_bulk_plasma", False)),
+        )
+
+    def _show_workflow_help(self):
+        QMessageBox.information(self, "Parametric Sweep Procedure", self._WORKFLOW_HELP_TEXT)
+
+    def _validate_and_accept(self):
+        err = self._validate_sweep_range()
+        if err:
+            QMessageBox.warning(self, "Invalid Sweep Range", err)
+            return
+        self.accept()
+
+    def _validate_sweep_range(self):
+        idx = self.combo_param.currentIndex()
+        if idx < 0 or idx >= len(self.sweep_parameters):
+            return "No sweep parameter is selected."
+        pdef = self.sweep_parameters[idx]
+        param_id = pdef["id"]
+        vals = [float(v) for v in self.get_values_array()]
+        if not vals:
+            return "Sweep must contain at least one value."
+
+        if param_id == "upstream_gap_mm" and any(v <= 0.0 for v in vals):
+            return "Upstream Gap (mm) sweep values must be strictly positive (> 0 mm)."
+
+        m = _GRID_PARAM_RE.match(param_id)
+        if m:
+            grid_idx = int(m.group(1))
+            prop = m.group(2)
+            if grid_idx > self.n_grids:
+                return f"Grid {grid_idx} does not exist in the current {self.n_grids}-grid configuration."
+            if prop == "t" and any(v <= 0.0 for v in vals):
+                return f"Grid {grid_idx} Thickness (mm) sweep values must be strictly positive (> 0 mm)."
+            if prop == "r" and any(v < 0.0 for v in vals):
+                return f"Grid {grid_idx} Aperture Radius (mm) sweep values cannot be negative (< 0 mm)."
+            if prop == "gap":
+                if grid_idx < self.n_grids and any(v <= 0.0 for v in vals):
+                    return (
+                        f"Grid {grid_idx} internal gap to Grid {grid_idx + 1} must be strictly positive (> 0 mm) "
+                        "to prevent adjacent grids from touching."
+                    )
+                if any(v < 0.0 for v in vals):
+                    return f"Grid {grid_idx} downstream gap cannot be negative (< 0 mm)."
+            if prop == "cham" and any(v < 0.0 or v > 45.0 for v in vals):
+                return f"Grid {grid_idx} Chamfer (°) sweep values must be within [0.0, 45.0]°."
+
+        if (
+            param_id == "grid_1_r"
+            and self._get_current_upstream_gap_coupling(param_id)
+            and self.chk_auto_upstream_gap.isChecked()
+            and any(v <= 0.0 for v in vals)
+        ):
+            return (
+                "When Auto-update Upstream Gap is enabled, Grid 1 Aperture Radius (mm) values "
+                "must be strictly positive (> 0 mm)."
+            )
+        return None
 
     def _toggle_parallel_options(self, state):
         enabled = bool(state)
@@ -1592,9 +1803,9 @@ class SweepSettingsDialog(QDialog):
 
     def _on_param_changed(self):
         idx = self.combo_param.currentIndex()
-        if idx < 0 or idx >= len(SWEEP_PARAMETERS):
+        if idx < 0 or idx >= len(self.sweep_parameters):
             return
-        pdef = SWEEP_PARAMETERS[idx]
+        pdef = self.sweep_parameters[idx]
         unit = pdef.get("unit", "")
         self.spin_start.setSuffix(f" {unit}" if unit else "")
         self.spin_end.setSuffix(f" {unit}" if unit else "")
@@ -1619,15 +1830,31 @@ class SweepSettingsDialog(QDialog):
         self.spin_start.setValue(pdef.get("default_start", 2.0))
         self.spin_end.setValue(pdef.get("default_end", 10.0))
         self.spin_n.setValue(pdef.get("default_n", 5))
+
+        coupling = self._get_current_upstream_gap_coupling(pdef["id"])
+        if coupling:
+            if coupling["base"] == "screen_r":
+                self.chk_auto_upstream_gap.setText("Auto-update Upstream Gap with Grid 1 radius")
+            else:
+                self.chk_auto_upstream_gap.setText("Auto-update Upstream Gap with plasma Debye length")
+            self.chk_auto_upstream_gap.blockSignals(True)
+            self.chk_auto_upstream_gap.setChecked(True)
+            self.chk_auto_upstream_gap.blockSignals(False)
+            self.box_auto_upstream_gap.setVisible(True)
+        else:
+            self.box_auto_upstream_gap.setVisible(False)
+
         self._update_preview()
 
     def _update_preview(self):
         vals = self.get_values_array()
         if len(vals) == 0:
             self.lbl_preview.setText("—")
+            if hasattr(self, "lbl_auto_gap_hint"):
+                self.lbl_auto_gap_hint.setText("")
             return
         idx = self.combo_param.currentIndex()
-        pdef = SWEEP_PARAMETERS[idx] if 0 <= idx < len(SWEEP_PARAMETERS) else {}
+        pdef = self.sweep_parameters[idx] if 0 <= idx < len(self.sweep_parameters) else {}
         is_sci = pdef.get("scientific", False)
 
         def fmt_v(v):
@@ -1640,6 +1867,34 @@ class SweepSettingsDialog(QDialog):
         else:
             txt = f"{fmt_v(vals[0])}, {fmt_v(vals[1])}, ... {fmt_v(vals[-1])} ({len(vals)} points)"
         self.lbl_preview.setText(f"[{txt}]")
+
+        coupling = self._get_current_upstream_gap_coupling(pdef.get("id", ""))
+        if coupling and not self.box_auto_upstream_gap.isHidden():
+            if self.chk_auto_upstream_gap.isChecked():
+                base = coupling["base"]
+                ratio = coupling.get("ratio")
+                gaps = []
+                for v in vals:
+                    g = compute_upstream_gap_value(
+                        screen_r=float(v) if base == "screen_r" else self._parent_up_context["screen_r"],
+                        n0=float(v) if pdef.get("id") == "n0_plasma" else self._parent_up_context["n0_plasma"],
+                        Te_up=float(v) if pdef.get("id") == "Te_up" else self._parent_up_context["Te_up"],
+                        force_base=base,
+                        ratio_override=ratio,
+                    )
+                    if g is not None:
+                        gaps.append(g)
+                if len(gaps) <= 6:
+                    gap_txt = ", ".join(f"{g:.3g}" for g in gaps)
+                elif gaps:
+                    gap_txt = f"{gaps[0]:.3g}, {gaps[1]:.3g}, ... {gaps[-1]:.3g}"
+                else:
+                    gap_txt = "—"
+                rule_txt = f"{ratio:.3g} × r₁" if base == "screen_r" else (f"{ratio:.3g} × λ_D" if ratio is not None else "Debye criterion")
+                self.lbl_auto_gap_hint.setText(f"Variable ({rule_txt}): g_up → [{gap_txt}] mm")
+            else:
+                baseline_gap = self._parent_up_context.get("upstream_gap_mm", 0.60)
+                self.lbl_auto_gap_hint.setText(f"Fixed: g_up stays constant at {baseline_gap:.3f} mm")
 
     def get_values_array(self):
         start = self.spin_start.value()
@@ -1655,7 +1910,9 @@ class SweepSettingsDialog(QDialog):
 
     def get_config(self):
         idx = self.combo_param.currentIndex()
-        pdef = SWEEP_PARAMETERS[idx]
+        pdef = self.sweep_parameters[idx]
+        coupling = self._get_current_upstream_gap_coupling(pdef["id"])
+        auto_gap = bool(coupling and self.chk_auto_upstream_gap.isChecked())
         return {
             "param_id": pdef["id"],
             "param_label": pdef["label"],
@@ -1665,6 +1922,8 @@ class SweepSettingsDialog(QDialog):
             "n_sims": self.spin_n.value(),
             "scale": self.combo_scale.currentData(),
             "values": self.get_values_array().tolist(),
+            "auto_update_upstream_gap": auto_gap,
+            "upstream_gap_coupling": {"base": coupling["base"], "ratio": coupling.get("ratio")} if coupling else None,
             "window": self.spin_window.value(),
             "threshold": self.spin_thresh.value(),
             "max_iterations": self.spin_max_iters.value(),
@@ -1853,9 +2112,8 @@ class SweepResultsDialog(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
 
         param_id = sweep_config.get("param_id", "")
-        is_sci = param_id in ("n0_plasma", "n0") or any(
-            p.get("scientific", False) for p in SWEEP_PARAMETERS if p["id"] == param_id
-        )
+        pdef = find_sweep_param_def(param_id)
+        is_sci = param_id in ("n0_plasma", "n0") or bool(pdef and pdef.get("scientific", False))
 
         for row, res in enumerate(results):
             scen_idx = res.get("scenario_idx", row + 1)
@@ -2016,9 +2274,8 @@ class SweepResultsDialog(QDialog):
             ])
 
             param_id = self.sweep_config.get("param_id", "")
-            is_sci = param_id in ("n0_plasma", "n0") or any(
-                p.get("scientific", False) for p in SWEEP_PARAMETERS if p["id"] == param_id
-            )
+            pdef = find_sweep_param_def(param_id)
+            is_sci = param_id in ("n0_plasma", "n0") or bool(pdef and pdef.get("scientific", False))
 
             for r in self.results:
                 reached = r.get("steady_state_reached", True)

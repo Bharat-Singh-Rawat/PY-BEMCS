@@ -12,6 +12,7 @@ import pickle
 import numpy as np
 
 from physics.simulator import DigitalTwinSimulator
+from physics.mesh_utils import resolve_swept_upstream_gap
 from diagnostics.metrics import compute_rolling_variation
 
 
@@ -43,10 +44,11 @@ def read_scenario_state(state_file: str):
         return None
 
 
-def apply_sweep_param_to_dict(base_params: dict, param_id: str, value: float) -> dict:
+def apply_sweep_param_to_dict(base_params: dict, param_id: str, value: float, sweep_config: dict = None) -> dict:
     """
     Apply a single swept parameter value to a copy of the simulation parameters dict.
-    Handles grid voltages, geometry, plasma densities, and temperatures.
+    Handles grid voltages, geometry, plasma densities, temperatures, and optional
+    coupled upstream_gap_mm updates.
     """
     params = copy.deepcopy(base_params)
 
@@ -64,6 +66,40 @@ def apply_sweep_param_to_dict(base_params: dict, param_id: str, value: float) ->
             if 0 <= grid_idx < len(grids):
                 grids[grid_idx][prop_key] = float(value)
                 params["grids"] = grids
+
+    # 2.5 Optional dynamic update of upstream_gap_mm from influencing parameters
+    auto_gap_updated = False
+    if isinstance(sweep_config, dict) and sweep_config.get("auto_update_upstream_gap", False):
+        coupled_gap = resolve_swept_upstream_gap(
+            param_id=param_id,
+            params=params,
+            coupling_meta=sweep_config.get("upstream_gap_coupling"),
+        )
+        if coupled_gap is not None and coupled_gap > 0.0:
+            params["upstream_gap_mm"] = float(coupled_gap)
+            auto_gap_updated = True
+
+    # 3. Synchronize auto-computed axial domain length (Lx) and neutralizer position (neut_x)
+    #    when an axial geometry parameter is swept so shrinking/growing gaps keep plume length valid.
+    grid_parts = param_id.split("_") if param_id.startswith("grid_") else []
+    is_axial_geom_param = (
+        param_id == "upstream_gap_mm"
+        or auto_gap_updated
+        or (len(grid_parts) >= 3 and grid_parts[2] in ("t", "gap"))
+    )
+    grids = params.get("grids", [])
+    if is_axial_geom_param and grids:
+        total_grid_thickness = sum(float(g["t"]) + float(g["gap"]) for g in grids)
+        user_gap = float(params.get("upstream_gap_mm", 0.0))
+
+        if params.get("user_overrode_Lx") is False:
+            params["Lx"] = round(user_gap + total_grid_thickness, 3) if user_gap > 0.0 else None
+
+        if params.get("user_overrode_neut_x") is False and user_gap > 0.0 and params.get("Lx"):
+            x_exit = user_gap + total_grid_thickness - float(grids[-1]["gap"])
+            eff_lx = max(float(params["Lx"]), user_gap + total_grid_thickness)
+            plume_span = max(eff_lx - x_exit, 0.0)
+            params["neut_x"] = round(x_exit + 0.9 * plume_span, 3)
 
     return params
 
@@ -226,7 +262,12 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     t_start = time.perf_counter()
 
     # Apply parameter variation
-    scenario_params = apply_sweep_param_to_dict(base_params, param_id, parameter_value)
+    scenario_params = apply_sweep_param_to_dict(
+        base_params,
+        param_id,
+        parameter_value,
+        sweep_config=payload.get("sweep_config"),
+    )
 
     sim = DigitalTwinSimulator()
     sim.build_domain(scenario_params)
@@ -283,6 +324,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
+        "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
         "grids": scenario_params.get("grids", []),
     }
     if status_dict is not None:
@@ -423,6 +465,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "ny": int(getattr(sim, 'ny', 0)),
                 "dx": float(getattr(sim, 'dx', 0.05)),
                 "dy": float(getattr(sim, 'dy', 0.05)),
+                "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
                 "grids": scenario_params.get("grids", []),
                 "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
                 "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
@@ -564,6 +607,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "ny": int(getattr(sim, 'ny', 0)),
         "dx": float(getattr(sim, 'dx', 0.05)),
         "dy": float(getattr(sim, 'dy', 0.05)),
+        "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
         "grids": scenario_params.get("grids", []),
         "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
         "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
