@@ -114,7 +114,10 @@ def step_electrons(sim, ctx: StepContext):
         neut_x = float(neut_x_param)
     neut_r = float(np.clip(neut_r_param, sim.dy, sim.Ly))
     if num_e_neut > 0:
-        new_ey = np.random.uniform(0.0, neut_r, num_e_neut).astype(_NP_FP)
+        if getattr(sim, 'is_axisymmetric', False):
+            new_ey = (neut_r * np.sqrt(np.random.uniform(0.0, 1.0, num_e_neut))).astype(_NP_FP)
+        else:
+            new_ey = np.random.uniform(0.0, neut_r, num_e_neut).astype(_NP_FP)
         new_ex = np.full(num_e_neut, neut_x, dtype=_NP_FP)
         v_e_th = np.sqrt(2.0 * sim.q * Te_eV / sim.m_e)
         new_evx = (np.random.randn(num_e_neut) * v_e_th).astype(_NP_FP)

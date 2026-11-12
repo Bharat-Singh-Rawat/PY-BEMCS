@@ -20,6 +20,7 @@ class DomainMixin:
 
     def build_sparse_matrix(self):
         periodic_y = getattr(self, 'periodic_y', False)
+        is_axisymmetric = getattr(self, 'is_axisymmetric', False)
         N   = self.nx * self.ny
         idx = np.arange(N)
         y_  = idx // self.nx
@@ -34,18 +35,27 @@ class DomainMixin:
             is_bottom    = np.zeros(N, dtype=bool)
             is_per_bot   = (y_ == 0)          & ~is_bound & ~is_right
             is_per_top   = (y_ == self.ny - 1)  & ~is_bound & ~is_right
+            is_axis_bot  = np.zeros(N, dtype=bool)
             is_interior  = ~is_bound & ~is_right & ~is_per_bot & ~is_per_top
+        elif is_axisymmetric:
+            is_top       = (y_ == self.ny - 1) & ~is_bound & ~is_right
+            is_bottom    = np.zeros(N, dtype=bool)
+            is_axis_bot  = (y_ == 0) & ~is_bound & ~is_right
+            is_interior  = ~is_bound & ~is_right & ~is_top & ~is_axis_bot
+            is_per_bot   = np.zeros(N, dtype=bool)
+            is_per_top   = np.zeros(N, dtype=bool)
         else:
             is_top      = (y_ == self.ny - 1) & ~is_bound & ~is_right
             is_bottom   = (y_ == 0)         & ~is_bound & ~is_right & ~is_top
             is_interior = ~is_bound & ~is_right & ~is_top & ~is_bottom
             is_per_bot  = np.zeros(N, dtype=bool)
             is_per_top  = np.zeros(N, dtype=bool)
+            is_axis_bot = np.zeros(N, dtype=bool)
 
-        self.is_interior_mask  = is_interior
+        self.is_interior_mask  = is_interior | is_axis_bot
         self.is_bound_mask     = is_bound
         # All non-Dirichlet, non-Neumann-right cells get rho as RHS source
-        self.is_rhs_rho_mask   = is_interior | is_per_bot | is_per_top
+        self.is_rhs_rho_mask   = is_interior | is_axis_bot | is_per_bot | is_per_top
 
         row, col, data = [], [], []
 
@@ -64,10 +74,11 @@ class DomainMixin:
             row.append(idx_t); col.append(idx_t);         data.append( np.ones_like(idx_t))
             row.append(idx_t); col.append(idx_t - self.nx); data.append(-np.ones_like(idx_t))
 
-            # —- Neumann bottom: V[0, ix] = V[1, ix] —-
-            idx_bot = idx[is_bottom]
-            row.append(idx_bot); col.append(idx_bot);         data.append( np.ones_like(idx_bot))
-            row.append(idx_bot); col.append(idx_bot + self.nx); data.append(-np.ones_like(idx_bot))
+            if not is_axisymmetric:
+                # —- Neumann bottom: V[0, ix] = V[1, ix] —-
+                idx_bot = idx[is_bottom]
+                row.append(idx_bot); col.append(idx_bot);         data.append( np.ones_like(idx_bot))
+                row.append(idx_bot); col.append(idx_bot + self.nx); data.append(-np.ones_like(idx_bot))
 
         # Finite-volume stencil coefficients for non-uniform x and uniform y
         dx_m = self.x_coords[1:-1] - self.x_coords[:-2]
@@ -80,14 +91,36 @@ class DomainMixin:
         cE[1:-1] = (self.dy ** 2) / (hx * dx_p)
         cP = -(cW + cE + 2.0)
 
-        # —- Standard 5-point interior stencil —-
+        # —- Interior stencil —-
         idx_in = idx[is_interior]
         x_in   = x_[is_interior]
-        row.append(idx_in); col.append(idx_in);          data.append(cP[x_in])
-        row.append(idx_in); col.append(idx_in - 1);        data.append(cW[x_in])
-        row.append(idx_in); col.append(idx_in + 1);        data.append(cE[x_in])
-        row.append(idx_in); col.append(idx_in - self.nx);  data.append(np.ones_like(idx_in))
-        row.append(idx_in); col.append(idx_in + self.nx);  data.append(np.ones_like(idx_in))
+        y_in   = y_[is_interior]
+
+        if is_axisymmetric:
+            j_in = y_in.astype(np.float64)
+            cS_in = 1.0 - 0.5 / j_in
+            cN_in = 1.0 + 0.5 / j_in
+            row.append(idx_in); col.append(idx_in);          data.append(cP[x_in])
+            row.append(idx_in); col.append(idx_in - 1);        data.append(cW[x_in])
+            row.append(idx_in); col.append(idx_in + 1);        data.append(cE[x_in])
+            row.append(idx_in); col.append(idx_in - self.nx);  data.append(cS_in)
+            row.append(idx_in); col.append(idx_in + self.nx);  data.append(cN_in)
+
+            # —- On-axis (j=0) cylindrical FVM row —-
+            if np.any(is_axis_bot):
+                idx_ax = idx[is_axis_bot]
+                x_ax   = x_[is_axis_bot]
+                cP_ax  = -(cW[x_ax] + cE[x_ax] + 4.0)
+                row.append(idx_ax); col.append(idx_ax);          data.append(cP_ax)
+                row.append(idx_ax); col.append(idx_ax - 1);        data.append(cW[x_ax])
+                row.append(idx_ax); col.append(idx_ax + 1);        data.append(cE[x_ax])
+                row.append(idx_ax); col.append(idx_ax + self.nx);  data.append(np.full_like(idx_ax, 4.0, dtype=np.float64))
+        else:
+            row.append(idx_in); col.append(idx_in);          data.append(cP[x_in])
+            row.append(idx_in); col.append(idx_in - 1);        data.append(cW[x_in])
+            row.append(idx_in); col.append(idx_in + 1);        data.append(cE[x_in])
+            row.append(idx_in); col.append(idx_in - self.nx);  data.append(np.ones_like(idx_in))
+            row.append(idx_in); col.append(idx_in + self.nx);  data.append(np.ones_like(idx_in))
 
         if periodic_y:
             # —- Periodic bottom row (iy=0): 5-pt with south neighbour = iy=ny-1 —-
@@ -272,7 +305,15 @@ class DomainMixin:
                 f"Automatically adapted dt from {old_dt:.2e} s to {self.dt:.2e} s to satisfy CFL velocity resolution."
             )
 
+        coord_sys = str(params.get('coordinate_system', getattr(self, 'coordinate_system', 'cartesian'))).strip().lower()
+        self.is_axisymmetric = coord_sys in ('axisymmetric', 'rz', 'r-z')
+        self.coordinate_system = 'axisymmetric' if self.is_axisymmetric else 'cartesian'
+
         geometry = params.get('geometry', 'half_hole')
+        if self.is_axisymmetric:
+            # Axisymmetric single-aperture formulation requires on-axis symmetry at y = 0
+            geometry = 'half_hole'
+
         self.geometry = geometry
         self.periodic_y = geometry in ('one_hole', 'two_holes')
         self.reflect_y0 = (geometry == 'half_hole')
@@ -288,6 +329,8 @@ class DomainMixin:
             user_hdist = params.get('hole_boundary_dist_mm', params.get('hole_to_boundary_mm', 0.0))
             if user_hdist is not None and float(user_hdist) > 0.0:
                 d_bound = float(user_hdist)
+            elif self.is_axisymmetric and str(params.get('r_cell_mode', '')).strip().lower() == 'wigner_seitz':
+                d_bound = np.sqrt(np.sqrt(3.0) / (2.0 * np.pi)) * pitch
             else:
                 d_bound = 0.5 * (screen_r + pitch)
             self.hole_boundary_dist_mm = d_bound
@@ -365,10 +408,32 @@ class DomainMixin:
         hx[1:-1] = 0.5 * (self.dx_cells[:-1] + self.dx_cells[1:])
         hx[-1] = 0.5 * self.dx_cells[-1]
         self.hx_cells = hx
-        self.cell_vol_1d = (hx * 1e-3) * (self.dy * 1e-3) * 1e-3
-        self.cell_vol_2d = np.tile(self.cell_vol_1d, (self.ny, 1))
-        self.cell_area_1d = (hx * 1e-3) * (self.dy * 1e-3)
-        self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
+        hx_m = hx * 1e-3
+        dy_m = self.dy * 1e-3
+
+        if self.is_axisymmetric:
+            r_coords_m = self.y_coords * 1e-3
+            V_rad = np.zeros(self.ny, dtype=np.float64)
+            # Node 0 (on axis r=0) half-cell cross-sectional area spans [0, dy_m / 2]
+            V_rad[0] = np.pi * (0.5 * dy_m) ** 2
+            # Interior nodes j=1..ny-2 span [r_j - dy_m/2, r_j + dy_m/2]
+            if self.ny > 2:
+                V_rad[1:-1] = 2.0 * np.pi * r_coords_m[1:-1] * dy_m
+            # Top boundary node j=ny-1 spans [r_max - dy_m/2, r_max]
+            V_rad[-1] = np.pi * (r_coords_m[-1] ** 2 - (r_coords_m[-1] - 0.5 * dy_m) ** 2)
+            self.cvol_r_1d = V_rad
+            self.cvol_x_1d = hx_m
+            self.cell_vol_2d = np.outer(V_rad, hx_m)
+            self.cell_vol_1d = self.cell_vol_2d[0, :].copy()
+            self.cell_area_1d = (hx * 1e-3) * (self.dy * 1e-3)
+            self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
+        else:
+            self.cvol_r_1d = np.full(self.ny, dy_m, dtype=np.float64)
+            self.cvol_x_1d = hx_m * 1e-3
+            self.cell_vol_1d = (hx * 1e-3) * (self.dy * 1e-3) * 1e-3
+            self.cell_vol_2d = np.tile(self.cell_vol_1d, (self.ny, 1))
+            self.cell_area_1d = (hx * 1e-3) * (self.dy * 1e-3)
+            self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
 
         self.X, self.Y = np.meshgrid(self.x_coords, self.y_coords)
         self._update_taichi_mesh_constants()
@@ -401,10 +466,17 @@ class DomainMixin:
 
         n0         = params.get('n0_plasma', 1e17)
         self.target_ppc = float(params.get('target_ppc', 40.0))
-        cell_vol   = self.cell_vol_1d[0]
         entire_bulk_plasma = params.get('entire_bulk_plasma', False)
         bohm_factor = 1.0 if entire_bulk_plasma else 0.61
-        self.macro_weight = max(bohm_factor * n0 * cell_vol / self.target_ppc, 1.0)
+
+        if self.is_axisymmetric and grids:
+            screen_r_m = float(grids[0]['r']) * 1e-3
+            r_inj_m = min(screen_r_m, (self.Ly - self.dy) * 1e-3)
+            avg_cell_vol = np.pi * r_inj_m * dy_m * hx_m[0]
+            self.macro_weight = max(bohm_factor * n0 * avg_cell_vol / self.target_ppc, 1.0)
+        else:
+            cell_vol   = self.cell_vol_1d[0]
+            self.macro_weight = max(bohm_factor * n0 * cell_vol / self.target_ppc, 1.0)
         self.mask_grids = []
         self.T_grids    = []
         self.isBound.fill(False)

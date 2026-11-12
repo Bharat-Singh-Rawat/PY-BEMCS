@@ -458,6 +458,16 @@ class UIBuilderMixin:
         self.combo_mode.addItems(["Both", "Thermal", "Erosion", "Trajectories"])
         control_layout.addWidget(self.combo_mode)
 
+        control_layout.addWidget(QLabel("Coordinate System:"))
+        self.combo_coords = QComboBox()
+        self.combo_coords.addItems(["Cartesian (2D Slab)", "Axisymmetric (r-z)"])
+        self.combo_coords.setToolTip(
+            "Cartesian (2D Slab) — planar 2D slab geometry with unit depth (default)\n"
+            "Axisymmetric (r-z)   — 2D3V cylindrical ion beamlet with r=0 axis and true annular volumes"
+        )
+        self.combo_coords.currentIndexChanged.connect(self._on_coordinate_system_changed)
+        control_layout.addWidget(self.combo_coords)
+
         control_layout.addWidget(QLabel("Geometry Mode:"))
         self.combo_geometry = QComboBox()
         self.combo_geometry.addItems(["half_hole", "one_hole", "two_holes"])

@@ -73,7 +73,10 @@ class ConfigMixin:
         self.spin_rf_freq.setValue(13.56)
         self.spin_rf_amp.setValue(0.0)
 
+        if hasattr(self, 'combo_coords'):
+            self.combo_coords.setCurrentIndex(0)
         self.combo_geometry.setCurrentText("half_hole")
+        self.combo_geometry.setEnabled(True)
 
         self._loading_config = True
         try:
@@ -165,6 +168,19 @@ class ConfigMixin:
 
     def _on_geometry_changed(self, idx):
         """Update domain size when geometry mode is changed."""
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        if not getattr(self, '_user_overrode_Ly', False):
+            self.adv_params["Ly"] = auto_Ly
+
+    def _on_coordinate_system_changed(self, idx):
+        """Handle coordinate system switch between Cartesian and Axisymmetric."""
+        if hasattr(self, 'combo_coords') and hasattr(self, 'combo_geometry'):
+            is_axisym = "axisymmetric" in self.combo_coords.currentText().lower()
+            if is_axisym:
+                self.combo_geometry.setCurrentText("half_hole")
+                self.combo_geometry.setEnabled(False)
+            else:
+                self.combo_geometry.setEnabled(True)
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         if not getattr(self, '_user_overrode_Ly', False):
             self.adv_params["Ly"] = auto_Ly
@@ -355,6 +371,16 @@ class ConfigMixin:
         idx_geom = self.combo_geometry.findText(geom)
         if idx_geom >= 0:
             self.combo_geometry.setCurrentIndex(idx_geom)
+
+        coord_sys = sim.get("coordinate_system", "cartesian")
+        if hasattr(self, 'combo_coords'):
+            if "axisymmetric" in coord_sys.lower():
+                self.combo_coords.setCurrentIndex(1)
+                self.combo_geometry.setCurrentText("half_hole")
+                self.combo_geometry.setEnabled(False)
+            else:
+                self.combo_coords.setCurrentIndex(0)
+                self.combo_geometry.setEnabled(True)
 
         if "div_plane_x" in sim and sim["div_plane_x"] is not None:
             self.div_plane_x = float(sim["div_plane_x"])
@@ -579,6 +605,10 @@ class ConfigMixin:
         sim_cfg["Thresh"] = float(inputs["Thresh"].value()) if "Thresh" in inputs else float(sim_cfg.get("Thresh", 1e6))
         sim_cfg["sim_mode"] = str(self.combo_mode.currentText()) if hasattr(self, "combo_mode") else str(sim_cfg.get("sim_mode", "Thermal"))
         sim_cfg["geometry"] = str(self.combo_geometry.currentText()) if hasattr(self, "combo_geometry") else str(sim_cfg.get("geometry", "half_hole"))
+        if hasattr(self, "combo_coords"):
+            sim_cfg["coordinate_system"] = "axisymmetric" if "axisymmetric" in self.combo_coords.currentText().lower() else "cartesian"
+        else:
+            sim_cfg["coordinate_system"] = str(sim_cfg.get("coordinate_system", "cartesian"))
         if "hole_boundary_dist_mm" in inputs and inputs["hole_boundary_dist_mm"].value() > 0:
             sim_cfg["hole_boundary_dist_mm"] = float(inputs["hole_boundary_dist_mm"].value())
         if "target_ppc" in inputs:
@@ -776,6 +806,10 @@ class ConfigMixin:
         params.update(self.adv_params)
         params["sim_mode"] = self.combo_mode.currentText()
         params["geometry"] = self.combo_geometry.currentText()
+        if hasattr(self, "combo_coords"):
+            params["coordinate_system"] = "axisymmetric" if "axisymmetric" in self.combo_coords.currentText().lower() else "cartesian"
+        else:
+            params["coordinate_system"] = "cartesian"
         params["rf_enable"] = self.chk_rf.isChecked()
         params["rf_grid_idx"] = self.combo_rf_grid.currentIndex()
         params["rf_freq"] = self.spin_rf_freq.value()

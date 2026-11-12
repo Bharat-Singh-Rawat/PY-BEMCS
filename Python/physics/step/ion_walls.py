@@ -46,6 +46,8 @@ def compute_beam_divergence(
     div_percentile: float = 95.0,
     n_sigmas: float = 1.0,
     symmetric_half_domain: bool = False,
+    is_axisymmetric: bool = False,
+    p_vz: np.ndarray = None,
 ) -> float:
     """Compute the beam divergence (half-angle in degrees) for ions crossing a plane.
 
@@ -64,8 +66,14 @@ def compute_beam_divergence(
     vx = p_vx[mask]
     vy = p_vy[mask]
 
-    # Transverse angles in degrees
-    angles_deg = np.arctan2(vy, vx) * (180.0 / np.pi)
+    if is_axisymmetric and p_vz is not None:
+        vz = p_vz[mask]
+        v_perp = np.sqrt(vy ** 2 + vz ** 2)
+        angles_deg = np.arctan2(v_perp, vx) * (180.0 / np.pi)
+        angles_planar = np.arctan2(vy, vx) * (180.0 / np.pi)
+    else:
+        angles_deg = np.arctan2(vy, vx) * (180.0 / np.pi)
+        angles_planar = angles_deg
 
     method_clean = str(method).strip().lower() if method is not None else "95%"
 
@@ -75,13 +83,13 @@ def compute_beam_divergence(
 
     elif "twiss" in method_clean:
         # RMS (Twiss): Divergence = n * sigmas * sqrt(epsilon * gamma)
-        # In half_hole symmetry (y >= 0), mirror {(y, theta)} -> {(-y, -theta)} so moments are centered.
+        # In half_hole or axisymmetric symmetry (y >= 0), mirror {(y, theta)} -> {(-y, -theta)} so moments are centered.
         if symmetric_half_domain:
             y_eff = np.concatenate((y, -y))
-            th_eff = np.concatenate((angles_deg, -angles_deg))
+            th_eff = np.concatenate((angles_planar, -angles_planar))
         else:
             y_eff = y
-            th_eff = angles_deg
+            th_eff = angles_planar
 
         y_mean = np.mean(y_eff)
         y_dev = y_eff - y_mean
@@ -106,8 +114,8 @@ def compute_beam_divergence(
 
     elif "fwhm" in method_clean:
         # FWHM: Half the full width at half-maximum of angular distribution histogram peak
-        # In half_hole symmetry, mirror angles symmetrically around 0 deg so HWHM is full-width centered.
-        th_eff = np.concatenate((angles_deg, -angles_deg)) if symmetric_half_domain else angles_deg
+        # In half_hole or axisymmetric symmetry, mirror planar angles symmetrically around 0 deg.
+        th_eff = np.concatenate((angles_planar, -angles_planar)) if symmetric_half_domain else angles_planar
         n_eff = len(th_eff)
         if n_pts < 15:
             # For small sample sizes, empirical histogram is sparse;
@@ -345,11 +353,15 @@ def step_ion_interactions(sim, ctx: StepContext):
             div_method = getattr(sim, 'div_method', params.get('div_method', '95%'))
             div_pct = getattr(sim, 'div_percentile', params.get('div_percentile', 95.0))
             n_sigmas = getattr(sim, 'twiss_n_sigma', params.get('twiss_n_sigma', 1.0))
+            is_axisym = bool(getattr(sim, 'is_axisymmetric', False))
+            symmetric_half = is_half_hole or is_axisym
 
             ctx.current_div = compute_beam_divergence(
                 p_y, p_vx, p_vy, crossed_mask,
                 method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
-                symmetric_half_domain=is_half_hole
+                symmetric_half_domain=symmetric_half,
+                is_axisymmetric=is_axisym,
+                p_vz=p_vz
             )
         else:
             sim.exit_vx_mean = np.nan
@@ -367,11 +379,15 @@ def step_ion_interactions(sim, ctx: StepContext):
             div_method = getattr(sim, 'div_method', params.get('div_method', '95%'))
             div_pct = getattr(sim, 'div_percentile', params.get('div_percentile', 95.0))
             n_sigmas = getattr(sim, 'twiss_n_sigma', params.get('twiss_n_sigma', 1.0))
+            is_axisym = bool(getattr(sim, 'is_axisymmetric', False))
+            symmetric_half = is_half_hole or is_axisym
 
             ctx.current_div_mid = compute_beam_divergence(
                 p_y, p_vx, p_vy, crossed_mid_mask,
                 method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
-                symmetric_half_domain=is_half_hole
+                symmetric_half_domain=symmetric_half,
+                is_axisymmetric=is_axisym,
+                p_vz=p_vz
             )
         else:
             ctx.current_div_mid = np.nan
@@ -545,11 +561,15 @@ def step_ion_interactions(sim, ctx: StepContext):
     div_method = getattr(sim, 'div_method', params.get('div_method', '95%'))
     div_pct = getattr(sim, 'div_percentile', params.get('div_percentile', 95.0))
     n_sigmas = getattr(sim, 'twiss_n_sigma', params.get('twiss_n_sigma', 1.0))
+    is_axisym = bool(getattr(sim, 'is_axisymmetric', False))
+    symmetric_half = is_half_hole or is_axisym
 
     ctx.current_div = compute_beam_divergence(
         p_y, p_vx, p_vy, crossed_mask,
         method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
-        symmetric_half_domain=is_half_hole
+        symmetric_half_domain=symmetric_half,
+        is_axisymmetric=is_axisym,
+        p_vz=p_vz
     )
 
     x_plane = getattr(sim, 'div_plane_x', None)
@@ -562,7 +582,9 @@ def step_ion_interactions(sim, ctx: StepContext):
     ctx.current_div_mid = compute_beam_divergence(
         p_y, p_vx, p_vy, crossed_mid_mask,
         method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
-        symmetric_half_domain=is_half_hole
+        symmetric_half_domain=symmetric_half,
+        is_axisymmetric=is_axisym,
+        p_vz=p_vz
     )
 
     sim.current_div = ctx.current_div

@@ -12,7 +12,8 @@ if USE_TAICHI:
         x: ti.types.ndarray(dtype=_TI_FP),
         y: ti.types.ndarray(dtype=_TI_FP),
         rho: ti.types.ndarray(dtype=_TI_FP),
-        cell_vol: ti.types.ndarray(dtype=_TI_FP),
+        cvol_r: ti.types.ndarray(dtype=_TI_FP),
+        cvol_x: ti.types.ndarray(dtype=_TI_FP),
         num_p: ti.i32,
         dy: ti.f32,
         nx: ti.i32,
@@ -21,9 +22,11 @@ if USE_TAICHI:
         zone_b: ti.types.ndarray(dtype=_TI_FP),
         zone_dx: ti.types.ndarray(dtype=_TI_FP),
         zone_off: ti.types.ndarray(dtype=ti.i32),
-        num_zones: ti.i32
+        num_zones: ti.i32,
+        is_axisym: ti.i32
     ):
         """Parallel density accumulation with generic N-zone O(1) cell lookup."""
+        min_iy = 0 if is_axisym != 0 else 1
         for i in range(num_p):
             px = x[i]
             py = y[i]
@@ -36,10 +39,10 @@ if USE_TAICHI:
 
             # Clamp to avoid out-of-bounds access
             ix = ti.max(1, ti.min(ix, nx - 2))
-            iy = ti.max(1, ti.min(iy, ny - 2))
+            iy = ti.max(min_iy, ti.min(iy, ny - 2))
 
             # Taichi handles atomic additions automatically on the GPU
-            rho[iy, ix] += charge_per_particle / cell_vol[ix]
+            rho[iy, ix] += charge_per_particle / (cvol_r[iy] * cvol_x[ix])
 
     @ti.kernel
     def _push_particles_boris_taichi_kernel(
@@ -66,7 +69,8 @@ if USE_TAICHI:
         n_sub: ti.i32,
         Ly: ti.f32,
         reflect_y0: ti.i32,
-        reflect_y_top: ti.i32
+        reflect_y_top: ti.i32,
+        is_axisym: ti.i32
     ):
         """Parallel bilinear interpolation with 2D3V Boris Algorithm on generic N-zone mesh with fused in-register sub-stepping."""
         for i in range(num_p):
@@ -134,17 +138,36 @@ if USE_TAICHI:
 
                 # Kinematic update in mm units
                 px += cur_vx * dt * 1000.0
-                py += cur_vy * dt * 1000.0
 
-                # Specular reflection at transverse symmetry boundaries
-                if reflect_y0 != 0 or (reflect_y_top != 0 and Ly > 0.0):
-                    for _bounce in range(2):
-                        if reflect_y0 != 0 and py < 0.0:
-                            py = -py
-                            cur_vy = -cur_vy
-                        if reflect_y_top != 0 and Ly > 0.0 and py > Ly:
-                            py = 2.0 * Ly - py
-                            cur_vy = -cur_vy
+                if is_axisym != 0:
+                    y_tmp = py + cur_vy * dt * 1000.0
+                    z_tmp = cur_vz * dt * 1000.0
+                    r_new = ti.sqrt(y_tmp * y_tmp + z_tmp * z_tmp)
+                    if r_new > 1e-12:
+                        cos_a = y_tmp / r_new
+                        sin_a = z_tmp / r_new
+                        vr_rot = cur_vy * cos_a + cur_vz * sin_a
+                        vt_rot = -cur_vy * sin_a + cur_vz * cos_a
+                        cur_vy = vr_rot
+                        cur_vz = vt_rot
+                    elif y_tmp < 0.0:
+                        cur_vy = -cur_vy
+                    py = r_new
+                    if reflect_y_top != 0 and Ly > 0.0 and py > Ly:
+                        py = 2.0 * Ly - py
+                        cur_vy = -cur_vy
+                else:
+                    py += cur_vy * dt * 1000.0
+
+                    # Specular reflection at transverse symmetry boundaries
+                    if reflect_y0 != 0 or (reflect_y_top != 0 and Ly > 0.0):
+                        for _bounce in range(2):
+                            if reflect_y0 != 0 and py < 0.0:
+                                py = -py
+                                cur_vy = -cur_vy
+                            if reflect_y_top != 0 and Ly > 0.0 and py > Ly:
+                                py = 2.0 * Ly - py
+                                cur_vy = -cur_vy
 
             x[i] = px
             y[i] = py
@@ -160,7 +183,8 @@ if USE_TAICHI:
         n_sub: int = 1,
         Ly: float = 0.0,
         reflect_y0: int = 0,
-        reflect_y_top: int = 0
+        reflect_y_top: int = 0,
+        is_axisymmetric: int = 0
     ):
         """Python wrapper for Taichi Boris pusher with optional fused in-register sub-stepping (default n_sub=1)."""
         return _push_particles_boris_taichi_kernel(
@@ -168,7 +192,8 @@ if USE_TAICHI:
             Ex, Ey, Bx, By, Bz,
             int(num_p), float(dy), int(nx), int(ny), float(dt), float(q_m),
             zone_b, zone_dx, zone_off, int(num_zones),
-            int(n_sub), float(Ly), int(reflect_y0), int(reflect_y_top)
+            int(n_sub), float(Ly), int(reflect_y0), int(reflect_y_top),
+            int(is_axisymmetric)
         )
 
     @ti.kernel

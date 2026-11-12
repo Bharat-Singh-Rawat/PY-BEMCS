@@ -59,6 +59,8 @@ def step_push(sim, ctx: StepContext):
     refl_y0_i = 1 if reflect_y0 else 0
     refl_ytop_i = 1 if reflect_y_top else 0
     Ly_val = float(getattr(sim, 'Ly', 0.0))
+    is_axisym = bool(getattr(sim, 'is_axisymmetric', False))
+    is_axisym_i = 1 if is_axisym else 0
 
     if num_p_step > 0:
         dt_ion = np.float32(sim.dt / n_sub_ion)
@@ -71,7 +73,8 @@ def step_push(sim, ctx: StepContext):
                 num_p_step, ctx._dy, sim.nx, sim.ny, dt_ion, _qm_ion,
                 ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
                 n_sub=n_sub_ion,
-                Ly=Ly_val, reflect_y0=refl_y0_i, reflect_y_top=refl_ytop_i
+                Ly=Ly_val, reflect_y0=refl_y0_i, reflect_y_top=refl_ytop_i,
+                is_axisymmetric=is_axisym_i
             )
         else:
             for _ in range(n_sub_ion):
@@ -89,7 +92,8 @@ def step_push(sim, ctx: StepContext):
                     sim.zone_dx,
                     sim.zone_offsets,
                     sim.x_coords,
-                    Ly=Ly_val, reflect_y0=reflect_y0, reflect_y_top=reflect_y_top
+                    Ly=Ly_val, reflect_y0=reflect_y0, reflect_y_top=reflect_y_top,
+                    is_axisymmetric=is_axisym
                 )
 
     if num_e_step > 0:
@@ -103,7 +107,8 @@ def step_push(sim, ctx: StepContext):
                 num_e_step, ctx._dy, sim.nx, sim.ny, dt_e, _qm_e,
                 ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
                 n_sub=n_sub_e,
-                Ly=Ly_val, reflect_y0=refl_y0_i, reflect_y_top=refl_ytop_i
+                Ly=Ly_val, reflect_y0=refl_y0_i, reflect_y_top=refl_ytop_i,
+                is_axisymmetric=is_axisym_i
             )
         else:
             for _ in range(n_sub_e):
@@ -121,7 +126,8 @@ def step_push(sim, ctx: StepContext):
                     sim.zone_dx,
                     sim.zone_offsets,
                     sim.x_coords,
-                    Ly=Ly_val, reflect_y0=reflect_y0, reflect_y_top=reflect_y_top
+                    Ly=Ly_val, reflect_y0=reflect_y0, reflect_y_top=reflect_y_top,
+                    is_axisymmetric=is_axisym
                 )
 
     if getattr(sim, 'periodic_y', False):

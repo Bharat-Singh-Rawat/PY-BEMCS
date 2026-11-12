@@ -137,6 +137,11 @@ class PoissonMixin(PoissonCPUMixin, PoissonGPUMixin):
             two_dy_m = getattr(self, 'two_dy_m', 2.0 * self.dy * 1e-3)
             self.Ey[0, :] = (self.V[self.ny - 1, :] - self.V[1, :]) / two_dy_m
             self.Ey[self.ny - 1, :] = (self.V[self.ny - 2, :] - self.V[0, :]) / two_dy_m
+        else:
+            if getattr(self, 'reflect_y0', False) or getattr(self, 'is_axisymmetric', False):
+                self.Ey[0, :] = 0.0
+            if getattr(self, 'reflect_y_top', False) or getattr(self, 'is_axisymmetric', False):
+                self.Ey[self.ny - 1, :] = 0.0
 
         self.Ey = self.Ey.astype(_NP_FP)
         self.Ex = self.Ex.astype(_NP_FP)

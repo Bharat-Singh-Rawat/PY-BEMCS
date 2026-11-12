@@ -59,7 +59,9 @@ def compute_energy_budget(sim):
 
     if Ex is not None and Ey is not None:
         eps0 = getattr(sim, 'eps0', 8.8541878128e-12)
-        if hasattr(sim, 'cell_area_2d') and sim.cell_area_2d is not None:
+        if hasattr(sim, 'cell_vol_2d') and sim.cell_vol_2d is not None:
+            e_field = float(np.sum((Ex**2 + Ey**2) * sim.cell_vol_2d)) * 0.5 * eps0
+        elif hasattr(sim, 'cell_area_2d') and sim.cell_area_2d is not None:
             e_field = float(np.sum((Ex**2 + Ey**2) * sim.cell_area_2d)) * 0.5 * eps0
         else:
             cell_area = (float(getattr(sim, 'dx', 0.05)) * 1e-3) * (float(getattr(sim, 'dy', 0.05)) * 1e-3)  # [m^2]

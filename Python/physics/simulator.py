@@ -93,6 +93,8 @@ class DigitalTwinSimulator(
         self.Ly = 3
         self.dx = 0.02
         self.dy = 0.02
+        self.coordinate_system = 'cartesian'
+        self.is_axisymmetric = False
         self.geometry = 'half_hole'
         self.periodic_y = False
         self.reflect_y0 = True
@@ -122,6 +124,8 @@ class DigitalTwinSimulator(
         hx[1:-1] = 0.5 * (self.dx_cells[:-1] + self.dx_cells[1:])
         hx[-1] = 0.5 * self.dx_cells[-1]
         self.hx_cells = hx
+        self.cvol_r_1d = np.full(self.ny, self.dy * 1e-3, dtype=np.float64)
+        self.cvol_x_1d = (hx * 1e-3) * 1e-3
         self.cell_vol_1d = (hx * 1e-3) * (self.dy * 1e-3) * 1e-3
         self.cell_vol_2d = np.tile(self.cell_vol_1d, (self.ny, 1))
         self.cell_area_1d = (hx * 1e-3) * (self.dy * 1e-3)

@@ -20,6 +20,14 @@ class MeshMixin:
         self.zone_off_ti = _ti_arr_i32(self.zone_offsets)
         self.num_zones = int(len(self.zone_dx))
         self.cvol_ti = _ti_arr(self.cell_vol_1d.astype(_NP_FP))
+        cvol_r = getattr(self, 'cvol_r_1d', None)
+        cvol_x = getattr(self, 'cvol_x_1d', None)
+        if cvol_r is not None and cvol_x is not None:
+            self.cvol_r_ti = _ti_arr(cvol_r.astype(_NP_FP))
+            self.cvol_x_ti = _ti_arr(cvol_x.astype(_NP_FP))
+        else:
+            self.cvol_r_ti = None
+            self.cvol_x_ti = None
         self._dy_f32 = np.float32(self.dy)
 
     def _x_to_ix(self, x):
