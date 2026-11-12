@@ -40,15 +40,21 @@ def step_inject(sim, ctx: StepContext):
     is_axisymmetric = getattr(sim, 'is_axisymmetric', False)
     screen_r = grids[0]['r'] if grids else 0.80
 
+    user_inj_y = params.get('inj_y_length_mm', params.get('inj_y_length', None))
+    if user_inj_y is not None and float(user_inj_y) > 0.0:
+        inj_y_span = min(float(user_inj_y), sim.Ly - sim.dy)
+    else:
+        inj_y_span = min(screen_r, sim.Ly - sim.dy) if grids else (sim.Ly - sim.dy)
+
     if 'injection_area_scale' in params:
         if is_axisymmetric:
-            r_inj_m = (min(screen_r, sim.Ly) if grids else sim.Ly) * 1e-3
+            r_inj_m = inj_y_span * 1e-3
             injection_area = np.pi * (r_inj_m ** 2) * params['injection_area_scale']
         else:
             injection_area = sim.Ly * 1e-3 * 1e-3 * params['injection_area_scale']
     else:
         if is_axisymmetric:
-            r_inj_mm = min(screen_r, sim.Ly - sim.dy) if grids else (sim.Ly - sim.dy)
+            r_inj_mm = inj_y_span
             injection_area = np.pi * ((r_inj_mm * 1e-3) ** 2)
         else:
             _unit_depth_m = 1e-3
@@ -59,17 +65,17 @@ def step_inject(sim, ctx: StepContext):
                     hcs = getattr(sim, 'hole_centers', None)
                     yc0 = hcs[0] if hcs and len(hcs) > 0 else 0.5 * (screen_r + pitch_inj)
                     yc1 = hcs[1] if hcs and len(hcs) > 1 else 1.5 * (screen_r + pitch_inj)
-                    h1 = max(0.0, min(yc0 + screen_r, sim.Ly - sim.dy) - max(sim.dy, yc0 - screen_r))
-                    h2 = max(0.0, min(yc1 + screen_r, sim.Ly - sim.dy) - max(sim.dy, yc1 - screen_r))
+                    h1 = max(0.0, min(yc0 + inj_y_span, sim.Ly - sim.dy) - max(sim.dy, yc0 - inj_y_span))
+                    h2 = max(0.0, min(yc1 + inj_y_span, sim.Ly - sim.dy) - max(sim.dy, yc1 - inj_y_span))
                     inj_height_mm = h1 + h2
                 elif geometry == 'one_hole':
                     hcs = getattr(sim, 'hole_centers', None)
                     yc = hcs[0] if hcs and len(hcs) > 0 else 0.5 * sim.Ly
-                    inj_height_mm = max(0.0, min(yc + screen_r, sim.Ly - sim.dy) - max(sim.dy, yc - screen_r))
+                    inj_height_mm = max(0.0, min(yc + inj_y_span, sim.Ly - sim.dy) - max(sim.dy, yc - inj_y_span))
                 else:
-                    inj_height_mm = min(screen_r, sim.Ly - sim.dy)
+                    inj_height_mm = min(inj_y_span, sim.Ly - sim.dy)
             else:
-                inj_height_mm = sim.Ly - 2.0 * sim.dy
+                inj_height_mm = min(inj_y_span, sim.Ly - 2.0 * sim.dy)
 
             inj_height_mm = max(inj_height_mm, sim.dy)
             injection_area = inj_height_mm * 1e-3 * _unit_depth_m
@@ -85,7 +91,7 @@ def step_inject(sim, ctx: StepContext):
 
     if num_inject > 0:
         if is_axisymmetric:
-            r_inj_mm = min(screen_r, sim.Ly - sim.dy) if grids else (sim.Ly - sim.dy)
+            r_inj_mm = inj_y_span
             # Uniform density in circular aperture: r = r_inj * sqrt(U)
             new_y = (r_inj_mm * np.sqrt(np.random.uniform(0.0, 1.0, num_inject))).astype(_NP_FP)
         else:
@@ -97,8 +103,8 @@ def step_inject(sim, ctx: StepContext):
                     yc0 = hcs[0] if hcs and len(hcs) > 0 else 0.5 * (screen_r + pitch_inj)
                     yc1 = hcs[1] if hcs and len(hcs) > 1 else 1.5 * (screen_r + pitch_inj)
                     span_limits = np.array([
-                        [max(sim.dy, yc0 - screen_r), min(yc0 + screen_r, sim.Ly - sim.dy)],
-                        [max(sim.dy, yc1 - screen_r), min(yc1 + screen_r, sim.Ly - sim.dy)],
+                        [max(sim.dy, yc0 - inj_y_span), min(yc0 + inj_y_span, sim.Ly - sim.dy)],
+                        [max(sim.dy, yc1 - inj_y_span), min(yc1 + inj_y_span, sim.Ly - sim.dy)],
                     ], dtype=_NP_FP)
                     which_hole = np.random.randint(0, 2, size=num_inject)
                     y_lo  = span_limits[which_hole, 0]
@@ -107,15 +113,15 @@ def step_inject(sim, ctx: StepContext):
                 elif geometry == 'one_hole':
                     hcs = getattr(sim, 'hole_centers', None)
                     yc = hcs[0] if hcs and len(hcs) > 0 else 0.5 * sim.Ly
-                    ylow  = max(sim.dy, yc - screen_r)
-                    yhigh = min(yc + screen_r, sim.Ly - sim.dy)
+                    ylow  = max(sim.dy, yc - inj_y_span)
+                    yhigh = min(yc + inj_y_span, sim.Ly - sim.dy)
                     new_y = np.random.uniform(ylow, yhigh, num_inject).astype(_NP_FP)
                 else:
                     ylow  = 0.0
-                    yhigh = min(screen_r, sim.Ly - sim.dy)
+                    yhigh = min(inj_y_span, sim.Ly - sim.dy)
                     new_y = np.random.uniform(ylow, yhigh, num_inject).astype(_NP_FP)
             else:
-                new_y = np.random.uniform(sim.dy, sim.Ly - sim.dy, num_inject).astype(_NP_FP)
+                new_y = np.random.uniform(sim.dy, min(inj_y_span, sim.Ly - sim.dy), num_inject).astype(_NP_FP)
 
         new_x = np.full(num_inject, sim.dx * 1.5, dtype=_NP_FP)
 
@@ -139,7 +145,7 @@ def step_inject(sim, ctx: StepContext):
 
         if num_inj_e > 0:
             if is_axisymmetric:
-                r_inj_mm = min(screen_r, sim.Ly - sim.dy) if grids else (sim.Ly - sim.dy)
+                r_inj_mm = inj_y_span
                 new_ey = (r_inj_mm * np.sqrt(np.random.uniform(0.0, 1.0, num_inj_e))).astype(_NP_FP)
             else:
                 y_margin = max(sim.dy, 1e-9)

@@ -223,6 +223,13 @@ When the solver operates in \textbf{Axisymmetric ($r\text{--}z$)} cylindrical mo
 \end{enumerate}
 
 % =====================================================
+\subsubsection{Transverse Injection Span and Sheath Expansion Controls}
+In Section 1 (Geometry / Grid Optics) of the user interface, two parameters govern the transverse domain sizing and upstream injection region:
+\begin{itemize}[nosep]
+    \item \textbf{Hole-Boundary Margin (\texttt{hole\_boundary\_dist\_mm})}: Enforces a minimum radial/transverse solid webbing clearance between the outermost grid aperture wall and the upper computational domain boundary at  = L_y$.
+    \item \textbf{Injection Y-Length (\texttt{inj\_y\_length\_mm})}: Configures the transverse or radial span $[0, y_{\mathrm{inj}}]$ over which upstream ions (and RF electrons) are introduced at the injection boundary  = 0$. By default, {\mathrm{inj}}$ matches the screen grid aperture radius {\mathrm{s}}$ (with an \texttt{Auto} button to restore synchronization). However, users can increase {\mathrm{inj}}$ up to the full domain height $. This models physical Debye sheath expansion ($\lambda_{\mathrm{D}} \propto n_0^{-1/2}$) over the solid screen grid webbing at low plasma densities, funneling peripheral ions into the aperture at steep incidence angles to accurately capture low-density crossover divergence.
+\end{itemize}
+
 \section{Particle-in-Cell Electrostatic Algorithm}
 % =====================================================
 

@@ -192,7 +192,8 @@ class UIBuilderMixin:
         if idx == 1:
             spin_r.valueChanged.connect(lambda _: (
                 getattr(self, '_update_debye_gap', lambda: None)(),
-                getattr(self, '_update_hole_boundary_dist', lambda: None)()
+                getattr(self, '_update_hole_boundary_dist', lambda: None)(),
+                getattr(self, '_update_inj_y_length', lambda: None)()
             ))
 
         self.grid_widgets.append({
@@ -401,6 +402,25 @@ class UIBuilderMixin:
             "Set to 0 to auto-track the default based on screen radius and pitch."
         )
         self.inputs["hole_boundary_dist_mm"].valueChanged.connect(self._on_hole_boundary_dist_changed)
+
+        # Injection Y-length / radius parameter (distance from centerline across which ions are injected)
+        row_inj_y, self.inputs["inj_y_length_mm"] = self.create_input(
+            "Injection Y-Length (mm):", 0.0, 50.0, 0.05, 3
+        )
+        self.btn_reset_inj_y = QPushButton("Auto")
+        self.btn_reset_inj_y.setToolTip("Reset to default injection span (screen grid aperture radius)")
+        self.btn_reset_inj_y.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self.btn_reset_inj_y.clicked.connect(self.reset_inj_y_length)
+        row_inj_y.addWidget(self.btn_reset_inj_y)
+        control_layout.addLayout(row_inj_y)
+        self.inputs["inj_y_length_mm"].setToolTip(
+            "Transverse / radial span for ion injection at the upstream boundary [mm].\n\n"
+            "Default = Screen grid aperture radius (r_screen).\n"
+            "Can be set larger than r_screen (up to domain height Ly) to model plasma sheath expansion and ions\n"
+            "originating from above the screen grid webbing that are funneled into the aperture (crossover enhancement).\n\n"
+            "Set to 0 to auto-track the screen grid radius. Clamped automatically to at most Ly."
+        )
+        self.inputs["inj_y_length_mm"].valueChanged.connect(self._on_inj_y_length_changed)
 
         btn_layout = QHBoxLayout()
         self.btn_add_grid = QPushButton("+ Add Grid")

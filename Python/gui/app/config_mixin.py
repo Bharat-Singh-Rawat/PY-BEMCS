@@ -78,6 +78,10 @@ class ConfigMixin:
         self.combo_geometry.setCurrentText("half_hole")
         self.combo_geometry.setEnabled(True)
 
+        if "inj_y_length_mm" in self.inputs:
+            self.inputs["inj_y_length_mm"].setValue(0.80)
+            self._last_auto_inj_y_length = 0.80
+
         self._loading_config = True
         try:
             self.clear_grid_ui()
@@ -221,6 +225,44 @@ class ConfigMixin:
         if not getattr(self, '_user_overrode_Ly', False):
             self.adv_params["Ly"] = auto_Ly
 
+    def reset_inj_y_length(self):
+        """Reset injection y-length to default (screen grid aperture radius)."""
+        screen_r = 0.80
+        if hasattr(self, 'grid_widgets') and self.grid_widgets:
+            screen_r = self.grid_widgets[0]["r"].value()
+        elif hasattr(self, 'config') and self.config and "grids" in self.config and self.config["grids"]:
+            screen_r = float(self.config["grids"][0].get("r", 0.80))
+        self._last_auto_inj_y_length = screen_r
+        if "inj_y_length_mm" in self.inputs:
+            self.inputs["inj_y_length_mm"].blockSignals(True)
+            self.inputs["inj_y_length_mm"].setValue(screen_r)
+            self.inputs["inj_y_length_mm"].blockSignals(False)
+
+    def _on_inj_y_length_changed(self, val):
+        """Validate and clamp injection y-length if user sets it above domain height Ly."""
+        if val <= 0.0:
+            return
+        auto_Lx, auto_Ly = self.compute_grid_domain_size()
+        Ly_curr = float(self.adv_params.get("Ly", auto_Ly))
+        if val > Ly_curr:
+            if "inj_y_length_mm" in self.inputs:
+                self.inputs["inj_y_length_mm"].blockSignals(True)
+                self.inputs["inj_y_length_mm"].setValue(Ly_curr)
+                self.inputs["inj_y_length_mm"].blockSignals(False)
+
+    def _update_inj_y_length(self):
+        """Auto-update injection y-length when screen grid radius changes, if not user overridden."""
+        if not hasattr(self, '_last_auto_inj_y_length') or "inj_y_length_mm" not in self.inputs:
+            return
+        current = round(self.inputs["inj_y_length_mm"].value(), 3)
+        if abs(current - self._last_auto_inj_y_length) > 0.001:
+            return  # user manually edited it
+        screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+        self._last_auto_inj_y_length = round(screen_r, 3)
+        self.inputs["inj_y_length_mm"].blockSignals(True)
+        self.inputs["inj_y_length_mm"].setValue(screen_r)
+        self.inputs["inj_y_length_mm"].blockSignals(False)
+
     def _on_neut_match_toggled(self, state):
         """Enable or disable manual neutralizer injection rate when matched to ion rate."""
         is_matched = bool(state)
@@ -361,6 +403,15 @@ class ConfigMixin:
         self.inputs["Accel"].setValue(sim["Accel"])
         self.inputs["Thresh"].setValue(sim["Thresh"])
         self.inputs["target_ppc"].setValue(float(sim.get("target_ppc", 40.0)))
+        if "inj_y_length_mm" in self.inputs:
+            inj_y = sim.get("inj_y_length_mm", sim.get("inj_y_length", None))
+            if inj_y is not None and float(inj_y) > 0:
+                self.inputs["inj_y_length_mm"].setValue(float(inj_y))
+                self._last_auto_inj_y_length = float(inj_y)
+            else:
+                screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+                self.inputs["inj_y_length_mm"].setValue(screen_r)
+                self._last_auto_inj_y_length = screen_r
 
         mode = sim["sim_mode"]
         idx = self.combo_mode.findText(mode)
@@ -611,6 +662,8 @@ class ConfigMixin:
             sim_cfg["coordinate_system"] = str(sim_cfg.get("coordinate_system", "cartesian"))
         if "hole_boundary_dist_mm" in inputs and inputs["hole_boundary_dist_mm"].value() > 0:
             sim_cfg["hole_boundary_dist_mm"] = float(inputs["hole_boundary_dist_mm"].value())
+        if "inj_y_length_mm" in inputs and inputs["inj_y_length_mm"].value() > 0:
+            sim_cfg["inj_y_length_mm"] = float(inputs["inj_y_length_mm"].value())
         if "target_ppc" in inputs:
             sim_cfg["target_ppc"] = float(inputs["target_ppc"].value())
         if "inj_time_µs" in inputs and inputs["inj_time_µs"].value() > 0:

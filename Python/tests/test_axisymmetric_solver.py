@@ -274,6 +274,55 @@ class TestAxisymmetricSolver(unittest.TestCase):
         self.assertGreaterEqual(sim.iteration, 20)
         self.assertGreaterEqual(sim.num_p, 0)
 
+    def test_custom_injection_y_length(self):
+        """Verify custom injection Y length (inj_y_length_mm) operates correctly and clamps at Ly."""
+        # 1. Custom inj_y_length_mm > screen radius
+        sim = DigitalTwinSimulator()
+        params = {
+            "coordinate_system": "axisymmetric",
+            "geometry": "half_hole",
+            "n0_plasma": 1e17,
+            "Te_up": 3.0,
+            "Ti": 0.1,
+            "sim_mode": "PIC-MCC",
+            "enforce_efield_mesh_limit": False,
+            "inj_y_length_mm": 1.2,
+            "grids": [
+                {"V": 1000.0, "t": 0.38, "gap": 0.64, "r": 0.80, "cham": 0.0},
+                {"V": -200.0, "t": 0.38, "gap": 0.64, "r": 0.70, "cham": 0.0},
+            ]
+        }
+        sim.build_domain(params)
+        # Step once to inject ions
+        sim.step(params)
+        self.assertGreater(sim.num_p, 0, "No particles injected")
+        # Check max y of newly injected particles exceeds screen grid radius 0.80 mm
+        max_y = np.max(sim.p_y[:sim.num_p])
+        self.assertGreater(max_y, 0.80, "Injection should extend beyond screen grid radius (0.80 mm)")
+        self.assertLessEqual(max_y, 1.2001, "Injection must not exceed specified inj_y_length_mm")
+
+        # 2. Clamping when inj_y_length_mm > Ly
+        sim_clamp = DigitalTwinSimulator()
+        params_clamp = dict(params)
+        params_clamp["inj_y_length_mm"] = 99.0  # Far larger than Ly
+        sim_clamp.build_domain(params_clamp)
+        sim_clamp.step(params_clamp)
+        self.assertGreater(sim_clamp.num_p, 0)
+        max_y_clamp = np.max(sim_clamp.p_y[:sim_clamp.num_p])
+        self.assertLessEqual(max_y_clamp, sim_clamp.Ly - sim_clamp.dy + 1e-6,
+                             "Injection must be clamped to domain height Ly")
+
+        # 3. Default behavior when inj_y_length_mm is 0 or omitted (bounded by screen_r)
+        sim_def = DigitalTwinSimulator()
+        params_def = dict(params)
+        params_def["inj_y_length_mm"] = 0.0
+        sim_def.build_domain(params_def)
+        sim_def.step(params_def)
+        self.assertGreater(sim_def.num_p, 0)
+        max_y_def = np.max(sim_def.p_y[:sim_def.num_p])
+        self.assertLessEqual(max_y_def, 0.8001,
+                             "Default injection should not exceed screen grid radius (0.80 mm)")
+
 
 if __name__ == "__main__":
     unittest.main()

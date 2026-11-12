@@ -108,6 +108,9 @@ When generating the simulation domain (`build_domain`), the physics engine autom
    - **`one_hole`:** Full single-aperture extraction domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
    - **`two_holes`:** Dual-aperture coupling domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
    - **Why Multi-Hole Modes are Blocked in Axisymmetric Configuration:** In cylindrical coordinates ($r\text{--}z$), $r=0$ is the singular axis of rotational symmetry. Revolving an aperture located at $r > 0$ generates a hollow toroidal ring (donut-shaped channel) rather than a circular beamlet, while adjacent discrete holes break axisymmetry ($\partial/\partial\theta \ne 0$) and require a 3D solver. Furthermore, periodic boundary conditions along $r$ are physically meaningless because mapping $r = L_y$ to $r = 0$ couples cells of unequal volume and violates charge conservation. Therefore, Axisymmetric mode strictly constrains geometry to `half_hole`.
+6. **Aperture & Injection Transverse Controls**:
+   - **Hole-Boundary Distance (hole_boundary_dist_mm)**: Controls the minimum solid webbing margin between the outermost grid aperture wall and the top domain boundary $.
+   - **Injection Y-Length (inj_y_length_mm)**: Controls the transverse/radial span across which upstream ions are injected at  = 0$. By default, it equals the screen grid aperture radius {\mathrm{screen}}$ (Auto button resets to {\mathrm{screen}}$), but can be increased up to the domain height $ to model expanded Debye sheath curvature over the solid screen grid webbing at low plasma densities.
 
 ---
 

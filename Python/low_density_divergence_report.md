@@ -112,6 +112,9 @@ Both recommended solver enhancements have been implemented and verified:
      - **Cartesian**: $\theta_{95}(\text{exit}) = 19.28^\circ$, $\theta_{95}(\text{mid}) = 21.90^\circ$
      - **Axisymmetric**: $\theta_{95}(\text{exit}) = 17.68^\circ$, $\theta_{95}(\text{mid}) = 17.00^\circ$
    - Both match published single-beamlet CEX2D crossover divergence trends.
+3. **Configurable Injection Y-Length (\inj_y_length_mm\)**:
+   - Added user control in GUI Section 1 under **Hole-Boundary (mm):** allowing injection span override from \$ up to \$ (the entire domain height).
+   - Directly models sheath expansion over the solid screen grid webbing at low densities (\$\lambda_D\$ expansion), funneling peripheral ions into the aperture at steep incidence angles to accurately capture low-density crossover divergence.
 
 ---
 

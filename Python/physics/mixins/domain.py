@@ -469,9 +469,13 @@ class DomainMixin:
         entire_bulk_plasma = params.get('entire_bulk_plasma', False)
         bohm_factor = 1.0 if entire_bulk_plasma else 0.61
 
+        user_inj_y = params.get('inj_y_length_mm', params.get('inj_y_length', None))
         if self.is_axisymmetric and grids:
             screen_r_m = float(grids[0]['r']) * 1e-3
-            r_inj_m = min(screen_r_m, (self.Ly - self.dy) * 1e-3)
+            if user_inj_y is not None and float(user_inj_y) > 0.0:
+                r_inj_m = min(float(user_inj_y), self.Ly - self.dy) * 1e-3
+            else:
+                r_inj_m = min(screen_r_m, (self.Ly - self.dy) * 1e-3)
             avg_cell_vol = np.pi * r_inj_m * dy_m * hx_m[0]
             self.macro_weight = max(bohm_factor * n0 * avg_cell_vol / self.target_ppc, 1.0)
         else:
