@@ -25,6 +25,8 @@
 ## 🌟 Key Features & Upgrades
 
 * **Dual-Kernel Architecture (Taichi GPU + CPU Fallback)**: High-throughput 2D3V Boris particle advancement with fused in-register sub-stepping, bilinear charge deposition, and parallel GPU wall collision and boundary tracking accelerated with Taichi (Vulkan, CUDA, CPU) with seamless, vectorized pure-NumPy CPU fallback kernels for maximum portability across any machine.
+* **Coordinate Systems (Cartesian 2D Slab vs. Axisymmetric $r\text{--}z$ Cylindrical)**: Configurable via `"coordinate_system": "axisymmetric"` (or `"cartesian"`). In Axisymmetric mode, the solver models true 3D circular beamlets with exact annular control volumes ($V_{\mathrm{cell}} = 2\pi r \Delta r h_i^x$), on-axis L'Hôpital boundary condition ($c_{N,0} = 4.0$), Birdsall & Langdon local-Cartesian coordinate rotation preserving canonical angular momentum ($L_z = r v_\theta$) and transverse kinetic energy, uniform circular injection ($r = r_{\mathrm{inj}}\sqrt{U}$), and true 3D beamlet cone divergence ($\theta_{\mathrm{3D}} = \arctan2(\sqrt{v_r^2 + v_\theta^2}, v_x)$).
+* **Specular Symmetry Reflection**: In `half_hole` and axisymmetric modes, particles crossing the symmetry boundary ($y < 0$) or outer domain ($y > L_y$) undergo physical specular reflection ($y \leftarrow -y, v_y \leftarrow -v_y$) rather than being deleted, preserving high-angle crossover rays and resolving low-density divergence underprediction.
 * **Automated Numerical Physics Controls**: Built-in automated checks for spatial Debye length resolution ($\Delta x, \Delta y \le \lambda_{\mathrm{D}}$), plasma frequency integration limits ($\Delta t \le 2\pi/\omega_{\mathrm{pi}}$), and CFL velocity limits ($v_{\max} \Delta t \le \Delta x$).
 * **Customizable Upstream Gap & Sheath Ratio Controls**: Interactive modal dialog (**Settings** button aside Upstream Gap) allowing users to inspect and adjust the physical calculation ratio (Presheath: $k \cdot r_{\mathrm{screen}}$; Entire Bulk Plasma: $N \cdot \lambda_{\mathrm{D}}$), reset to literature recommendations, or set a direct custom gap in millimeters that remains locked during parameter updates.
 * **Granular Export Parameter Selectors**: Dedicated pop-up checklist dialogs (**Parameters** buttons beside Data and Particle exports) to selectively choose which simulation variables and particle kinematics ($t, x, y, v_x, v_y, v_z, E, \text{type}$) are saved to `.csv` or `.txt`.
@@ -56,9 +58,10 @@ When generating the simulation domain (`build_domain`), the engine automatically
    - **Custom Manual Override**: Users can specify an arbitrary physical gap directly in millimeters via the **Settings** dialog.
 5. **Dynamic Domain & Geometry Modes**:
    - **Axial Extent**: $L_x = \text{gap}_{\mathrm{up}} + \sum_k (t_k + g_k) + L_{\mathrm{downstream}}$ dynamically computed from the grid stack.
-   - **`half_hole`**: Axisymmetric half-aperture with specular symmetry reflection at $y = 0$.
-   - **`one_hole`**: Full single-aperture extraction domain with periodic boundary conditions along $y$.
-   - **`two_holes`**: Dual-aperture coupling domain with periodic boundaries along $y$.
+   - **`half_hole`**: Half-aperture domain with specular symmetry reflection at $y = 0$ (default, required for axisymmetric simulations).
+   - **`one_hole`**: Full single-aperture extraction domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+   - **`two_holes`**: Dual-aperture coupling domain with periodic boundaries along $y$ (Cartesian 2D slab only).
+   - **Why Multi-Hole Modes are Blocked in Axisymmetric Configuration**: In cylindrical coordinates ($r\text{--}z$), $r=0$ is the central axis of rotational revolution. Revolving an aperture centered at $r > 0$ generates a hollow toroidal ring (donut-shaped channel) rather than a circular beamlet, while adjacent discrete holes break axisymmetry ($\partial/\partial\theta \ne 0$) and require a 3D solver. Periodic boundaries along $r$ are physically meaningless because mapping $r = L_y$ to $r = 0$ violates charge conservation and Gauss's law. Therefore, Axisymmetric mode strictly constrains geometry to `half_hole`.
 
 ---
 
@@ -222,6 +225,7 @@ The simulator is driven by `config.json`. Below is a standard multi-grid configu
     "preset": "Molybdenum"
   },
   "simulation": {
+    "coordinate_system": "axisymmetric",
     "n0_plasma": 7.73e17,
     "Te_up": 8.5,
     "Ti": 0.034,

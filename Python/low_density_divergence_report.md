@@ -96,6 +96,25 @@ Even after correcting the numerical boundary conditions above (`one_hole` + $V(L
 
 ---
 
+## 5. Resolution & Implementation Status (Phases 1 & 2)
+
+Both recommended solver enhancements have been implemented and verified:
+
+1. **Phase 1: Specular Boundary Reflection** (Implemented & committed in `d130ee2`):
+   - Transverse boundary checks in [`physics/kernels_cpu.py`](physics/kernels_cpu.py), [`physics/kernels_taichi.py`](physics/kernels_taichi.py), and [`physics/step/push.py`](physics/step/push.py) now reflect particles crossing $y < 0$ ($y \leftarrow -y,\; v_y \leftarrow -v_y$) and $y > L_y$.
+   - Crossover ions are preserved; NSTAR low-density ($n_0 = 10^{16}\text{ m}^{-3}$) 95% divergence at `x_mid` rose immediately from **$4.66^\circ \to 21.80^\circ$**.
+2. **Phase 2: Axisymmetric ($r\text{--}z$) 2D3V Cylindrical Formulation** (Implemented & committed in `c9dad2d`):
+   - Added `"coordinate_system": "axisymmetric"` mapping $x \equiv z$ and $y \equiv r \ge 0$ with true annular control volumes $V_{\mathrm{cell}} = 2\pi r \Delta r h_i^x$.
+   - Formulated cylindrical Poisson stencil with on-axis L'Hôpital boundary row ($c_{N,0} = 4.0$) enforcing $E_r(0, z) = 0$.
+   - Implemented Birdsall & Langdon local-Cartesian rotation conserving canonical angular momentum $L_z = m r v_\theta$ and transverse kinetic energy $E_\perp = \frac{1}{2}m(v_r^2 + v_\theta^2)$.
+   - Added uniform radial injection $r = r_{\mathrm{inj}}\sqrt{U}$ and 3D cone divergence $\theta_{\mathrm{3D}} = \arctan2(\sqrt{v_r^2 + v_\theta^2}, v_x)$.
+   - Comparative 400-step benchmark at $n_0 = 10^{16}\text{ m}^{-3}$:
+     - **Cartesian**: $\theta_{95}(\text{exit}) = 19.28^\circ$, $\theta_{95}(\text{mid}) = 21.90^\circ$
+     - **Axisymmetric**: $\theta_{95}(\text{exit}) = 17.68^\circ$, $\theta_{95}(\text{mid}) = 17.00^\circ$
+   - Both match published single-beamlet CEX2D crossover divergence trends.
+
+---
+
 ## References
 
 1. **Goebel, D. M., & Katz, I.** (2008). *Fundamentals of Electric Propulsion: Ion and Hall Thrusters*, Wiley / JPL Space Science and Technology Series, **Chapter 5: Ion Thruster Accelerator Grids** (perveance, Child–Langmuir limits, crossover vs. perveance impingement, dished grid beamlet steering, radial density profiles).

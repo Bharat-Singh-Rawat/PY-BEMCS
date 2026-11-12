@@ -60,6 +60,8 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 
 ### 🔬 Advanced Core Physics
 - **Self-Consistent Beam Extraction:** Meniscus formation governed by upstream Bohm velocity criterion and sheath thermodynamics.
+- **Coordinate Systems (Axisymmetric $r\text{--}z$ vs. Cartesian 2D Slab):** Toggle between 2D planar slit optics (`"cartesian"`) and true 3D circular beamlets (`"axisymmetric"`). The cylindrical solver incorporates exact annular control volumes ($V_{\mathrm{cell}} = 2\pi r \Delta r h_i^x$), L'Hôpital on-axis boundary handling ($c_{N,0} = 4.0$), Birdsall & Langdon local-Cartesian Boris rotation conserving angular momentum ($L_z = r v_\theta$) and transverse kinetic energy, and true 3D beamlet cone divergence ($\theta_{\mathrm{3D}} = \arctan2(\sqrt{v_r^2 + v_\theta^2}, v_x)$).
+- **Specular Transverse Reflection:** In `half_hole` and axisymmetric modes, particles crossing the centerline ($y < 0$) or domain boundary ($y > L_y$) undergo physical specular reflection ($y \leftarrow -y, v_y \leftarrow -v_y$) rather than being deleted, preserving crossover trajectories and resolving low-perveance divergence underprediction.
 - **Artificial Electron Mass Approximation:** Accelerated multi-scale time-stepping ($m_e = M_{\mathrm{ion}} / 100\dots 1000$).
 - **Charge-Exchange (CEX) Collisions:** Monte Carlo collision modeling with probabilistic scattering (Birdsall/Roy model) and customizable cross-section data tables.
 - **In-Situ Dynamic Sputter Erosion:** Real-time grid mass removal and hole geometry enlargement driven by primary and CEX ion impacts.
@@ -102,9 +104,10 @@ When generating the simulation domain (`build_domain`), the physics engine autom
 
 4. **Dynamic Domain & Geometry Modes**:
    - **Axial Domain Length:** $L_x = 1.5\,\text{mm} + \sum_k (t_k + g_k) + 3.0\,\text{mm}$ automatically computed from the grid geometry.
-   - **`half_hole`:** Axisymmetric half-aperture with specular symmetry reflection at $y = 0$ (default, fastest).
-   - **`one_hole`:** Full single-aperture extraction domain with periodic boundary conditions along $y$.
-   - **`two_holes`:** Dual-aperture coupling domain with periodic boundary conditions along $y$.
+   - **`half_hole`:** Half-aperture domain with specular symmetry reflection at $y = 0$ (default, required for axisymmetric simulations).
+   - **`one_hole`:** Full single-aperture extraction domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+   - **`two_holes`:** Dual-aperture coupling domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+   - **Why Multi-Hole Modes are Blocked in Axisymmetric Configuration:** In cylindrical coordinates ($r\text{--}z$), $r=0$ is the singular axis of rotational symmetry. Revolving an aperture located at $r > 0$ generates a hollow toroidal ring (donut-shaped channel) rather than a circular beamlet, while adjacent discrete holes break axisymmetry ($\partial/\partial\theta \ne 0$) and require a 3D solver. Furthermore, periodic boundary conditions along $r$ are physically meaningless because mapping $r = L_y$ to $r = 0$ couples cells of unequal volume and violates charge conservation. Therefore, Axisymmetric mode strictly constrains geometry to `half_hole`.
 
 ---
 
@@ -247,6 +250,7 @@ Simulations are configured via `Python/config.json`:
     "Ly": 3.0
   },
   "simulation": {
+    "coordinate_system": "axisymmetric",
     "n0_plasma": 7.73e17,
     "Te_up": 8.5,
     "Ti": 0.034,

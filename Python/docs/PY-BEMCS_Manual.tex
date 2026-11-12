@@ -117,7 +117,11 @@ Key capabilities detailed in this manual include:
 
 \subsection{Coordinate System and Multi-Zone Non-Uniform Discretisation}
 
-The computational domain employs a 2D Cartesian grid in $(x, y)$, where $x$ represents the primary axial beam extraction coordinate and $y$ corresponds to the transverse/radial coordinate (half-aperture or axisymmetric slice). 
+\PYBEMCS{} supports two distinct spatial formulations configured via \texttt{"coordinate\_system"}:
+\begin{enumerate}[nosep]
+    \item \textbf{Cartesian 2D Slab (\texttt{"cartesian"}, Default)}: Discretises a planar 2D slice $(x, y)$ with an assumed invariant unit transverse depth $\Delta z = \SI{1}{\milli\meter}$ (slit optics).
+    \item \textbf{Axisymmetric 2D3V Cylindrical (\texttt{"axisymmetric"})}: Discretises a true 3D circular beamlet in cylindrical coordinates $(z, r)$, mapped as $x \equiv z$ (axial beam extraction coordinate) and $y \equiv r \ge 0$ (radial coordinate from the beamlet centerline).
+\end{enumerate}
 
 To optimize computational throughput while strictly resolving local physical scales (such as the sub-millimeter upstream Debye length $\lambda_{\mathrm{D}}$ and fine aperture grid chamfers), \PYBEMCS{} implements a \textbf{multi-zone non-uniform axial mesh} coupled with a uniform transverse spacing:
 \begin{itemize}[nosep]
@@ -135,9 +139,19 @@ For each axial node $i$, the non-uniform control volume width $h_i^x$ is defined
 \begin{equation}
     h_i^x = \frac{\Delta x_{i-1/2} + \Delta x_{i+1/2}}{2}, \qquad \Delta x_{i+1/2} = x_{i+1} - x_i.
 \end{equation}
-The 2D nodal cell volume is rigorously given by $\Omega_{i,j} = h_i^x \Delta y \Delta z$ (with unit transverse depth $\Delta z = \SI{1}{\milli\meter}$), ensuring exact machine-precision charge conservation ($|\sum Q_p - \iint \rho\, \dd{V}| / \sum Q_p < 10^{-8}$).
+In Cartesian mode, the cell volume is given by $\Omega_{i,j} = h_i^x \Delta y \Delta z$. In Axisymmetric mode, each nodal cell represents a complete annular ring of revolution around the beamlet axis $r = 0$:
+\begin{equation}
+    \Omega_{i,j} = V_{\mathrm{rad}, j} \cdot h_i^x, \qquad
+    V_{\mathrm{rad}, j} = 
+    \begin{cases}
+        \pi \left(\frac{\Delta r}{2}\right)^2, & j = 0 \text{ (on-axis node)}, \\
+        2\pi r_j \Delta r, & 1 \le j \le n_y - 2 \text{ (interior annuli)}, \\
+        \pi \left[r_{n_y-1}^2 - \left(r_{n_y-1} - \frac{\Delta r}{2}\right)^2\right], & j = n_y - 1 \text{ (outer boundary)}.
+    \end{cases}
+\end{equation}
+This rigorous volumetric weighting ensures exact machine-precision charge conservation ($|\sum Q_p - \iiint \rho\, \dd{V}| / \sum Q_p < 10^{-8}$) in both Cartesian and cylindrical coordinates.
 
-Every macroparticle stores three-dimensional velocity components $\vb{v} = (v_x, v_y, v_z)$. While spatial motion is constrained to the $(x, y)$ plane, $v_z$ is rigorously advanced in time during magnetic rotations and collisional scattering.
+Every macroparticle stores three-dimensional velocity components $\vb{v} = (v_x, v_y, v_z)$. In axisymmetric mode, $(v_x, v_y, v_z)$ correspond to the axial velocity $v_z$, radial velocity $v_r$, and azimuthal velocity $v_\theta$.
 
 \subsection{Dual-Kernel Execution Engine (Taichi GPU + CPU Fallback)}
 
@@ -193,12 +207,20 @@ The axial computational domain length $L_x$ is dynamically calculated based on t
 \end{equation}
 ensuring adequate space upstream for meniscus formation and downstream for plume expansion.
 
-The transverse domain height $L_y$ and boundary conditions adapt to the selected geometry layout:
+The transverse domain height $L_y$ and boundary conditions adapt to the selected geometry layout and coordinate system:
 \begin{itemize}[nosep]
-    \item \textbf{\texttt{half\_hole}} (Default): Half-pitch axisymmetric representation with specular symmetry reflection at $y = 0$ ($L_y = 0.5 r_{\mathrm{s}} + 0.30 \cdot \text{pitch}$).
-    \item \textbf{\texttt{one\_hole}}: Full single-aperture extraction domain ($L_y = 3.0 r_{\mathrm{s}}$) with periodic boundary conditions along $y$.
-    \item \textbf{\texttt{two\_holes}}: Dual-aperture inter-hole coupling domain ($L_y = 3.0 r_{\mathrm{s}} + \text{pitch}$) with periodic boundaries in $y$.
+    \item \textbf{\texttt{half\_hole}} (Default): Half-pitch symmetry representation with specular reflection at the transverse boundary $y = 0$ (and $y = L_y$ when uncoupled), where $L_y = 0.5 r_{\mathrm{s}} + 0.30 \cdot \text{pitch}$ or the hexagonal Wigner--Seitz unit-cell radius $R_{\mathrm{WS}} \approx 0.525 \cdot \text{pitch}$.
+    \item \textbf{\texttt{one\_hole}}: Full single-aperture extraction domain ($L_y = 3.0 r_{\mathrm{s}}$) with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+    \item \textbf{\texttt{two\_holes}}: Dual-aperture inter-hole coupling domain ($L_y = 3.0 r_{\mathrm{s}} + \text{pitch}$) with periodic boundaries along $y$ (Cartesian 2D slab only).
 \end{itemize}
+
+\subsubsection{Geometric and Physical Incompatibility of Multi-Hole Modes in Axisymmetric ($r\text{--}z$) Optics}
+When the solver operates in \textbf{Axisymmetric ($r\text{--}z$)} cylindrical mode, the coordinate system is governed by rotation of the 2D computational domain around the singular centerline $r = 0$ ($y = 0$). Consequently, \PYBEMCS{} strictly constrains the geometry option to \textbf{\texttt{half\_hole}} and blocks \texttt{one\_hole} and \texttt{two\_holes} for fundamental physical and geometrical reasons:
+\begin{enumerate}[nosep]
+    \item \textbf{Rotational Symmetry Generation}: In cylindrical coordinates, revolving any 2D planar point $(z, r)$ by $2\pi$ generates a 3D circle of radius $r$ centered on the axis. If an aperture were centered at $r_0 > 0$ (as in \texttt{one\_hole} or \texttt{two\_holes}), revolving this aperture around $r = 0$ would physically generate a \textbf{hollow toroidal annular slit (a donut-shaped channel)} with solid metal on the thruster centerline, rather than a discrete circular ion optics aperture.
+    \item \textbf{Breakdown of Azimuthal Invariance for Adjacent Apertures}: Simulating two adjacent circular beamlets side-by-side fundamentally breaks azimuthal symmetry ($\partial / \partial \theta \ne 0$). In an $r\text{--}z$ code, two apertures at $r_1$ and $r_2$ revolve into two concentric nested toroidal rings. Modeling multiple discrete circular beamlets requires a full 3D Cartesian solver (such as the \texttt{Cpp3D} module).
+    \item \textbf{Singular Axis at $r = 0$ vs. Periodic Boundaries}: The centerline $r = 0$ represents the singular axis of rotational symmetry, where $E_r(0, z) = 0$ and crossing ions experience specular radial velocity reversal ($r \leftarrow -r \implies r \ge 0,\; v_r \leftarrow -v_r$). In contrast, \texttt{one\_hole} and \texttt{two\_holes} enforce periodic boundary conditions ($V(0) = V(L_y)$), which would unphysically map particles exiting at the outer radius $r = L_y$ to the centerline $r = 0$, coupling annular cells of vastly different volumes ($V_{\mathrm{cell}} \propto r$) and violating Gauss's law and charge conservation.
+\end{enumerate}
 
 % =====================================================
 \section{Particle-in-Cell Electrostatic Algorithm}
@@ -220,13 +242,31 @@ where $q_{\mathrm{i}} = Z e$ is the ion charge, $n_{\mathrm{i}}$ is the deposite
 \end{equation}
 with $T_{\mathrm{e}}$ in electron-volts ($\si{\eV}$), $n_0$ the upstream plasma density, and $\phi_{\mathrm{pl}}$ the reference plasma potential established at the upstream boundary ($x = 0$). The clipping operator $\min(\phi, \phi_{\mathrm{pl}})$ prevents non-physical exponential density blow-ups in regions where local potential excursions exceed the upstream plasma potential.
 
-Equation~\eqref{eq:poisson} is discretised on the non-uniform mesh using a finite-volume formulation. Multiplying by $\Delta y^2$ yields the scaled 5-point stencil:
+In \textbf{Cartesian 2D slab mode}, Equation~\eqref{eq:poisson} is discretised on the non-uniform mesh using a finite-volume formulation. Multiplying by $\Delta y^2$ yields the scaled 5-point stencil:
 \begin{equation}
-    \frac{\Delta y^2}{h_i^x} \left( \frac{\phi_{i+1,j} - \phi_{i,j}}{\Delta x_{i+1/2}} - \frac{\phi_{i,j} - \phi_{i-1,j}}{\Delta x_{i-1/2}} \right) +
-    \left(\phi_{i,j+1} - 2\phi_{i,j} + \phi_{i,j-1}\right)
-    = -\frac{\Delta y^2 \rho_{i,j}}{\varepsilon_{0}}.
+    c_W \phi_{i-1,j} + c_E \phi_{i+1,j} + \phi_{i,j-1} + \phi_{i,j+1} - (c_W + c_E + 2.0)\phi_{i,j}
+    = -\frac{\Delta y^2 \rho_{i,j}}{\varepsilon_{0}},
 \end{equation}
-Scaling by $\Delta y^2$ preserves identical unit off-diagonals $(+1.0)$ along the $y$-direction, maintaining optimal matrix conditioning and sparse structure. The resulting sparse operator $\mathbf{A} \boldsymbol{\phi} = \mathbf{b}$ is pre-factorised using SuperLU sparse LU decomposition (or GPU-accelerated CuPy sparse LU).
+where $c_W = \frac{\Delta y^2}{h_i^x \Delta x_{i-1/2}}$ and $c_E = \frac{\Delta y^2}{h_i^x \Delta x_{i+1/2}}$.
+
+In \textbf{Axisymmetric ($r\text{--}z$) cylindrical mode}, the Laplacian operator expands to:
+\begin{equation}
+    \nabla^2 \phi = \frac{\partial^2 \phi}{\partial z^2} + \frac{1}{r}\frac{\partial}{\partial r}\left(r \frac{\partial \phi}{\partial r}\right) = \frac{\partial^2 \phi}{\partial z^2} + \frac{\partial^2 \phi}{\partial r^2} + \frac{1}{r}\frac{\partial \phi}{\partial r}.
+\end{equation}
+Multiplying by $\Delta r^2$ yields the interior 5-point stencil for nodes $j \ge 1$:
+\begin{equation}
+    c_W \phi_{i-1,j} + c_E \phi_{i+1,j} + \left(1 - \frac{1}{2j}\right)\phi_{i,j-1} + \left(1 + \frac{1}{2j}\right)\phi_{i,j+1} - (c_W + c_E + 2.0)\phi_{i,j}
+    = -\frac{\Delta r^2 \rho_{i,j}}{\varepsilon_{0}}.
+\end{equation}
+At the centerline axis of revolution $r = 0$ ($j = 0$), the geometric singularity is evaluated via L'H\^opital's rule:
+\begin{equation}
+    \lim_{r \to 0} \frac{1}{r}\frac{\partial \phi}{\partial r} = \frac{\partial^2 \phi}{\partial r^2} \implies \nabla^2 \phi\Big|_{r=0} = \frac{\partial^2 \phi}{\partial z^2} + 2\frac{\partial^2 \phi}{\partial r^2}.
+\end{equation}
+Applying radial symmetry $\phi(z, -\Delta r) = \phi(z, \Delta r)$ yields the exact discrete on-axis finite-volume row:
+\begin{equation}
+    c_W \phi_{i-1,0} + c_E \phi_{i+1,0} + 4.0 \phi_{i,1} - (c_W + c_E + 4.0)\phi_{i,0} = -\frac{\Delta r^2 \rho_{i,0}}{\varepsilon_0},
+\end{equation}
+with on-axis electric field boundary condition $E_r(z, 0) = 0$. Scaling both Cartesian and axisymmetric operators by $\Delta y^2 = \Delta r^2$ preserves an identical right-hand side source vector $\vb{b} = -\frac{\Delta r^2}{\varepsilon_0}\boldsymbol{\rho}$, allowing the unified adaptive Picard, Anderson Acceleration, and Newton--Raphson solver pipelines to operate identically across both coordinate systems. The resulting sparse operator $\mathbf{A} \boldsymbol{\phi} = \mathbf{b}$ is pre-factorised using SuperLU sparse LU decomposition (or GPU-accelerated CuPy sparse LU).
 
 \subsubsection{Adaptive Picard Iteration and Sticky Newton--Raphson Fallback}
 
@@ -283,6 +323,17 @@ and interpolated to particle positions. Particle trajectories are advanced using
 \end{align}
 This scheme guarantees exact conservation of phase-space volume and energy conservation in static magnetic fields.
 
+\subsubsection{Cylindrical Birdsall \& Langdon Coordinate Rotation}
+In \textbf{Axisymmetric ($r\text{--}z$) mode}, standard leap-frog advancement in cylindrical coordinates would introduce an artificial $1/r$ centrifugal acceleration singularity ($v_\theta^2 / r$). To eliminate coordinate singularities while strictly preserving canonical angular momentum $L_z = m r v_\theta$ and transverse kinetic energy $E_\perp = \frac{1}{2}m(v_r^2 + v_\theta^2)$, \PYBEMCS{} implements the \textbf{Birdsall \& Langdon local-Cartesian rotation}~\cite{birdsall} in both CPU and Taichi GPU kernels:
+\begin{align}
+    Y &= r^n + v_r^{n+1/2}\,\Delta t, \qquad Z = v_\theta^{n+1/2}\,\Delta t,\\
+    r^{n+1} &= \sqrt{Y^2 + Z^2},\\
+    \cos\alpha &= \frac{Y}{r^{n+1}}, \qquad \sin\alpha = \frac{Z}{r^{n+1}},\\
+    v_r^{n+1/2} &\leftarrow v_r^{n+1/2} \cos\alpha + v_\theta^{n+1/2} \sin\alpha,\\
+    v_\theta^{n+1/2} &\leftarrow -v_r^{n+1/2} \sin\alpha + v_\theta^{n+1/2} \cos\alpha.
+\end{align}
+If an ion passes through the axis $r = 0$, its radius reflects ($r \ge 0$) and its radial velocity specularly reverses ($v_r \leftarrow -v_r$), naturally maintaining beamlet symmetry.
+
 % =====================================================
 \section{Plasma Injection and Bohm Optics}
 % =====================================================
@@ -301,7 +352,11 @@ The injected ion current across the open sheath area $A_{\mathrm{inj}}$ is:
 \begin{equation}
     I_{\mathrm{ion}} = 0.61\, Z e n_{0} v_{\mathrm{B}} A_{\mathrm{inj}},
 \end{equation}
-where the prefactor $0.61 \approx \exp(-1/2)$ accounts for the quasi-neutral pre-sheath density drop. The number of macroparticles injected at each timestep $\Delta t$ is:
+where the prefactor $0.61 \approx \exp(-1/2)$ accounts for the quasi-neutral pre-sheath density drop. In Cartesian mode, $A_{\mathrm{inj}} = \Delta y_{\mathrm{inj}} \cdot \Delta z$ (with unit depth $\Delta z = \SI{1}{\milli\meter}$) and initial transverse coordinates are sampled uniformly. In Axisymmetric mode, $A_{\mathrm{inj}} = \pi r_{\mathrm{inj}}^2$, and macroparticle radial injection positions are sampled according to:
+\begin{equation}
+    r = r_{\mathrm{inj}} \sqrt{U}, \qquad U \sim \mathcal{U}(0, 1),
+\end{equation}
+guaranteeing a strictly uniform number density per unit cross-sectional area across all concentric cylindrical annuli. The number of macroparticles injected at each timestep $\Delta t$ is:
 \begin{equation}
     N_{\mathrm{inj}} = \frac{I_{\mathrm{ion}} \Delta t}{Z e w} + \xi_{\mathrm{stochastic}},
 \end{equation}
@@ -406,6 +461,7 @@ The simulator parameters are managed through a unified, hierarchical JSON struct
     "preset": "Molybdenum"
   },
   "simulation": {
+    "coordinate_system": "axisymmetric",
     "n0_plasma": 7.73e17,
     "Te_up": 8.5,
     "Ti": 0.034,
@@ -463,9 +519,13 @@ The simulator parameters are managed through a unified, hierarchical JSON struct
 
 The simulator provides an extensive suite of standalone, interactive diagnostic windows equipped with native Matplotlib navigation toolbars (Pan, Zoom, Save) and live data streaming:
 \begin{itemize}[nosep]
-    \item \textbf{Beam Divergence Angle ($\theta_{95}$ \& Midline)}: Evaluated from the 95\textsuperscript{th} percentile and midline trajectory angles at configurable axial evaluation planes downstream of the optics:
+    \item \textbf{Beam Divergence Angle ($\theta_{95}$ \& Midline)}: Evaluated from the 95\textsuperscript{th} percentile (or 90\textsuperscript{th}, Direct RMS, RMS Twiss, FWHM) trajectory angles at configurable axial evaluation planes downstream of the optics. In Cartesian mode:
     \begin{equation}
         \theta_{95} = Q_{0.95}\!\left[\,\left|\arctan\left(\frac{v_y}{v_x}\right)\right|\,\right].
+    \end{equation}
+    In Axisymmetric mode, the true 3D beamlet cone divergence is evaluated incorporating the azimuthal velocity $v_\theta = v_z$:
+    \begin{equation}
+        v_\perp = \sqrt{v_r^2 + v_\theta^2}, \qquad \theta_{\mathrm{3D}} = \arctan2(v_\perp, v_x) \cdot \frac{180^\circ}{\pi}, \qquad \theta_{95} = Q_{0.95}\left[\theta_{\mathrm{3D}}\right].
     \end{equation}
     \item \textbf{2D Plasma Number Density Visualizer (\texttt{density\_window.py})}: Full 2D logarithmic color contours of ion and electron density maps coupled with 1D radial profiles cut along two independent downstream axial planes.
     \item \textbf{Steady-State Convergence Monitor (\texttt{steady\_state\_window.py})}: Continuous rolling window variance analysis tracking key parameters ($\theta_{95}$, $V_{\mathrm{saddle}}$, $I_{\mathrm{beam}}$, $E_{\mathrm{kin}}$). Steady state is confirmed when rolling relative fluctuations drop below $\le 1.0\%$ over a configurable evaluation duration.
