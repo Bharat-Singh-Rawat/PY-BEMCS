@@ -12,6 +12,12 @@ def step_electrons(sim, ctx: StepContext):
     params = ctx.params
 
     if sim.num_e > 0:
+        periodic_y = getattr(sim, 'periodic_y', False)
+        geometry = getattr(sim, 'geometry', 'half_hole')
+        is_half_hole = (geometry == 'half_hole') and not periodic_y
+        reflect_y0 = (not periodic_y) and getattr(sim, 'reflect_y0', is_half_hole)
+        reflect_y_top = (not periodic_y) and getattr(sim, 'reflect_y_top', False)
+
         if USE_TAICHI and check_particle_boundaries_taichi is not None:
             from .ion_walls import _get_boundary_scratch, _get_is_bound_int
             status_e, imp_ix_e, imp_iy_e, counts_e = _get_boundary_scratch(sim, sim.num_e)
@@ -33,14 +39,16 @@ def step_electrons(sim, ctx: StepContext):
                 sim.ny,
                 sim.Lx,
                 sim.Ly,
-                1 if getattr(sim, 'periodic_y', False) else 0,
+                1 if periodic_y else 0,
                 0.0, sim.Lx,
                 0.0, sim.Lx, sim.Lx,
                 1,
                 status_e,
                 imp_ix_e,
                 imp_iy_e,
-                counts_e
+                counts_e,
+                reflect_y0=(1 if reflect_y0 else 0),
+                reflect_y_top=(1 if reflect_y_top else 0)
             )
             n_dead_e = int(counts_e[0])
             if n_dead_e > 0:
@@ -65,10 +73,14 @@ def step_electrons(sim, ctx: StepContext):
             out_e = (
                 (e_x < 0.0) |
                 (e_x > sim.Lx) |
-                (e_y < 0.0) |
-                (e_y > sim.Ly) |
-                np.isnan(e_x)
+                np.isnan(e_x) |
+                np.isnan(e_y)
             )
+            if not periodic_y:
+                if not reflect_y0:
+                    out_e = out_e | (e_y < 0.0)
+                if not reflect_y_top:
+                    out_e = out_e | (e_y > sim.Ly)
             dead_e = hit_grid_e | out_e
             alive_e = ~dead_e
             n_alive_e = int(np.sum(alive_e))

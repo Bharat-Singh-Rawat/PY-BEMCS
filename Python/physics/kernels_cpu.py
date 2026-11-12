@@ -20,7 +20,8 @@ def accumulate_rho_cpu(x, y, rho, num_p, dy, nx, ny, charge_per_particle,
 def push_particles_boris_cpu(x, y, vx, vy, vz,
                              Ex, Ey, Bx, By, Bz,
                              num_p, dy, nx, ny, dt, q_m,
-                             zone_boundaries, zone_dx, zone_offsets, x_coords):
+                             zone_boundaries, zone_dx, zone_offsets, x_coords,
+                             Ly=0.0, reflect_y0=False, reflect_y_top=False):
     """Vectorised 2D3V Boris pusher on 3-zone piecewise-uniform mesh."""
     n = int(num_p)
     if n == 0:
@@ -97,3 +98,19 @@ def push_particles_boris_cpu(x, y, vx, vy, vz,
     # Position update (mm units — same convention as Taichi kernel)
     x[:n] += vx[:n] * dt * 1000.0
     y[:n] += vy[:n] * dt * 1000.0
+
+    # Specular reflection at transverse symmetry boundaries
+    if reflect_y0 or (reflect_y_top and Ly > 0.0):
+        py_sl = y[:n]
+        vy_sl = vy[:n]
+        for _ in range(2):
+            if reflect_y0:
+                neg = py_sl < 0.0
+                if np.any(neg):
+                    py_sl[neg] = -py_sl[neg]
+                    vy_sl[neg] = -vy_sl[neg]
+            if reflect_y_top and Ly > 0.0:
+                over = py_sl > Ly
+                if np.any(over):
+                    py_sl[over] = 2.0 * Ly - py_sl[over]
+                    vy_sl[over] = -vy_sl[over]

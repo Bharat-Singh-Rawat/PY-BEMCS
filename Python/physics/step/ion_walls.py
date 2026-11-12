@@ -45,6 +45,7 @@ def compute_beam_divergence(
     method: str = "95%",
     div_percentile: float = 95.0,
     n_sigmas: float = 1.0,
+    symmetric_half_domain: bool = False,
 ) -> float:
     """Compute the beam divergence (half-angle in degrees) for ions crossing a plane.
 
@@ -74,11 +75,18 @@ def compute_beam_divergence(
 
     elif "twiss" in method_clean:
         # RMS (Twiss): Divergence = n * sigmas * sqrt(epsilon * gamma)
-        # Using transverse position y and trace-space angle y' (in degrees)
-        y_mean = np.mean(y)
-        y_dev = y - y_mean
-        theta_mean = np.mean(angles_deg)
-        theta_dev = angles_deg - theta_mean
+        # In half_hole symmetry (y >= 0), mirror {(y, theta)} -> {(-y, -theta)} so moments are centered.
+        if symmetric_half_domain:
+            y_eff = np.concatenate((y, -y))
+            th_eff = np.concatenate((angles_deg, -angles_deg))
+        else:
+            y_eff = y
+            th_eff = angles_deg
+
+        y_mean = np.mean(y_eff)
+        y_dev = y_eff - y_mean
+        theta_mean = np.mean(th_eff)
+        theta_dev = th_eff - theta_mean
 
         sigma_y_sq = np.mean(y_dev ** 2)
         sigma_theta_sq = np.mean(theta_dev ** 2)
@@ -98,19 +106,22 @@ def compute_beam_divergence(
 
     elif "fwhm" in method_clean:
         # FWHM: Half the full width at half-maximum of angular distribution histogram peak
+        # In half_hole symmetry, mirror angles symmetrically around 0 deg so HWHM is full-width centered.
+        th_eff = np.concatenate((angles_deg, -angles_deg)) if symmetric_half_domain else angles_deg
+        n_eff = len(th_eff)
         if n_pts < 15:
             # For small sample sizes, empirical histogram is sparse;
             # use Gaussian equivalent half-FWHM: sqrt(2 * ln(2)) * sigma
-            sigma = np.std(angles_deg)
+            sigma = np.std(th_eff)
             return float(np.sqrt(2.0 * np.log(2.0)) * sigma)
 
-        theta_min = float(np.min(angles_deg))
-        theta_max = float(np.max(angles_deg))
+        theta_min = float(np.min(th_eff))
+        theta_max = float(np.max(th_eff))
         if theta_max - theta_min < 1e-4:
             return 0.0
 
-        n_bins = int(np.clip(np.sqrt(n_pts) * 1.5, 12, 50))
-        counts, bin_edges = np.histogram(angles_deg, bins=n_bins)
+        n_bins = int(np.clip(np.sqrt(n_eff) * 1.5, 12, 50))
+        counts, bin_edges = np.histogram(th_eff, bins=n_bins)
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
         # 3-point moving average smoothing to eliminate discrete binning noise spikes
@@ -180,6 +191,12 @@ def step_ion_interactions(sim, ctx: StepContext):
         x_entry_first_grid = 0.5
         x_exit_last = 3.0
 
+    periodic_y = getattr(sim, 'periodic_y', False)
+    geometry = getattr(sim, 'geometry', 'half_hole')
+    is_half_hole = (geometry == 'half_hole') and not periodic_y
+    reflect_y0 = (not periodic_y) and getattr(sim, 'reflect_y0', is_half_hole)
+    reflect_y_top = (not periodic_y) and getattr(sim, 'reflect_y_top', False)
+
     if USE_TAICHI and check_particle_boundaries_taichi is not None and num_p_step > 0:
         grid_x_starts = getattr(sim, 'grid_x_starts', None)
         grid_x_ends = getattr(sim, 'grid_x_ends', None)
@@ -204,9 +221,11 @@ def step_ion_interactions(sim, ctx: StepContext):
             is_bound_int, sim.zone_boundaries, sim.zone_dx, sim.zone_offsets,
             len(sim.zone_boundaries) - 1, num_p_step,
             sim.dy, sim.nx, sim.ny, sim.Lx, sim.Ly,
-            1 if getattr(sim, 'periodic_y', False) else 0,
+            1 if periodic_y else 0,
             grid_x_min, grid_x_max, x_entry_first_grid, x_exit_last, x_plane,
-            8, status, impact_ix, impact_iy, counts
+            8, status, impact_ix, impact_iy, counts,
+            reflect_y0=(1 if reflect_y0 else 0),
+            reflect_y_top=(1 if reflect_y_top else 0)
         )
 
         n_dead = int(counts[0])
@@ -329,7 +348,8 @@ def step_ion_interactions(sim, ctx: StepContext):
 
             ctx.current_div = compute_beam_divergence(
                 p_y, p_vx, p_vy, crossed_mask,
-                method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas
+                method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
+                symmetric_half_domain=is_half_hole
             )
         else:
             sim.exit_vx_mean = np.nan
@@ -350,7 +370,8 @@ def step_ion_interactions(sim, ctx: StepContext):
 
             ctx.current_div_mid = compute_beam_divergence(
                 p_y, p_vx, p_vy, crossed_mid_mask,
-                method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas
+                method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
+                symmetric_half_domain=is_half_hole
             )
         else:
             ctx.current_div_mid = np.nan
@@ -403,20 +424,17 @@ def step_ion_interactions(sim, ctx: StepContext):
     impact_ix = np.where(hit_grid_path, path_ix, ix)
     impact_iy = np.where(hit_grid_path, path_iy, iy)
 
-    if getattr(sim, 'periodic_y', False):
-        out_of_bounds = (
-            (p_x < 0.0) |
-            (p_x > sim.Lx) |
-            np.isnan(p_x)
-        )
-    else:
-        out_of_bounds = (
-            (p_x < 0.0) |
-            (p_x > sim.Lx) |
-            (p_y < 0.0) |
-            (p_y > sim.Ly) |
-            np.isnan(p_x)
-        )
+    out_of_bounds = (
+        (p_x < 0.0) |
+        (p_x > sim.Lx) |
+        np.isnan(p_x) |
+        np.isnan(p_y)
+    )
+    if not periodic_y:
+        if not reflect_y0:
+            out_of_bounds = out_of_bounds | (p_y < 0.0)
+        if not reflect_y_top:
+            out_of_bounds = out_of_bounds | (p_y > sim.Ly)
     sim.lost_to_oob_step = float(np.count_nonzero(out_of_bounds))
 
     valid_thermal_hit = hit_grid & (p_x > 0.25)
@@ -530,7 +548,8 @@ def step_ion_interactions(sim, ctx: StepContext):
 
     ctx.current_div = compute_beam_divergence(
         p_y, p_vx, p_vy, crossed_mask,
-        method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas
+        method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
+        symmetric_half_domain=is_half_hole
     )
 
     x_plane = getattr(sim, 'div_plane_x', None)
@@ -542,7 +561,8 @@ def step_ion_interactions(sim, ctx: StepContext):
     crossed_mid_mask = (p_x_old <= x_plane) & (p_x > x_plane) & (p_vx > 0.0)
     ctx.current_div_mid = compute_beam_divergence(
         p_y, p_vx, p_vy, crossed_mid_mask,
-        method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas
+        method=div_method, div_percentile=div_pct, n_sigmas=n_sigmas,
+        symmetric_half_domain=is_half_hole
     )
 
     sim.current_div = ctx.current_div

@@ -101,8 +101,7 @@ def get_upstream_gap_coupling_for_param(
     if param_id in ("n0_plasma", "Te_up"):
         if method == "ratio" and ratio_base == "debye":
             return {"base": "debye", "ratio": float(settings.get("ratio", 30.0))}
-        if entire_bulk_plasma and method not in ("custom", "ratio"):
-            return {"base": "debye", "ratio": None}
+        return {"base": "debye", "ratio": None}
 
     return None
 

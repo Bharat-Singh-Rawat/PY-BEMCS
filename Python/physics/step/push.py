@@ -52,6 +52,14 @@ def step_push(sim, ctx: StepContext):
     sim.substep_history_ion.append(int(n_sub_ion))
     sim.substep_history_e.append(int(n_sub_e))
 
+    periodic_y = getattr(sim, 'periodic_y', False)
+    geometry = getattr(sim, 'geometry', 'half_hole')
+    reflect_y0 = (not periodic_y) and getattr(sim, 'reflect_y0', geometry == 'half_hole')
+    reflect_y_top = (not periodic_y) and getattr(sim, 'reflect_y_top', False)
+    refl_y0_i = 1 if reflect_y0 else 0
+    refl_ytop_i = 1 if reflect_y_top else 0
+    Ly_val = float(getattr(sim, 'Ly', 0.0))
+
     if num_p_step > 0:
         dt_ion = np.float32(sim.dt / n_sub_ion)
 
@@ -62,7 +70,8 @@ def step_push(sim, ctx: StepContext):
                 sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
                 num_p_step, ctx._dy, sim.nx, sim.ny, dt_ion, _qm_ion,
                 ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
-                n_sub=n_sub_ion
+                n_sub=n_sub_ion,
+                Ly=Ly_val, reflect_y0=refl_y0_i, reflect_y_top=refl_ytop_i
             )
         else:
             for _ in range(n_sub_ion):
@@ -79,7 +88,8 @@ def step_push(sim, ctx: StepContext):
                     sim.zone_boundaries,
                     sim.zone_dx,
                     sim.zone_offsets,
-                    sim.x_coords
+                    sim.x_coords,
+                    Ly=Ly_val, reflect_y0=reflect_y0, reflect_y_top=reflect_y_top
                 )
 
     if num_e_step > 0:
@@ -92,7 +102,8 @@ def step_push(sim, ctx: StepContext):
                 sim.Ex, sim.Ey, sim.Bx, sim.By, sim.Bz,
                 num_e_step, ctx._dy, sim.nx, sim.ny, dt_e, _qm_e,
                 ctx.zone_b_ti, ctx.zone_dx_ti, ctx.zone_off_ti, ctx.num_zones,
-                n_sub=n_sub_e
+                n_sub=n_sub_e,
+                Ly=Ly_val, reflect_y0=refl_y0_i, reflect_y_top=refl_ytop_i
             )
         else:
             for _ in range(n_sub_e):
@@ -109,7 +120,8 @@ def step_push(sim, ctx: StepContext):
                     sim.zone_boundaries,
                     sim.zone_dx,
                     sim.zone_offsets,
-                    sim.x_coords
+                    sim.x_coords,
+                    Ly=Ly_val, reflect_y0=reflect_y0, reflect_y_top=reflect_y_top
                 )
 
     if getattr(sim, 'periodic_y', False):

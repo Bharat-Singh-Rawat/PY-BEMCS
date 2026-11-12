@@ -93,6 +93,10 @@ class DigitalTwinSimulator(
         self.Ly = 3
         self.dx = 0.02
         self.dy = 0.02
+        self.geometry = 'half_hole'
+        self.periodic_y = False
+        self.reflect_y0 = True
+        self.reflect_y_top = True
 
         self.nx = int(self.Lx / self.dx) + 1
         self.ny = int(self.Ly / self.dy) + 1

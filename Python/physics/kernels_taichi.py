@@ -63,7 +63,10 @@ if USE_TAICHI:
         zone_dx: ti.types.ndarray(dtype=_TI_FP),
         zone_off: ti.types.ndarray(dtype=ti.i32),
         num_zones: ti.i32,
-        n_sub: ti.i32
+        n_sub: ti.i32,
+        Ly: ti.f32,
+        reflect_y0: ti.i32,
+        reflect_y_top: ti.i32
     ):
         """Parallel bilinear interpolation with 2D3V Boris Algorithm on generic N-zone mesh with fused in-register sub-stepping."""
         for i in range(num_p):
@@ -133,6 +136,16 @@ if USE_TAICHI:
                 px += cur_vx * dt * 1000.0
                 py += cur_vy * dt * 1000.0
 
+                # Specular reflection at transverse symmetry boundaries
+                if reflect_y0 != 0 or (reflect_y_top != 0 and Ly > 0.0):
+                    for _bounce in range(2):
+                        if reflect_y0 != 0 and py < 0.0:
+                            py = -py
+                            cur_vy = -cur_vy
+                        if reflect_y_top != 0 and Ly > 0.0 and py > Ly:
+                            py = 2.0 * Ly - py
+                            cur_vy = -cur_vy
+
             x[i] = px
             y[i] = py
             vx[i] = cur_vx
@@ -144,7 +157,10 @@ if USE_TAICHI:
         Ex, Ey, Bx, By, Bz,
         num_p, dy, nx, ny, dt, q_m,
         zone_b, zone_dx, zone_off, num_zones,
-        n_sub: int = 1
+        n_sub: int = 1,
+        Ly: float = 0.0,
+        reflect_y0: int = 0,
+        reflect_y_top: int = 0
     ):
         """Python wrapper for Taichi Boris pusher with optional fused in-register sub-stepping (default n_sub=1)."""
         return _push_particles_boris_taichi_kernel(
@@ -152,7 +168,7 @@ if USE_TAICHI:
             Ex, Ey, Bx, By, Bz,
             int(num_p), float(dy), int(nx), int(ny), float(dt), float(q_m),
             zone_b, zone_dx, zone_off, int(num_zones),
-            int(n_sub)
+            int(n_sub), float(Ly), int(reflect_y0), int(reflect_y_top)
         )
 
     @ti.kernel
@@ -174,6 +190,8 @@ if USE_TAICHI:
         Lx: ti.f32,
         Ly: ti.f32,
         periodic_y: ti.i32,
+        reflect_y0: ti.i32,
+        reflect_y_top: ti.i32,
         grid_x_min: ti.f32,
         grid_x_max: ti.f32,
         x_entry: ti.f32,
@@ -196,8 +214,9 @@ if USE_TAICHI:
             is_oob = 0
             if px < 0.0 or px > Lx or ti.math.isnan(px) or ti.math.isnan(py):
                 is_oob = 1
-            elif periodic_y == 0 and (py < 0.0 or py > Ly):
-                is_oob = 1
+            elif periodic_y == 0:
+                if (reflect_y0 == 0 and py < 0.0) or (reflect_y_top == 0 and py > Ly):
+                    is_oob = 1
 
             is_hit = 0
             imp_x = 0
@@ -287,7 +306,9 @@ if USE_TAICHI:
         is_bound, zone_b, zone_dx, zone_off, num_zones,
         num_p, dy, nx, ny, Lx, Ly, periodic_y,
         grid_x_min, grid_x_max, x_entry, x_exit, x_mid,
-        samples, status, impact_ix, impact_iy, counts
+        samples, status, impact_ix, impact_iy, counts,
+        reflect_y0: int = 0,
+        reflect_y_top: int = 0
     ):
         """Python wrapper for Taichi boundary and wall collision checking."""
         if num_p <= 0:
@@ -316,6 +337,7 @@ if USE_TAICHI:
             is_bound, zone_b, zone_dx, zone_off, int(num_zones),
             int(num_p), float(dy), int(nx), int(ny),
             float(Lx), float(Ly), int(periodic_y),
+            int(reflect_y0), int(reflect_y_top),
             float(grid_x_min), float(grid_x_max),
             float(x_entry), float(x_exit), float(x_mid),
             int(samples), status, impact_ix, impact_iy, counts

@@ -394,37 +394,40 @@ class TestSweepDialogs(unittest.TestCase):
         dlg.close()
 
     def test_sweep_dialog_contextual_auto_upstream_gap_toggle(self):
-        """Verify auto-update upstream gap checkbox appears only for influencing params and defaults to True."""
-        # 1. Presheath mode (default): visible for grid_1_r, hidden for Te_up and grid_1_V / grid_2_r
+        """Verify auto-update upstream gap checkbox appears for all influencing params (grid_1_r, n0_plasma, Te_up) and defaults to True."""
+        # 1. Presheath mode: visible & checked by default for grid_1_r, n0_plasma, and Te_up; hidden for non-influencing params
         parent_pre = QWidget()
         parent_pre.grid_widgets = [{}, {}]
         parent_pre.adv_params = {"entire_bulk_plasma": False}
         parent_pre.upstream_gap_settings = {"method": "ratio", "ratio_base": "screen_r", "ratio": 0.75}
 
         dlg = SweepSettingsDialog(parent_pre)
-        for pid in ("Te_up", "grid_1_V", "grid_2_r"):
+        for pid in ("grid_1_V", "grid_1_t", "grid_2_r", "upstream_gap_mm"):
             dlg.combo_param.setCurrentIndex(dlg.combo_param.findData(pid))
             self.assertTrue(dlg.box_auto_upstream_gap.isHidden())
             self.assertFalse(dlg.get_config()["auto_update_upstream_gap"])
 
-        dlg.combo_param.setCurrentIndex(dlg.combo_param.findData("grid_1_r"))
-        self.assertFalse(dlg.box_auto_upstream_gap.isHidden())
-        self.assertTrue(dlg.chk_auto_upstream_gap.isChecked())
-        self.assertIn("Variable", dlg.lbl_auto_gap_hint.text())
-        cfg_var = dlg.get_config()
-        self.assertTrue(cfg_var["auto_update_upstream_gap"])
-        self.assertEqual(cfg_var["upstream_gap_coupling"], {"base": "screen_r", "ratio": 0.75})
+        for pid, expected_base in (("grid_1_r", "screen_r"), ("n0_plasma", "debye"), ("Te_up", "debye")):
+            dlg.combo_param.setCurrentIndex(dlg.combo_param.findData(pid))
+            self.assertFalse(dlg.box_auto_upstream_gap.isHidden())
+            self.assertTrue(dlg.chk_auto_upstream_gap.isChecked())
+            self.assertIn("Variable", dlg.lbl_auto_gap_hint.text())
+            cfg_var = dlg.get_config()
+            self.assertTrue(cfg_var["auto_update_upstream_gap"])
+            self.assertEqual(cfg_var["upstream_gap_coupling"]["base"], expected_base)
 
+        dlg.combo_param.setCurrentIndex(dlg.combo_param.findData("grid_1_r"))
         dlg.chk_auto_upstream_gap.setChecked(False)
         self.assertIn("Fixed", dlg.lbl_auto_gap_hint.text())
         cfg_fixed = dlg.get_config()
         self.assertFalse(cfg_fixed["auto_update_upstream_gap"])
         dlg.close()
 
-        # 2. Debye bulk-plasma mode: visible for n0_plasma & Te_up too
+        # 2. Debye bulk-plasma mode with custom Debye ratio: visible for n0_plasma, Te_up, and grid_1_r
         parent_debye = QWidget()
         parent_debye.grid_widgets = [{}, {}]
         parent_debye.adv_params = {"entire_bulk_plasma": True}
+        parent_debye.upstream_gap_settings = {"method": "ratio", "ratio_base": "debye", "ratio": 35.0}
         dlg_d = SweepSettingsDialog(parent_debye)
         for pid in ("n0_plasma", "Te_up", "grid_1_r"):
             dlg_d.combo_param.setCurrentIndex(dlg_d.combo_param.findData(pid))
@@ -508,6 +511,29 @@ class TestSweepDialogs(unittest.TestCase):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         dlg.close()
+
+    def test_sweep_settings_dialog_no_setgeometry_warnings(self):
+        from PyQt5.QtCore import qInstallMessageHandler
+
+        captured = []
+        prev_handler = qInstallMessageHandler(lambda mode, ctx, msg: captured.append(msg))
+        dlg = None
+        try:
+            dlg = SweepSettingsDialog()
+            dlg.show()
+            QApplication.processEvents()
+            for key in ("Te_up", "grid_1_r", "n0_plasma", "upstream_gap_mm", "grid_1_t"):
+                idx = dlg.combo_param.findData(key)
+                self.assertGreaterEqual(idx, 0)
+                dlg.combo_param.setCurrentIndex(idx)
+                QApplication.processEvents()
+        finally:
+            qInstallMessageHandler(prev_handler)
+            if dlg is not None:
+                dlg.close()
+
+        geom_warnings = [m for m in captured if "setGeometry" in m]
+        self.assertEqual(geom_warnings, [])
 
 
 class TestSweepMixinAppIntegration(unittest.TestCase):

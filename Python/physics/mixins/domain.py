@@ -275,6 +275,9 @@ class DomainMixin:
         geometry = params.get('geometry', 'half_hole')
         self.geometry = geometry
         self.periodic_y = geometry in ('one_hole', 'two_holes')
+        self.reflect_y0 = (geometry == 'half_hole')
+        half_hole_top_bc = str(params.get('half_hole_top_bc', 'reflect')).strip().lower()
+        self.reflect_y_top = (geometry == 'half_hole' and half_hole_top_bc == 'reflect')
 
         if grids:
             screen_r = grids[0]['r']

@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QGroupBox, QButtonGroup, QRadioButton,
     QMessageBox, QScrollArea, QWidget, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QProgressBar, QToolButton
+    QProgressBar, QToolButton, QApplication
 )
 from .workers.simulation_worker import SimulationWorker
 from physics.mesh_utils import compute_upstream_gap_value, get_upstream_gap_coupling_for_param
@@ -1474,14 +1474,23 @@ class SweepSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Parametric Sweep Configuration")
-        self.setMinimumWidth(480)
+        self.setMinimumSize(500, 420)
         self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
 
         self.n_grids = self._resolve_parent_grid_count(parent)
         self.sweep_parameters = build_sweep_parameters(self.n_grids)
         self._parent_up_context = self._resolve_parent_upstream_context(parent)
 
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setSpacing(10)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setContentsMargins(2, 2, 6, 2)
         layout.setSpacing(12)
 
         info_lbl = QLabel(
@@ -1671,6 +1680,10 @@ class SweepSettingsDialog(QDialog):
 
         form_parallel.addRow("CPU Cores to Use:", cores_layout)
         layout.addWidget(gb_parallel)
+        layout.addStretch()
+
+        scroll.setWidget(content_widget)
+        outer_layout.addWidget(scroll, 1)
 
         # Buttons
         btn_box = QHBoxLayout()
@@ -1685,10 +1698,18 @@ class SweepSettingsDialog(QDialog):
         self.btn_start.clicked.connect(self._validate_and_accept)
         btn_box.addWidget(self.btn_start)
 
-        layout.addLayout(btn_box)
+        outer_layout.addLayout(btn_box)
 
-        # Initialize with first parameter
+        # Initialize with first parameter before sizing so content hints are current
         self._on_param_changed()
+
+        # Size comfortably within the available screen height to avoid Windows setGeometry clamps
+        preferred_h = 700
+        screen = self.screen() if hasattr(self, "screen") else QApplication.primaryScreen()
+        if screen is not None:
+            avail_h = screen.availableGeometry().height()
+            preferred_h = max(460, min(preferred_h, avail_h - 80))
+        self.resize(540, preferred_h)
 
     @staticmethod
     def _resolve_parent_grid_count(parent) -> int:
