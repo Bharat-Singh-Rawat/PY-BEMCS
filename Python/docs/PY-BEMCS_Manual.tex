@@ -456,7 +456,7 @@ where $\kappa_{\mathrm{acc}}$ is the numerical time-acceleration factor. When $D
 \section{Modular Configuration Architecture (\texttt{config.json})}
 % =====================================================
 
-The simulator parameters are managed through a unified, hierarchical JSON structure (\texttt{config.json}). A representative configuration is shown below:
+The simulator parameters are managed through a unified, hierarchical JSON structure stored in \texttt{configurations/} (defaulting to \texttt{config.json}). A representative configuration is shown below:
 
 \begin{lstlisting}[language=json,caption={Standard \texttt{config.json} structure}]
 {
@@ -579,7 +579,7 @@ The embedded executable builder (\texttt{Settings $\rightarrow$ Build .exe...}) 
 \begin{enumerate}[nosep]
     \item Spawns a dedicated background worker thread and builds inside a temporary directory (\texttt{\_exe\_build\_tmp/}) to keep the repository root clean.
     \item Intercepts real-time standard output and maps build milestones (analysis, dependency collection, PYZ archive creation, binary packaging) to a 0--100\% progress dialog.
-    \item Automatically copies the resulting single-file executable and accompanying \texttt{config.json} into the user-selected destination directory.
+    \item Automatically copies the resulting single-file executable and accompanying \texttt{configurations/} directory (or \texttt{config.json}) into the user-selected destination directory.
     \item Cleans up intermediate build artifacts upon completion or cancellation.
 \end{enumerate}
 

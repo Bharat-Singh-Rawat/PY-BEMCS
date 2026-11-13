@@ -12,6 +12,7 @@ from ..mesh_utils import (
     estimate_automatic_mesh_zones,
     compute_efield_constrained_spacing,
     evaluate_mesh_efield_variation,
+    compute_debye_upstream_gap,
 )
 
 
@@ -190,13 +191,7 @@ class DomainMixin:
 
         # Physics-based recommended upstream gap depending on simulation mode
         if entire_bulk_plasma:
-            if n0_n <= 1e17:
-                n_debye = 80
-            elif n0_n <= 4e17:
-                n_debye = 40
-            else:
-                n_debye = 30
-            self.recommended_upstream_gap_mm = n_debye * debye_mm
+            self.recommended_upstream_gap_mm = compute_debye_upstream_gap(n0_n, Te_up)
         else:
             screen_r = grids[0]['r'] if grids else 0.80
             self.recommended_upstream_gap_mm = 0.75 * screen_r
@@ -240,6 +235,14 @@ class DomainMixin:
 
         user_gap = float(params.get('upstream_gap_mm', 0.0))
         upstream_gap = user_gap if user_gap > 0.0 else self.recommended_upstream_gap_mm
+        is_debye_gap = entire_bulk_plasma or (
+            isinstance(params.get('upstream_gap_settings'), dict)
+            and params['upstream_gap_settings'].get('method') == 'ratio'
+            and params['upstream_gap_settings'].get('ratio_base') == 'debye'
+        )
+        if is_debye_gap and upstream_gap > 4.0:
+            print(f"[Warning] Debye-evaluated upstream gap ({upstream_gap:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+            upstream_gap = 4.0
         upstream_gap = max(upstream_gap, self.dx * 2)
         self.upstream_gap_mm = upstream_gap
 
@@ -452,6 +455,7 @@ class DomainMixin:
             self.exit_ion_current_avg  = 0.0
             self.entered_optics = 0.0
             self.entered_optics_step = 0.0
+            self.first_grid_entry_iter = None
             self._last_neut_injected = 0
             self._domain_built = True
 
@@ -470,17 +474,36 @@ class DomainMixin:
         bohm_factor = 1.0 if entire_bulk_plasma else 0.61
 
         user_inj_y = params.get('inj_y_length_mm', params.get('inj_y_length', None))
-        if self.is_axisymmetric and grids:
-            screen_r_m = float(grids[0]['r']) * 1e-3
-            if user_inj_y is not None and float(user_inj_y) > 0.0:
-                r_inj_m = min(float(user_inj_y), self.Ly - self.dy) * 1e-3
-            else:
-                r_inj_m = min(screen_r_m, (self.Ly - self.dy) * 1e-3)
-            avg_cell_vol = np.pi * r_inj_m * dy_m * hx_m[0]
-            self.macro_weight = max(bohm_factor * n0 * avg_cell_vol / self.target_ppc, 1.0)
+        geometry = getattr(self, 'geometry', 'half_hole')
+        max_inj_y = (0.5 * self.Ly) if geometry == 'one_hole' else (self.Ly - self.dy)
+        if user_inj_y is not None and float(user_inj_y) > 0.0:
+            inj_y_span = min(float(user_inj_y), max_inj_y)
         else:
-            cell_vol   = self.cell_vol_1d[0]
-            self.macro_weight = max(bohm_factor * n0 * cell_vol / self.target_ppc, 1.0)
+            inj_y_span = min(float(grids[0]['r']), max_inj_y) if grids else max_inj_y
+
+        MAX_PARTICLE_BUDGET = float(params.get('max_particle_budget', 400_000.0))
+        total_cells = max(int(self.nx * self.ny), 1)
+        effective_ppc = max(3.0, min(self.target_ppc, MAX_PARTICLE_BUDGET / total_cells))
+
+        # Estimate real ions in the upstream presheath region
+        x_screen_mm = float(grids[0].get('x', getattr(self, 'upstream_gap_mm', 0.8))) if grids else getattr(self, 'upstream_gap_mm', 0.8)
+        x_screen_m = max(x_screen_mm, 0.1) * 1e-3
+
+        if self.is_axisymmetric and grids:
+            r_inj_m = inj_y_span * 1e-3
+            presheath_vol = x_screen_m * np.pi * (r_inj_m ** 2)
+            avg_cell_vol = np.pi * r_inj_m * dy_m * hx_m[0]
+            base_weight = bohm_factor * n0 * avg_cell_vol / effective_ppc
+        else:
+            _unit_depth_m = 1e-3
+            presheath_vol = x_screen_m * (inj_y_span * 1e-3) * _unit_depth_m
+            cell_vol = self.cell_vol_1d[0]
+            base_weight = bohm_factor * n0 * cell_vol / effective_ppc
+
+        n_real_presheath = bohm_factor * n0 * presheath_vol
+        w_presheath_budget = n_real_presheath / MAX_PARTICLE_BUDGET
+
+        self.macro_weight = max(base_weight, w_presheath_budget, 1.0)
         self.mask_grids = []
         self.T_grids    = []
         self.isBound.fill(False)

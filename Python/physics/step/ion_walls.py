@@ -247,6 +247,8 @@ def step_ion_interactions(sim, ctx: StepContext):
         sim.entered_optics_step = float(n_entered)
         sim.entered_optics += float(n_entered)
         sim.prev_entered = sim.entered_optics_step
+        if getattr(sim, 'first_grid_entry_iter', None) is None and sim.entered_optics > 0:
+            sim.first_grid_entry_iter = getattr(sim, 'iteration', 0)
 
         sim.lost_to_oob_step = float(n_lost_to_oob)
         sim.lost_to_grid_step = float(n_lost_to_grid)
@@ -429,6 +431,8 @@ def step_ion_interactions(sim, ctx: StepContext):
     sim.entered_optics_step = float(n_entered)
     sim.entered_optics += float(n_entered)
     sim.prev_entered = sim.entered_optics_step
+    if getattr(sim, 'first_grid_entry_iter', None) is None and sim.entered_optics > 0:
+        sim.first_grid_entry_iter = getattr(sim, 'iteration', 0)
 
     ix = sim._x_to_ix(p_x)
     iy = np.clip(np.round(p_y / sim.dy).astype(int), 0, sim.ny - 1)

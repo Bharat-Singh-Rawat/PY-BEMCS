@@ -7,8 +7,23 @@ import numpy as np
 class ParticlesMixin:
     """Particle buffer growth, particle injection buffers, and adaptive substepping."""
 
+    MAX_HARD_PARTICLES = 1_500_000
+    MAX_HARD_ELECTRONS = 1_500_000
+
     def _add_ions(self, x, y, vx, vy, vz, is_cex):
         n_new = len(x)
+        if self.num_p + n_new > self.MAX_HARD_PARTICLES:
+            allowed = max(0, self.MAX_HARD_PARTICLES - self.num_p)
+            if allowed <= 0:
+                return
+            n_new = allowed
+            x = x[:n_new]
+            y = y[:n_new]
+            vx = vx[:n_new]
+            vy = vy[:n_new]
+            vz = vz[:n_new]
+            is_cex = is_cex[:n_new]
+
         if self.num_p + n_new > self.max_p:
             new_max = max(self.max_p * 2, self.num_p + n_new)
             self.p_x     = np.pad(self.p_x,     (0, new_max - self.max_p))
@@ -30,6 +45,17 @@ class ParticlesMixin:
 
     def _add_electrons(self, x, y, vx, vy, vz):
         n_new = len(x)
+        if self.num_e + n_new > self.MAX_HARD_ELECTRONS:
+            allowed = max(0, self.MAX_HARD_ELECTRONS - self.num_e)
+            if allowed <= 0:
+                return
+            n_new = allowed
+            x = x[:n_new]
+            y = y[:n_new]
+            vx = vx[:n_new]
+            vy = vy[:n_new]
+            vz = vz[:n_new]
+
         if self.num_e + n_new > self.max_e:
             new_max = max(self.max_e * 2, self.num_e + n_new)
             self.e_x  = np.pad(self.e_x,  (0, new_max - self.max_e))
@@ -105,5 +131,5 @@ class ParticlesMixin:
         ds_lim_min = float(np.min(ds_lim))
         ds_max = float(np.max(ds_pred))
 
-        n_sub = max(1, int(np.ceil(np.max(ds_pred / np.maximum(ds_lim, 1e-30)))))
+        n_sub = min(50, max(1, int(np.ceil(np.max(ds_pred / np.maximum(ds_lim, 1e-30))))))
         return n_sub, ds_max, ds_lim_min

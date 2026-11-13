@@ -14,7 +14,9 @@ def test_newton_raphson_cpu_and_gpu():
     print("=" * 60)
 
     # 1. Load configNSTAR.json
-    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configNSTAR.json"))
+    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configurations", "configNSTAR.json"))
+    if not os.path.isfile(config_path):
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configNSTAR.json"))
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 

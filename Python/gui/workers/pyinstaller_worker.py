@@ -93,8 +93,14 @@ class PyInstallerWorker(QThread):
             dst_exe = os.path.join(self._dest_dir, exe_name)
             shutil.copy2(src_exe, dst_exe)
 
-            # Also copy config.json next to the exe if it exists
-            cfg_src = os.path.join(script_dir, "config.json")
+            # Also copy configurations folder and/or config.json next to the exe if they exist
+            cfg_dir = os.path.join(script_dir, "configurations")
+            if os.path.isdir(cfg_dir):
+                dst_cfg_dir = os.path.join(self._dest_dir, "configurations")
+                shutil.copytree(cfg_dir, dst_cfg_dir, dirs_exist_ok=True)
+            cfg_src = os.path.join(cfg_dir, "config.json") if os.path.isdir(cfg_dir) else os.path.join(script_dir, "config.json")
+            if not os.path.isfile(cfg_src) and os.path.isfile(os.path.join(script_dir, "config.json")):
+                cfg_src = os.path.join(script_dir, "config.json")
             if os.path.isfile(cfg_src):
                 shutil.copy2(cfg_src, os.path.join(self._dest_dir, "config.json"))
 

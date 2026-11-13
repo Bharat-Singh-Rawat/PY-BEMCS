@@ -354,6 +354,29 @@ class TestHeadlessSweepUtilities(unittest.TestCase):
         self.assertAlmostEqual(status_fixed[1]["upstream_gap_mm"], 0.6, places=3)
         self.assertAlmostEqual(status_fixed[1]["Lx"], 3.6, places=3)
 
+    def test_headless_sweep_debye_gap_clamping_to_4mm(self):
+        """Verify headless sweep clamps Debye length upstream gap to 4.0 mm with low densities."""
+        base_params = {
+            "Te_up": 3.0, "n0_plasma": 1e15, "Ti": 0.5, "n0": 1e17, "Tn": 300.0,
+            "entire_bulk_plasma": True,
+            "grids": [
+                {"V": 1000.0, "t": 0.5, "gap": 1.0, "r": 0.8, "cham": 0.0},
+                {"V": -200.0, "t": 1.0, "gap": 1.0, "r": 0.8, "cham": 0.0},
+            ]
+        }
+        sw_cfg = {
+            "auto_update_upstream_gap": True,
+            "upstream_gap_coupling": {"base": "debye", "ratio": None},
+        }
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            out = apply_sweep_param_to_dict(base_params, "n0_plasma", 1e15, sweep_config=sw_cfg)
+        self.assertAlmostEqual(out["upstream_gap_mm"], 4.0, places=3)
+        self.assertIn("[Warning]", buf.getvalue())
+        self.assertIn("exceeds 4 mm limit", buf.getvalue())
+
 
 class TestParallelSweepWorkerExecution(unittest.TestCase):
     @classmethod

@@ -285,6 +285,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     scenario_iters = 0
     steady_reached = False
     max_hit = False
+    first_grid_entry_iter = None
 
     prim_xy = np.empty((0, 2), dtype=np.float32)
     e_prim = np.empty(0, dtype=np.float32)
@@ -489,7 +490,21 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             max_hit = True
             break
 
-        if scenario_iters >= max(min_iters, window):
+        # Check when particles entered the first grid
+        entry_iter = getattr(sim, 'first_grid_entry_iter', first_grid_entry_iter)
+        if entry_iter is None and getattr(sim, 'entered_optics', 0.0) > 0:
+            entry_iter = scenario_iters
+            first_grid_entry_iter = scenario_iters
+            sim.first_grid_entry_iter = scenario_iters
+
+        if entry_iter is not None:
+            first_grid_entry_iter = entry_iter
+            iters_since_entry = scenario_iters - entry_iter
+        else:
+            iters_since_entry = 0
+
+        # Minimum iterations must be evaluated from when particles entered the first grid
+        if iters_since_entry >= min_iters and scenario_iters >= window:
             # Evaluate stationarity every 5 iterations
             if scenario_iters % 5 == 0:
                 histories_to_check = []

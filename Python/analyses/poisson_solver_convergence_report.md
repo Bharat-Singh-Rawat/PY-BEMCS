@@ -48,7 +48,7 @@ with an under-relaxation factor $\omega = 0.2$.
 
 ### 3.2 The Flaw: Hardcoded Fixed Iterations
 
-In the previous version of [physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py):
+In the previous version of [physics_engine.py](../physics_engine.py):
 
 ```python
 # PREVIOUS CODE:
@@ -285,7 +285,7 @@ A critical downstream benefit of the adaptive Poisson solver is its dramatic eff
 
 ### 9.1 Mathematical Formulation of Substep Selection
 
-In [physics_engine.py:L982-1020](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py#L982-1020), the engine dynamically evaluates the maximum predicted displacement $\Delta s_{\text{pred}}$ across all particles before calling the Boris pusher:
+In [physics_engine.py:L982-1020](../physics_engine.py#L982-1020), the engine dynamically evaluates the maximum predicted displacement $\Delta s_{\text{pred}}$ across all particles before calling the Boris pusher:
 
 $$\Delta s_{\text{pred}} = \underbrace{v_{\text{mag}} \Delta t}_{\text{velocity drift}} + \underbrace{\frac{1}{2} a_{\text{mag}} \Delta t^2}_{\text{acceleration kick}} = v_{\text{mag}} \Delta t + \frac{1}{2} \left| \frac{q}{m} \mathbf{E} \right| \Delta t^2$$
 
@@ -802,7 +802,7 @@ $$|G_{\text{mode}}| < 1 \iff \omega < \frac{2}{1 + \frac{\Delta x^2}{4 \lambda_D
 To guarantee absolute numerical stability across every possible thruster configuration:
 
 1. **Default Setting**:
-   In [physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py#L886), `poisson_adaptive_omega` is set to **`False` by default**:
+   In [physics_engine.py](../physics_engine.py#L886), `poisson_adaptive_omega` is set to **`False` by default**:
    ```python
    omega_min = float(params.get('poisson_omega', 0.2))
    omega_max = float(params.get('poisson_omega_max', 0.35)) if params.get('poisson_adaptive_omega', False) else omega_min
@@ -922,7 +922,7 @@ To guarantee that an Anderson extrapolation can never destabilize the physics en
 Both CPU and GPU solvers share identical algorithmic structures:
 
 #### CPU Implementation (`_recalc_poisson_cpu`)
-In [physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py#L977-L1058):
+In [physics_engine.py](../physics_engine.py#L977-L1058):
 ```python
 if use_anderson:
     V_prev, R_prev = anderson_history[-1]
@@ -944,7 +944,7 @@ if use_anderson:
 ```
 
 #### GPU Implementation (`_recalc_poisson_gpu`)
-In [physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py#L1110-L1195):
+In [physics_engine.py](../physics_engine.py#L1110-L1195):
 - Vectorized completely with CuPy (`cp.sum`, `cp.clip`).
 - Zero host-to-device memory transfers during the Anderson extrapolation step.
 - Execution time per Anderson step: $< 15\,\mu\text{s}$ on GPU, negligible compared to the sparse LU back-solve ($2\text{--}4\text{ ms}$).
@@ -1277,7 +1277,7 @@ Measured on a standard gridded ion thruster simulation ($N_p = 150{,}000$ active
 #### A. Separation of Domains: Where Gains Reside
 A critical distinction when analyzing simulation benchmarks is separating the **backend physics worker thread** from the **frontend GUI display thread**:
 1. **The `[PERF WARNING]` Metric**:
-   - Instrumented in [`physics/simulator.py`](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics/simulator.py#L240) and [`physics/step/probes.py`](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics/step/probes.py#L60-L63):
+   - Instrumented in [`physics/simulator.py`](../physics/simulator.py#L240) and [`physics/step/probes.py`](../physics/step/probes.py#L60-L63):
      $$\Delta t_{\text{step}} = t_{\text{end}} - t_{\text{start}}$$
    - Measured strictly within the background `QThread` (`SimulationWorker.run()`).
    - Measures only the execution of physical kernels: particle injection, Boris advancement, charge accumulation, non-linear Poisson solution, CEX collisions, thermal conduction, and diagnostic accounting.
@@ -1294,7 +1294,7 @@ In simulation logs, iterations frequently alternate between fast and slow steps:
 [PERF WARNING] Iter 92: step took 27962 ms (threshold: 1000 ms)
 [PERF WARNING] Iter 93: step took  2423 ms (threshold: 1000 ms)
 ```
-This is a direct consequence of numerical field-solve scheduling in [`physics/step/field_solve.py`](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics/step/field_solve.py#L87):
+This is a direct consequence of numerical field-solve scheduling in [`physics/step/field_solve.py`](../physics/step/field_solve.py#L87):
 ```python
 if sim.iteration % 2 == 0:
     sim.recalc_poisson(iterations=5, params=ctx.params)

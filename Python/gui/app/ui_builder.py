@@ -16,7 +16,7 @@ from PyQt5.QtCore import Qt
 
 from ..widgets import ScientificSpinBox
 from ..bootstrap import _safe_start_dir
-from ..config_io import load_json_config
+from ..config_io import _config_path, load_json_config
 from .figure_layout import setup_figure_layout
 
 
@@ -132,10 +132,17 @@ class UIBuilderMixin:
         menubar.setCornerWidget(self.lbl_active_config, Qt.TopRightCorner)
 
     def open_config_json(self):
+        curr_path = getattr(self, "current_config_path", None)
+        if curr_path and os.path.isfile(curr_path):
+            start_dir = os.path.dirname(curr_path)
+        else:
+            default_path = _config_path()
+            start_dir = os.path.dirname(default_path) if os.path.isdir(os.path.dirname(default_path)) else _safe_start_dir()
+
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "Open Config JSON",
-            _safe_start_dir(),
+            start_dir,
             "JSON Files (*.json)"
         )
         if not file_name:

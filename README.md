@@ -32,7 +32,7 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 - **Python Digital Twin (Latest Modular Implementation — Version 2.0)**
   - **GUI Application (`Python/main.py`):** Interactive PyQt5 desktop suite featuring live plasma visualization, multi-grid optics geometry editor, RF co-extraction controls, IEDF/EEDF diagnostics, cross-section manager, and an in-app PyInstaller `.exe` compiler.
   - **Physics Engine (`Python/physics_engine.py`):** High-performance `DigitalTwinSimulator` featuring a dual-kernel architecture (Taichi GPU acceleration + pure-NumPy CPU fallback), 2D3V Boris particle pusher, SuperLU/CuPy Poisson solver, in-situ sputter erosion, thermal conduction, and automated numerical validation checks.
-  - **Headless Batch Runner (`Python/run_simulation_from_config.py`):** Cluster- and CLI-friendly headless runner reading configuration from `Python/config.json`.
+  - **Headless Batch Runner (`Python/run_simulation_from_config.py`):** Cluster- and CLI-friendly headless runner reading configuration from `Python/configurations/config.json` (or any specified config).
   - **Multi-Core Benchmarking Suite (`Python/benchmarks/`):** Parallel sweep scripts for CEX erosion rates, Electron Backstreaming (EBS) limits, primary beam grid impingement, and perveance-divergence curves.
   - **Documentation & User Manual (`Python/docs/`):** Complete LaTeX reference manual (`PY-BEMCS_Manual.tex`) and compiled PDF guide (`PY-BEMCS_Manual.pdf`).
 - **Legacy Python Single-File App (`Python/transient_digital_twin.py`)**
@@ -206,10 +206,12 @@ python Python/main.py
 - **Build Standalone Executable:** Click **Settings → Build .exe...**, choose an output path, and track compilation.
 - **Diagnostics & Windows:** Inspect energy spectra via **Show Energy Dist. (IEDF/EEDF)**, manage materials in **Materials → Grid Material...**, and inspect cross-sections in **Beam → Cross-Section Manager...**.
 
-### 2. Headless Batch Execution via `config.json`
+### 2. Headless Batch Execution via Configuration JSON
 Run high-throughput simulations on remote clusters or headless servers:
 ```bash
 python Python/run_simulation_from_config.py
+# Or supply a specific configuration file:
+python Python/run_simulation_from_config.py Python/configurations/configNSTAR.json
 ```
 
 ### 3. Parallel Multi-Core Benchmarking Sweeps
@@ -231,9 +233,9 @@ charge_exchange_code   % Plume expansion & CEX study
 
 ---
 
-## ⚙️ Configuration Guide (`config.json`)
+## ⚙️ Configuration Guide (`Python/configurations/config.json`)
 
-Simulations are configured via `Python/config.json`:
+Simulations are configured via JSON files in `Python/configurations/` (defaulting to `config.json`):
 
 ```json
 {

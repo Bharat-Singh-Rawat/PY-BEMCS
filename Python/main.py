@@ -46,8 +46,14 @@ def main():
         cfg = load_json_config(sys.argv[1])
         if cfg is not None:
             try:
-                window.current_config_path = sys.argv[1]
-                window.current_config_name = os.path.basename(sys.argv[1])
+                resolved_path = sys.argv[1]
+                if not os.path.isfile(resolved_path):
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    cand1 = os.path.join(script_dir, "configurations", sys.argv[1])
+                    if os.path.isfile(cand1):
+                        resolved_path = cand1
+                window.current_config_path = resolved_path
+                window.current_config_name = os.path.basename(resolved_path)
                 window.apply_config(cfg, config_name=window.current_config_name)
             except Exception as e:
                 QMessageBox.critical(window, "Config Error", f"Failed to load config:\n{e}")

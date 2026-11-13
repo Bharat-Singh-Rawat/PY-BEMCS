@@ -36,7 +36,11 @@ def compute_debye_upstream_gap(n0: float, Te_up: float) -> float:
     else:
         n_debye = 30
 
-    return n_debye * debye_mm
+    raw_gap = n_debye * debye_mm
+    if raw_gap > 4.0:
+        print(f"[Warning] Debye-evaluated upstream gap ({raw_gap:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+        return 4.0
+    return raw_gap
 
 
 def compute_upstream_gap_value(
@@ -60,7 +64,11 @@ def compute_upstream_gap_value(
             return None
         if ratio_override is not None:
             debye_mm = float(np.sqrt(8.854e-12 * float(Te_up) / (1.6e-19 * float(n0) * 0.61)) * 1e3)
-            return round(float(ratio_override) * debye_mm, 3)
+            val = float(ratio_override) * debye_mm
+            if val > 4.0:
+                print(f"[Warning] Debye-evaluated upstream gap ({val:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+                val = 4.0
+            return round(val, 3)
         return round(float(compute_debye_upstream_gap(float(n0), float(Te_up))), 3)
 
     if isinstance(upstream_gap_settings, dict):

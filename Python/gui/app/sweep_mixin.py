@@ -413,7 +413,10 @@ class SweepMixin:
         if not hasattr(self, 'combo_sweep_scenario') or self.sweep_config is None:
             return
 
-        err = self._validate_sweep_grid_consistency(self.sweep_config, require_built_domain=True)
+        is_parallel_config = bool(self.sweep_config.get("parallel", False))
+        err = self._validate_sweep_grid_consistency(
+            self.sweep_config, require_built_domain=(not is_parallel_config)
+        )
         if err:
             self._warn_sweep_grid_discrepancy(err)
             return
@@ -486,42 +489,72 @@ class SweepMixin:
             self._render_sweep_scenario_snapshot(scen_num)
             return
 
-        # Case B: Sequential sweep mode
+        # Case B: Parallel sweep configured, but worker is NOT running (e.g. stopped/errored)
+        if is_parallel_config:
+            completed_indices = {
+                r["scenario_idx"]
+                for r in getattr(self, 'sweep_results', [])
+                if isinstance(r, dict) and "scenario_idx" in r
+            }
+            remaining_indices = [i for i in range(1, total_scenarios + 1) if i not in completed_indices]
+            if not remaining_indices:
+                QMessageBox.information(
+                    self,
+                    "Sweep Completed",
+                    "All scenarios in this sweep have already completed successfully."
+                )
+                self.finish_sweep()
+                return
+
+            import os
+            n_cores = self.sweep_config.get("n_cores")
+            if not n_cores and hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+                n_cores = getattr(self.parallel_sweep_worker, 'n_cores', None)
+            if not n_cores:
+                n_cores = max(1, (os.cpu_count() or 16) // 2)
+
+            self._start_parallel_sweep(self.sweep_config, n_cores, remaining_indices=remaining_indices)
+            return
+
+        # Case C: Sequential sweep mode
         domain_unbuilt = not hasattr(self.sim, 'Ex') or self.sim.Ex is None or not np.any(self.sim.Ex)
         needs_rebuild = domain_unbuilt
 
         if needs_rebuild:
-            self.sweep_mode_armed = True
-            self.is_sweep_active = False
-            self._sweep_stopped = True
-            self._sweep_paused_current = False
-            if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-                worker = self.parallel_sweep_worker
-                self.parallel_sweep_worker = None
-                try:
-                    worker.cancel()
-                    worker.wait(2000)
-                except Exception:
-                    pass
-            if hasattr(self, 'btn_toggle'):
-                self.btn_toggle.setText("2. START BEAM")
-            if hasattr(self, 'lbl_sweep_badge'):
-                self.lbl_sweep_badge.setVisible(True)
-                self.lbl_sweep_badge.setText(
-                    f"⚡ Sweep armed [Scenario {scen_num} | Build Domain required]"
-                )
-            if hasattr(self, 'btn_stop_sweep'):
-                self.btn_stop_sweep.setVisible(False)
-            if hasattr(self, 'btn_resume_sweep'):
-                self.btn_resume_sweep.setVisible(True)
-            if hasattr(self, 'btn_exit_sweep'):
-                self.btn_exit_sweep.setVisible(True)
-            if hasattr(self, 'lbl_status'):
-                self.lbl_status.setText(
-                    f"Parameters for Scenario {scen_num} applied ({param_id} = {selected_val}). "
-                    f"Please click '1. BUILD DOMAIN' and then '2. START BEAM' to resume."
-                )
-            return
+            try:
+                self.build_domain(force=True)
+            except Exception as e:
+                self.sweep_mode_armed = True
+                self.is_sweep_active = False
+                self._sweep_stopped = True
+                self._sweep_paused_current = False
+                if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+                    worker = self.parallel_sweep_worker
+                    self.parallel_sweep_worker = None
+                    try:
+                        worker.cancel()
+                        worker.wait(2000)
+                    except Exception:
+                        pass
+                if hasattr(self, 'btn_toggle'):
+                    self.btn_toggle.setText("2. START BEAM")
+                if hasattr(self, 'lbl_sweep_badge'):
+                    self.lbl_sweep_badge.setVisible(True)
+                    self.lbl_sweep_badge.setText(
+                        f"⚡ Sweep armed [Scenario {scen_num} | Build Domain required]"
+                    )
+                if hasattr(self, 'btn_stop_sweep'):
+                    self.btn_stop_sweep.setVisible(False)
+                if hasattr(self, 'btn_resume_sweep'):
+                    self.btn_resume_sweep.setVisible(True)
+                if hasattr(self, 'btn_exit_sweep'):
+                    self.btn_exit_sweep.setVisible(True)
+                if hasattr(self, 'lbl_status'):
+                    self.lbl_status.setText(
+                        f"Parameters for Scenario {scen_num} applied ({param_id} = {selected_val}). "
+                        f"Please click '1. BUILD DOMAIN' and then '2. START BEAM' to resume."
+                    )
+                return
 
         self.sweep_mode_armed = False
         self.is_sweep_active = True
@@ -665,6 +698,7 @@ class SweepMixin:
 
         # Domain was built by the user before starting the sweep
         self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
+        self.sweep_scenario_entry_iter = None
 
         if not getattr(self, 'sim_isRunning', False):
             self.sim.injection_enabled = True
@@ -676,7 +710,7 @@ class SweepMixin:
             self.btn_toggle.setText("PAUSE BEAM")
         self._update_sweep_action_button_state()
 
-    def _start_parallel_sweep(self, config, n_cores):
+    def _start_parallel_sweep(self, config, n_cores, remaining_indices=None):
         """Launch parallel multi-core sweep using ProcessPoolExecutor and top-bar scenario selector."""
         self.is_sweep_active = True
         self.sweep_mode_armed = False
@@ -690,7 +724,18 @@ class SweepMixin:
         self.sim_isRunning = False
         self._sweep_paused_current = False
         self._sweep_stopped = False
-        self._sweep_status_dict = {}
+        if not hasattr(self, '_sweep_status_dict'):
+            self._sweep_status_dict = {}
+
+        if remaining_indices is None:
+            self.sweep_results = []
+            self._sweep_status_dict.clear()
+            done_count = 0
+        else:
+            if not hasattr(self, 'sweep_results'):
+                self.sweep_results = []
+            done_count = len(self.sweep_results)
+
         if hasattr(self, '_resume_simulation_timer'):
             self._resume_simulation_timer()
 
@@ -698,7 +743,7 @@ class SweepMixin:
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setVisible(True)
             self.lbl_sweep_badge.setText(
-                f"⚡ Parallel Sweep [{n_cores} cores | 0/{total_scenarios} Done]"
+                f"⚡ Parallel Sweep [{n_cores} cores | {done_count}/{total_scenarios} Done]"
             )
             self.lbl_sweep_badge.setStyleSheet(
                 "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
@@ -708,16 +753,20 @@ class SweepMixin:
         # Initialize and display top-bar scenario selector dropdown
         if hasattr(self, 'combo_sweep_scenario'):
             self.combo_sweep_scenario.blockSignals(True)
-            self.combo_sweep_scenario.clear()
-            for idx, val in enumerate(config.get("values", [])):
-                val_str = (
-                    format_sci_value(val)
-                    if (config.get("param_id") in ("n0_plasma", "n0") or abs(val) >= 1e4 or (0 < abs(val) <= 1e-3))
-                    else f"{val:.3g}"
-                )
-                unit_str = f" {config.get('param_unit', '')}" if config.get('param_unit') else ""
-                self.combo_sweep_scenario.addItem(f"Scenario {idx + 1}: {config.get('param_id', 'param')} = {val_str}{unit_str}  [⏳ Queued]")
-            self.combo_sweep_scenario.setCurrentIndex(0)
+            if remaining_indices is None or self.combo_sweep_scenario.count() != total_scenarios:
+                self.combo_sweep_scenario.clear()
+                for idx, val in enumerate(config.get("values", [])):
+                    val_str = (
+                        format_sci_value(val)
+                        if (config.get("param_id") in ("n0_plasma", "n0") or abs(val) >= 1e4 or (0 < abs(val) <= 1e-3))
+                        else f"{val:.3g}"
+                    )
+                    unit_str = f" {config.get('param_unit', '')}" if config.get('param_unit') else ""
+                    self.combo_sweep_scenario.addItem(f"Scenario {idx + 1}: {config.get('param_id', 'param')} = {val_str}{unit_str}  [⏳ Queued]")
+
+            sel_idx = (remaining_indices[0] - 1) if remaining_indices else 0
+            sel_idx = max(0, min(sel_idx, self.combo_sweep_scenario.count() - 1))
+            self.combo_sweep_scenario.setCurrentIndex(sel_idx)
             self.combo_sweep_scenario.blockSignals(False)
             self.combo_sweep_scenario.setVisible(True)
 
@@ -730,8 +779,9 @@ class SweepMixin:
         self._update_sweep_action_button_state()
 
         if hasattr(self, 'lbl_status'):
+            rem_str = f" (resuming {len(remaining_indices)} remaining)" if remaining_indices else ""
             self.lbl_status.setText(
-                f"Running Parallel Sweep: {param_label} ({total_scenarios} scenarios on {n_cores} cores). Switch active views via top dropdown."
+                f"Running Parallel Sweep: {param_label} ({total_scenarios} scenarios on {n_cores} cores{rem_str}). Switch active views via top dropdown."
             )
 
         base_params = self.get_params() if hasattr(self, 'get_params') else {}
@@ -741,7 +791,13 @@ class SweepMixin:
         scatter_limit = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 2000))
 
         self.parallel_sweep_worker = ParallelSweepWorker(
-            config, base_params, n_cores=n_cores, scatter_limit=scatter_limit, parent=self
+            config,
+            base_params,
+            n_cores=n_cores,
+            scatter_limit=scatter_limit,
+            parent=self,
+            remaining_indices=remaining_indices,
+            existing_results=self.sweep_results,
         )
 
         self.parallel_sweep_worker.progress_updated.connect(self._on_parallel_progress_updated)
@@ -756,7 +812,8 @@ class SweepMixin:
         self.sweep_monitor_timer.start(150)
 
         self.parallel_sweep_worker.start()
-        self.parallel_sweep_worker.set_active_view_scenario(1)
+        active_view_idx = remaining_indices[0] if remaining_indices else 1
+        self.parallel_sweep_worker.set_active_view_scenario(active_view_idx)
 
     def _on_sweep_monitor_tick(self):
         """Periodic tick to update dropdown labels and render active scenario view."""
@@ -873,6 +930,11 @@ class SweepMixin:
             and self.parallel_sweep_worker is not None
             and self.parallel_sweep_worker.isRunning()
         )
+        completed_map = {
+            r["scenario_idx"]: r
+            for r in getattr(self, 'sweep_results', [])
+            if isinstance(r, dict) and "scenario_idx" in r
+        }
         current_idx = self.combo_sweep_scenario.currentIndex()
         self.combo_sweep_scenario.blockSignals(True)
         try:
@@ -882,12 +944,18 @@ class SweepMixin:
                 status = info.get("status", "queued")
                 scen_iter = info.get("iter", 0)
 
-                if is_parallel:
+                if scen_num in completed_map:
+                    status = "done"
+                    ex_row = completed_map[scen_num]
+                    scen_iter = ex_row.get("steady_iterations", ex_row.get("iter", scen_iter))
+                    if "computation_time_s" in ex_row:
+                        info["computation_time_s"] = ex_row["computation_time_s"]
+                elif is_parallel:
                     if self.parallel_sweep_worker.is_scenario_paused(scen_num):
                         status = "paused"
                     elif status == "paused":
                         status = "running"
-                elif status not in ("done",):
+                elif status not in ("done", "stopped"):
                     cur_seq_idx = getattr(self, 'sweep_current_idx', 0)
                     if idx == cur_seq_idx:
                         if getattr(self, 'sim_isRunning', False):
@@ -1933,9 +2001,23 @@ class SweepMixin:
 
     def _on_parallel_scenario_completed(self, result_row, completed, total):
         self.sweep_results.append(result_row)
+        if not hasattr(self, '_sweep_status_dict'):
+            self._sweep_status_dict = {}
+        s_idx = result_row.get("scenario_idx")
+        if s_idx is not None:
+            self._sweep_status_dict[s_idx] = {
+                "status": "done",
+                "iter": result_row.get("steady_iterations", 0),
+                "steady_iterations": result_row.get("steady_iterations", 0),
+                "parameter_value": result_row.get("parameter_value", 0.0),
+                "steady_state_reached": result_row.get("steady_state_reached", True),
+                "computation_time_s": result_row.get("computation_time_s", 0.0),
+                "div": result_row.get("div", 0.0),
+                "div_mid": result_row.get("div_mid", 0.0),
+                "exit_ion_current_A": result_row.get("exit_ion_current_A", 0.0),
+                "transparency": result_row.get("transparency", 0.0),
+            }
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-            if not hasattr(self, '_sweep_status_dict'):
-                self._sweep_status_dict = {}
             self._sweep_status_dict.update(self.parallel_sweep_worker.get_status_dict())
         self._update_sweep_scenario_combo_items()
 
@@ -1966,7 +2048,22 @@ class SweepMixin:
 
     def _on_parallel_sweep_error(self, error_msg):
         self.stop_sweep()
-        QMessageBox.critical(self, "Parallel Sweep Error", f"An error occurred during multi-core sweep:\n{error_msg}")
+        if hasattr(self, 'lbl_sweep_badge'):
+            self.lbl_sweep_badge.setText("⚡ Sweep Stopped (Error)")
+            self.lbl_sweep_badge.setStyleSheet(
+                "background-color: #fee2e2; color: #b91c1c; font-weight: bold; "
+                "border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            )
+        self._update_sweep_scenario_combo_items()
+
+        num_done = len(getattr(self, 'sweep_results', []))
+        total_scen = len(self.sweep_config.get("values", [])) if self.sweep_config else 0
+        info_txt = (
+            f"An error occurred during multi-core sweep:\n{error_msg}\n\n"
+            f"{num_done} of {total_scen} scenario(s) completed successfully and their results are preserved.\n"
+            f"You can review completed scenarios using the top dropdown, or click 'Resume Sweep' to continue."
+        )
+        QMessageBox.critical(self, "Parallel Sweep Error", info_txt)
 
     def _apply_sweep_value(self, param_id, value):
         """Applies a target parameter value to the GUI inputs and simulator."""
@@ -2046,12 +2143,29 @@ class SweepMixin:
 
         cur_val = values[cur_idx]
         current_iter = getattr(sim, 'iteration', 0)
-        scenario_iters = current_iter - getattr(self, 'sweep_scenario_start_iter', 0)
+        scenario_start = getattr(self, 'sweep_scenario_start_iter', 0)
+        scenario_iters = current_iter - scenario_start
 
         min_iters = cfg.get("min_iterations", 500)
         max_iters = cfg.get("max_iterations", 5000)
         window = cfg.get("window", 50)
         thresh = cfg.get("threshold", 1.0)
+
+        # Track first grid entry iteration relative to scenario start
+        entry_iter = getattr(self, 'sweep_scenario_entry_iter', None)
+        if entry_iter is None:
+            sim_entry = getattr(sim, 'first_grid_entry_iter', None)
+            if sim_entry is not None:
+                entry_iter = max(0, sim_entry - scenario_start)
+                self.sweep_scenario_entry_iter = entry_iter
+            elif getattr(sim, 'entered_optics', 0.0) > 0:
+                entry_iter = scenario_iters
+                self.sweep_scenario_entry_iter = entry_iter
+
+        if entry_iter is not None:
+            iters_since_entry = scenario_iters - entry_iter
+        else:
+            iters_since_entry = 0
 
         # Update live badge text
         if hasattr(self, 'lbl_sweep_badge'):
@@ -2060,19 +2174,20 @@ class SweepMixin:
                 if (cfg.get("param_id") in ("n0_plasma", "n0") or abs(cur_val) >= 1e4 or (0 < abs(cur_val) <= 1e-3))
                 else f"{cur_val:.3g}"
             )
+            entry_info = f", {iters_since_entry}/{min_iters} post-entry" if entry_iter is not None else ", waiting for grid entry"
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {cfg['param_unit']} ({scenario_iters:,} iters)]"
+                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {cfg['param_unit']} ({scenario_iters:,} iters{entry_info})]"
             )
-
-        # Need at least min_iters and window steps
-        if scenario_iters < max(min_iters, window):
-            return
 
         # Check steady-state condition across core physical observables
         steady_reached = False
         max_hit = scenario_iters >= max_iters
 
         if not max_hit:
+            # Need at least min_iters evaluated from when particles entered the first grid, plus window steps
+            if iters_since_entry < min_iters or scenario_iters < window:
+                return
+
             histories_to_check = []
             if hasattr(sim, 'energy_history_tot') and len(sim.energy_history_tot) >= window:
                 histories_to_check.append(sim.energy_history_tot[-scenario_iters:])
@@ -2325,6 +2440,7 @@ class SweepMixin:
             was_running = getattr(self, 'sim_isRunning', False)
             self.build_domain(force=True)
             self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
+            self.sweep_scenario_entry_iter = None
             self._get_sweep_scenario_timer().reset(start_running=was_running)
             self.sweep_scenario_start_wall_time = get_active_clock()
             self._sweep_paused_current = False

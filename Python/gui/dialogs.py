@@ -1161,9 +1161,15 @@ class UpstreamGapDialog(QDialog):
                     f"Calculation: {ratio:.2f} × {base_val:.4f} mm = {ratio * base_val:.3f} mm "
                     f"(Literature recommended: {self.def_debye_ratio:.0f})"
                 )
-            final_gap = round(ratio * base_val, 3)
-            self.lbl_ratio_formula.setText(formula_text)
-            self.lbl_preview_title.setText(f"Resulting Upstream Gap: <b>{final_gap:.3f} mm</b>")
+            raw_gap = ratio * base_val
+            if base == "debye" and raw_gap > 4.0:
+                final_gap = 4.0
+                clamped_note = f" (Clamped from {raw_gap:.3f} mm to limit 4.0 mm)"
+            else:
+                final_gap = round(raw_gap, 3)
+                clamped_note = ""
+            self.lbl_ratio_formula.setText(formula_text + clamped_note)
+            self.lbl_preview_title.setText(f"Resulting Upstream Gap: <b>{final_gap:.3f} mm</b>{clamped_note}")
             self.lbl_preview_math.setText(f"Determined via ratio over {base_name}: <i>{ratio:.3f} × {base_val:.3f} mm</i>")
         else:
             final_gap = round(self.spin_custom.value(), 3)
@@ -1175,7 +1181,12 @@ class UpstreamGapDialog(QDialog):
             base = self.combo_base.currentData()
             ratio = self.spin_ratio.value()
             base_val = self.screen_r if base == "screen_r" else self.debye_mm
-            gap = round(ratio * base_val, 3)
+            raw_gap = ratio * base_val
+            if base == "debye" and raw_gap > 4.0:
+                print(f"[Warning] Debye-evaluated upstream gap ({raw_gap:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+                gap = 4.0
+            else:
+                gap = round(raw_gap, 3)
             settings = {
                 "method": "ratio",
                 "ratio_base": base,
@@ -1636,6 +1647,7 @@ class SweepSettingsDialog(QDialog):
         self.spin_min_iters.setRange(10, 10000)
         self.spin_min_iters.setValue(500)
         self.spin_min_iters.setSuffix(" iterations")
+        self.spin_min_iters.setToolTip("Minimum number of iterations evaluated from when particles enter the first grid before steady-state can be reached.")
         form_steady.addRow("Min Iterations per Point:", self.spin_min_iters)
 
         layout.addWidget(gb_steady)

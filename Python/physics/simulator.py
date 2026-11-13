@@ -75,6 +75,7 @@ class DigitalTwinSimulator(
         self.exit_ion_current_avg  = 0.0
         self.entered_optics      = 0.0
         self.entered_optics_step = 0.0
+        self.first_grid_entry_iter = None
         self.lost_to_oob_step    = 0.0
 
         self._perf_monitor = None

@@ -74,10 +74,17 @@ When generating the simulation domain (`build_domain`), the engine automatically
 Python/
 ├── main.py                         # PyQt5 GUI application entry point
 ├── physics_engine.py               # Compatibility shim for DigitalTwinSimulator
-├── run_simulation_from_config.py   # Headless simulation runner reading config.json
-├── config.json                     # Primary JSON simulation configuration
-├── configNSTAR.json                # NSTAR benchmark configuration
-├── configRF.json                   # RF co-extraction configuration
+├── run_simulation_from_config.py   # Headless simulation runner reading JSON configs
+├── configurations/                 # JSON simulation configuration profiles
+│   ├── config.json                 # Primary JSON simulation configuration
+│   ├── configNSTAR.json            # NSTAR benchmark configuration
+│   ├── configRF.json               # RF co-extraction configuration
+│   └── newConfig.json              # Custom/experimental multi-grid configuration
+├── analyses/                       # Technical analysis reports & solver verification
+│   ├── injection_ppc_analysis.md   # Particle injection & PPC scaling report
+│   ├── low_density_divergence_report.md # Beam divergence investigation & NSTAR study
+│   ├── new_mesh_configuration.md   # Non-uniform multi-zone mesh walkthrough
+│   └── poisson_solver_convergence_report.md # Poisson convergence & adaptive solver report
 ├── sample.txt                      # Example custom cross-section / SEE data table
 ├── pytest.ini                      # Pytest configuration
 ├── gui/                            # Modular PyQt5 GUI implementation
@@ -196,10 +203,12 @@ python main.py
 * **Build Standalone Executable**: Click **Settings → Build .exe...**, select a destination directory, and track real-time compilation progress.
 * **Configure Species & Materials**: Manage species via **Beam → Ion Species...**, material presets via **Materials → Grid Material...**, and custom reaction tables via **Beam → Cross-Section Manager...**.
 
-### 2. Headless Batch Execution via `config.json`
+### 2. Headless Batch Execution via Configuration JSON
 Run simulations in headless / cluster mode without launching a GUI:
 ```bash
 python run_simulation_from_config.py
+# Or supply a specific configuration file:
+python run_simulation_from_config.py configurations/configNSTAR.json
 ```
 
 ### 3. Parallel Multi-Core Benchmarking Sweeps
@@ -214,9 +223,9 @@ python benchmarks/benchmark_perveance_Vs_Sweep.py
 
 ---
 
-## ⚙️ Configuration Guide (`config.json`)
+## ⚙️ Configuration Guide (`configurations/config.json`)
 
-The simulator is driven by `config.json`. Below is a standard multi-grid configuration:
+The simulator is driven by JSON configuration files located in `configurations/` (defaulting to `configurations/config.json`). Below is a standard multi-grid configuration:
 
 ```json
 {

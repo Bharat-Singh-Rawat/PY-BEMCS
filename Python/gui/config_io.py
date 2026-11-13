@@ -8,10 +8,12 @@ import numpy as np
 from scipy.interpolate import UnivariateSpline
 
 
-def _config_path():
+def _config_path(filename="config.json"):
     """
-    Returns the path to config.json located next to the .exe (or next to
-    main.py when running from source). Works on any PC, no hardcoding.
+    Returns the path to config.json (or specified filename).
+    Looks inside the 'configurations/' directory first, then falls back to
+    the folder containing the .exe (or next to main.py when running from source).
+    Works on any PC, no hardcoding.
     """
     if getattr(sys, 'frozen', False):
         # Running as a PyInstaller .exe — use the folder containing the .exe
@@ -19,19 +21,41 @@ def _config_path():
     else:
         # Running as normal Python — use the Python root folder (parent of gui/)
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "config.json")
+
+    cfg_in_configurations = os.path.join(base, "configurations", filename)
+    if os.path.isfile(cfg_in_configurations):
+        return cfg_in_configurations
+    cfg_in_base = os.path.join(base, filename)
+    if os.path.isfile(cfg_in_base):
+        return cfg_in_base
+    return cfg_in_configurations
 
 
 def load_json_config(config_path=None):
     """
     Loads and parses a JSON configuration file for the simulation.
-    If no path is provided, it defaults to the 'config.json' located next to the
-    executable or in the project root. Returns a dictionary with configuration parameters if
-    the file exists, or None if the file is not found (allowing the caller to fall
+    If no path is provided, it defaults to 'configurations/config.json' (or 'config.json').
+    If a relative path or bare filename is provided, it checks the path as-is,
+    then inside the 'configurations/' directory, and then in the project root.
+    Returns a dictionary with configuration parameters if the file exists,
+    or None if the file is not found (allowing the caller to fall
     back to default values).
     """
     if config_path is None:
         config_path = _config_path()
+    elif not os.path.isabs(config_path) and not os.path.isfile(config_path):
+        if getattr(sys, 'frozen', False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        candidate = os.path.join(base, "configurations", config_path)
+        if os.path.isfile(candidate):
+            config_path = candidate
+        else:
+            candidate2 = os.path.join(base, config_path)
+            if os.path.isfile(candidate2):
+                config_path = candidate2
 
     if not os.path.isfile(config_path):
         return None  # no config present — caller will use defaults

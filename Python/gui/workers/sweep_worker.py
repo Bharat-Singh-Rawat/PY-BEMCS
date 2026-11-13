@@ -44,11 +44,13 @@ class ParallelSweepWorker(QThread):
     sweep_finished = pyqtSignal(list)                # (all_sorted_results)
     sweep_error = pyqtSignal(str)                    # (error_message)
 
-    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=2000, parent=None):
+    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=2000, parent=None, remaining_indices: list = None, existing_results: list = None):
         super().__init__(parent)
         self.sweep_config = sweep_config
         self.base_params = base_params
         self.scatter_limit = scatter_limit
+        self.remaining_indices = set(remaining_indices) if remaining_indices is not None else None
+        self.existing_results = list(existing_results) if existing_results is not None else []
         total_cpus = os.cpu_count() or 16
         self.n_cores = int(n_cores) if n_cores and n_cores > 0 else max(1, total_cpus // 2)
         self.total_computation_time_s = 0.0
@@ -77,6 +79,8 @@ class ParallelSweepWorker(QThread):
 
         values = self.sweep_config.get("values", [])
         max_iters = int(self.sweep_config.get("max_iterations", 5000))
+        existing_map = {r.get("scenario_idx"): r for r in self.existing_results if isinstance(r, dict)}
+
         for idx, val in enumerate(values):
             scen_num = idx + 1
             sf = os.path.join(tempfile.gettempdir(), f"pybemcs_scen_{worker_token}_{scen_num}.bin")
@@ -88,18 +92,21 @@ class ParallelSweepWorker(QThread):
                     os.remove(pf)
                 except Exception:
                     pass
+
+            is_already_done = (self.remaining_indices is not None and scen_num not in self.remaining_indices)
+            ex_row = existing_map.get(scen_num, {})
             init_st = {
-                "status": "queued",
-                "iter": 0,
+                "status": "done" if is_already_done else "queued",
+                "iter": ex_row.get("steady_iterations", 0) if is_already_done else 0,
                 "max_iters": max_iters,
                 "parameter_value": float(val),
-                "steady_state_reached": False,
-                "computation_time_s": 0.0,
-                "t_sim_us": 0.0,
-                "div": 0.0,
-                "div_mid": 0.0,
-                "exit_ion_current_A": 0.0,
-                "transparency": 0.0,
+                "steady_state_reached": ex_row.get("steady_state_reached", True) if is_already_done else False,
+                "computation_time_s": ex_row.get("computation_time_s", 0.0) if is_already_done else 0.0,
+                "t_sim_us": ex_row.get("t_sim_us", 0.0) if is_already_done else 0.0,
+                "div": ex_row.get("div", 0.0) if is_already_done else 0.0,
+                "div_mid": ex_row.get("div_mid", 0.0) if is_already_done else 0.0,
+                "exit_ion_current_A": ex_row.get("exit_ion_current_A", 0.0) if is_already_done else 0.0,
+                "transparency": ex_row.get("transparency", 0.0) if is_already_done else 0.0,
                 "prim_xy": np.empty((0, 2), dtype=np.float32),
                 "e_prim_eV": np.empty(0, dtype=np.float32),
                 "cex_xy": np.empty((0, 2), dtype=np.float32),
@@ -312,6 +319,8 @@ class ParallelSweepWorker(QThread):
         payloads = []
         for idx, val in enumerate(values):
             scen_idx = idx + 1
+            if self.remaining_indices is not None and scen_idx not in self.remaining_indices:
+                continue
             payloads.append({
                 "scenario_idx": scen_idx,
                 "param_id": param_id,
@@ -329,14 +338,27 @@ class ParallelSweepWorker(QThread):
                 "scatter_limit": getattr(self, 'scatter_limit', 2000),
             })
 
-        results = []
-        completed_count = 0
+        results = list(self.existing_results)
+        completed_count = len(results)
         from physics.active_clock import ActiveDurationTracker
         sweep_tracker = ActiveDurationTracker(max_gap=2.0)
         sweep_tracker.start()
         sweep_t0 = time.perf_counter()
 
-        self.progress_updated.emit(0, total_count, f"Starting parallel sweep with {self.n_cores} worker cores...")
+        if len(payloads) == 0:
+            _active_workers.discard(self)
+            results.sort(key=lambda r: r.get("scenario_idx", 0))
+            self.sweep_finished.emit(results)
+            return
+
+        if completed_count > 0:
+            self.progress_updated.emit(
+                completed_count,
+                total_count,
+                f"Resuming parallel sweep with {self.n_cores} worker cores ({completed_count}/{total_count} already completed)..."
+            )
+        else:
+            self.progress_updated.emit(0, total_count, f"Starting parallel sweep with {self.n_cores} worker cores...")
 
         if self._canceled:
             _active_workers.discard(self)
@@ -358,6 +380,14 @@ class ParallelSweepWorker(QThread):
                     row = future.result()
                     results.append(row)
                     completed_count += 1
+                    s_idx = row.get("scenario_idx")
+                    if s_idx in self.final_status_dict:
+                        self.final_status_dict[s_idx]["status"] = "done"
+                        self.final_status_dict[s_idx]["iter"] = row.get("steady_iterations", 0)
+                        self.final_status_dict[s_idx]["steady_iterations"] = row.get("steady_iterations", 0)
+                        self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
+                        self.final_status_dict[s_idx]["div"] = row.get("div", 0.0)
+                        self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
                     val_str = f"{row['parameter_value']:.4g}"
                     c_time = row.get("computation_time_s", 0.0)
                     time_info = f" in {c_time:.1f}s" if (isinstance(c_time, (int, float)) and c_time > 0) else ""
@@ -367,11 +397,17 @@ class ParallelSweepWorker(QThread):
                         f"Completed Scenario {row['scenario_idx']}/{total_count} (value={val_str}{time_info})"
                     )
                 except Exception as exc:
+                    failed_idx = future_to_idx.get(future)
+                    if failed_idx and failed_idx in self.final_status_dict:
+                        self.final_status_dict[failed_idx]["status"] = "stopped"
                     if not self._canceled:
-                        self.sweep_error.emit(f"Scenario error: {exc}")
+                        self._canceled = True
+                        self.sweep_error.emit(f"Scenario {failed_idx} error: {exc}")
+                    break
 
         except Exception as e:
             if not self._canceled:
+                self._canceled = True
                 self.sweep_error.emit(f"Process pool error: {e}")
             return
         finally:

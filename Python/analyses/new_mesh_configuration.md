@@ -29,7 +29,7 @@ Running `config.json` baseline ($L_x = 8.675$ mm, $L_y = 1.55$ mm) under Vulkan 
 
 ## Key Implementations
 
-### 1. Core Physics Engine ([physics_engine.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/physics_engine.py))
+### 1. Core Physics Engine ([physics_engine.py](../physics_engine.py))
 
 #### A. Generic Coordinate Vectors & Geometry Auto-Detection
 - In `build_domain`:
@@ -55,15 +55,15 @@ Running `config.json` baseline ($L_x = 8.675$ mm, $L_y = 1.55$ mm) under Vulkan 
 - `compute_particle_substeps`: Uses local cell width $\Delta x_{i}$ for CFL displacement limits.
 
 ### 2. Diagnostics & Visualization
-- [ppc_window.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/diagnostics/ppc_window.py):
+- [ppc_window.py](../diagnostics/ppc_window.py):
   - Migrated from `imshow` to `pcolormesh(X, Y, data)` to properly represent stretched grid cells without visual distortion.
   - Updated grid overlays and zone statistics slices using `x_coords` and `_x_to_ix`.
-- [metrics.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/diagnostics/metrics.py): Integrated field energy and Boltzmann electron fluid charge using per-cell areas `cell_area_2d` and volumes `cell_vol_2d`.
-- [performance_monitor.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/diagnostics/performance_monitor.py): Position columns use `x_coords`.
-- [main.py](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/main.py): Status bar displays `dx=[dx_min..dx_max], dy=...`, scatter overlays use `x_coords`, and `apply_config` parses `mesh_zones`.
+- [metrics.py](../diagnostics/metrics.py): Integrated field energy and Boltzmann electron fluid charge using per-cell areas `cell_area_2d` and volumes `cell_vol_2d`.
+- [performance_monitor.py](../diagnostics/performance_monitor.py): Position columns use `x_coords`.
+- [main.py](../main.py): Status bar displays `dx=[dx_min..dx_max], dy=...`, scatter overlays use `x_coords`, and `apply_config` parses `mesh_zones`.
 
 ### 3. Configuration Files
-- Updated [config.json](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/config.json), [configNSTAR.json](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/configNSTAR.json), and [configRF.json](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/configRF.json) with default coarsening factors:
+- Updated [config.json](../configurations/config.json), [configNSTAR.json](../configurations/configNSTAR.json), and [configRF.json](../configurations/configRF.json) with default coarsening factors:
   ```json
   "mesh_zones": {
       "presheath_factor": 1.0,

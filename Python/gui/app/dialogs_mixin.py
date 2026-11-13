@@ -101,7 +101,13 @@ class DialogsMixin:
                                 Te_up = self.inputs["Te_up"].value()
                                 if n0 > 0 and Te_up > 0:
                                     debye_mm = (8.854e-12 * Te_up / (1.6e-19 * n0 * 0.61))**0.5 * 1e3
-                                    new_gap = round(ratio * debye_mm, 3)
+                                    raw_gap = ratio * debye_mm
+                                    if raw_gap > 4.0:
+                                        print(f"[Warning] Debye-evaluated upstream gap ({raw_gap:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+                                        new_gap = 4.0
+                                    else:
+                                        new_gap = raw_gap
+                                    new_gap = round(new_gap, 3)
                                 else:
                                     new_gap = self._last_auto_gap
                         else:

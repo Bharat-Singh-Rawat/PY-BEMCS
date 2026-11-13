@@ -330,7 +330,13 @@ class ConfigMixin:
                 if n0 <= 0 or Te_up <= 0:
                     return
                 debye_mm = (8.854e-12 * Te_up / (1.6e-19 * n0 * 0.61))**0.5 * 1e3
-                new_gap = round(ratio * debye_mm, 3)
+                raw_gap = ratio * debye_mm
+                if raw_gap > 4.0:
+                    print(f"[Warning] Debye-evaluated upstream gap ({raw_gap:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+                    new_gap = 4.0
+                else:
+                    new_gap = raw_gap
+                new_gap = round(new_gap, 3)
             self._last_auto_gap = new_gap
             self.inputs["upstream_gap_mm"].blockSignals(True)
             self.inputs["upstream_gap_mm"].setValue(new_gap)
@@ -814,7 +820,7 @@ class ConfigMixin:
         start_dir = (
             os.path.dirname(self.current_config_path)
             if getattr(self, "current_config_path", None) and os.path.dirname(self.current_config_path)
-            else _safe_start_dir()
+            else os.path.dirname(_config_path())
         )
         suggested_name = getattr(self, "current_config_name", "config.json")
         default_save_path = os.path.join(start_dir, suggested_name)

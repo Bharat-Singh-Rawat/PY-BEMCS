@@ -547,6 +547,7 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win = DigitalTwinApp()
 
     def tearDown(self):
+        self.win._data_saved = True
         self.win.is_sweep_active = False
         self.win.sweep_mode_armed = False
         self.win._sweep_stopped = True
@@ -596,8 +597,10 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.win.is_sweep_active = True
         self.win.sweep_scenario_start_iter = 0
 
-        # Simulate 60 iterations in scenario 1 with stable metrics
+        # Simulate 60 iterations in scenario 1 with stable metrics and particles entered at iter 0
         self.win.sim.iteration = 60
+        self.win.sim.entered_optics = 100.0
+        self.win.sim.first_grid_entry_iter = 0
         self.win.sim.energy_history_tot = [1e-3] * 60
         self.win.sim.charge_history_q_net = [1e-9] * 60
         self.win.sim.potential_history = [-700.0] * 60
@@ -2561,6 +2564,98 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertAlmostEqual(self.win.inputs["upstream_gap_mm"].value(), 0.6, places=3)
         self.assertAlmostEqual(self.win.sim.upstream_gap_mm, 0.6, places=3)
         self.win.exit_sweep(confirm_choice="no")
+
+    def test_min_iterations_evaluated_from_first_grid_entry(self):
+        """Verify min_iterations in sweep is evaluated from when particles enter the first grid."""
+        cfg = {
+            "param_id": "Te_up",
+            "param_label": "Te_up",
+            "param_unit": "eV",
+            "values": [2.0, 5.0],
+            "window": 10,
+            "threshold": 1.0,
+            "max_iterations": 200,
+            "min_iterations": 50,
+        }
+        self.win.sweep_config = cfg
+        self.win.sweep_results = []
+        self.win.sweep_current_idx = 0
+        self.win.is_sweep_active = True
+        self.win.sweep_scenario_start_iter = 0
+        self.win.sweep_scenario_entry_iter = None
+        self.win.div_history = [12.5] * 85
+        self.win.div_mid_history = [9.4] * 85
+
+        # Case 1: 60 iterations total, but particles NEVER entered first grid
+        self.win.sim.iteration = 60
+        self.win.sim.entered_optics = 0.0
+        self.win.sim.first_grid_entry_iter = None
+        self.win.sim.energy_history_tot = [1e-3] * 60
+        self.win.sim.charge_history_q_net = [1e-9] * 60
+        self.win.sim.potential_history = [-700.0] * 60
+
+        self.win.check_sweep_steady_state()
+        # Must NOT declare steady state because particles have not entered first grid
+        self.assertEqual(len(self.win.sweep_results), 0)
+
+        # Case 2: Particles entered at iteration 30; at iteration 60, only 30 iters post-entry (< min_iterations=50)
+        self.win.sim.entered_optics = 10.0
+        self.win.sim.first_grid_entry_iter = 30
+        self.win.check_sweep_steady_state()
+        # Must NOT declare steady state yet
+        self.assertEqual(len(self.win.sweep_results), 0)
+
+        # Case 3: At iteration 85, 85 - 30 = 55 iters post-entry (>= min_iterations=50)
+        self.win.sim.iteration = 85
+        self.win.sim.energy_history_tot = [1e-3] * 85
+        self.win.sim.charge_history_q_net = [1e-9] * 85
+        self.win.sim.potential_history = [-700.0] * 85
+        with patch.object(self.win, "advance_sweep_scenario"):
+            self.win.check_sweep_steady_state()
+        # Now steady state should be declared!
+        self.assertEqual(len(self.win.sweep_results), 1)
+        self.assertTrue(self.win.sweep_results[0]["steady_state_reached"])
+
+    def test_debye_upstream_gap_clamped_to_4mm(self):
+        """Verify Debye length upstream gap is clamped to 4mm with low densities."""
+        from physics.mesh_utils import compute_debye_upstream_gap, compute_upstream_gap_value, resolve_swept_upstream_gap
+        import io
+        from contextlib import redirect_stdout
+
+        # Low density: raw Debye gap would be > 40 mm, must clamp to 4.0 mm and print warning
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            gap = compute_debye_upstream_gap(n0=1e15, Te_up=3.0)
+        self.assertAlmostEqual(gap, 4.0, places=3)
+        self.assertIn("[Warning]", buf.getvalue())
+        self.assertIn("exceeds 4 mm limit", buf.getvalue())
+
+        # High density: raw Debye gap is < 4.0 mm, must not clamp
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            gap_normal = compute_debye_upstream_gap(n0=1e18, Te_up=3.0)
+        self.assertLess(gap_normal, 4.0)
+        self.assertNotIn("[Warning]", buf.getvalue())
+
+        # compute_upstream_gap_value with force_base="debye"
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            gap_val = compute_upstream_gap_value(n0=1e15, Te_up=3.0, force_base="debye", ratio_override=50.0)
+        self.assertAlmostEqual(gap_val, 4.0, places=3)
+        self.assertIn("[Warning]", buf.getvalue())
+
+        # resolve_swept_upstream_gap with low density
+        params = {
+            "n0_plasma": 1e15,
+            "Te_up": 3.0,
+            "entire_bulk_plasma": True,
+            "grids": [{"r": 0.8, "t": 0.5, "gap": 1.0}],
+        }
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            gap_swept = resolve_swept_upstream_gap("n0_plasma", params)
+        self.assertAlmostEqual(gap_swept, 4.0, places=3)
+        self.assertIn("[Warning]", buf.getvalue())
 
 
 if __name__ == "__main__":

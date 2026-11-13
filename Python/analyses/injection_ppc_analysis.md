@@ -245,7 +245,7 @@ Combine **Method 1 (Moderate Global Target)** with **Method 4 (Time-Averaged Dia
 To reach 40 PPC across your simulations today:
 
 ### Option A: The Direct Global Method (Guarantees $\ge 40$ Instantaneous PPC in Plume & Gaps)
-In your configuration file (e.g. [configNSTAR.json](file:///c:/Users/Nick/Documents/Learning%20stuff/Uni/Dispense/Fifth%20year/Space%20propulsion%20Lab/Project/Grids/PY-BEMCS/Python/configNSTAR.json)):
+In your configuration file (e.g. [configNSTAR.json](../configurations/configNSTAR.json)):
 ```json
   "simulation": {
     "n0_plasma": 7e17,

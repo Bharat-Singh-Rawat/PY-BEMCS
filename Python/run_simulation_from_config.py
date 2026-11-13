@@ -28,12 +28,20 @@ from physics_engine import DigitalTwinSimulator
 
 def parse_config(config_path='config.json'):
     """
-    Parses the config.json file and returns:
+    Parses the configuration JSON file and returns:
     - params: dictionary for DigitalTwinSimulator
     - output_selection: dictionary controlling terminal prints
     """
     if not os.path.isfile(config_path):
-        raise FileNotFoundError(f"Config file '{config_path}' not found.")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cand1 = os.path.join(script_dir, 'configurations', config_path)
+        cand2 = os.path.join(script_dir, config_path)
+        if os.path.isfile(cand1):
+            config_path = cand1
+        elif os.path.isfile(cand2):
+            config_path = cand2
+        else:
+            raise FileNotFoundError(f"Config file '{config_path}' not found.")
 
     with open(config_path, 'r', encoding='utf-8') as f:
         config = json.load(f)
@@ -183,12 +191,20 @@ def parse_config(config_path='config.json'):
 
     return params, output_selection
 
-def run_simulation():
+def run_simulation(config_path=None):
     """
-    Initializes and runs the simulation from config.json.
+    Initializes and runs the simulation from a JSON configuration file.
     """
+    if config_path is None:
+        import sys
+        if len(sys.argv) > 1:
+            config_path = sys.argv[1]
+        else:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(script_dir, 'configurations', 'config.json')
+            if not os.path.isfile(config_path):
+                config_path = os.path.join(script_dir, 'config.json')
     try:
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
         params, output_selection = parse_config(config_path)
         print("Using config file:", config_path)
     except Exception as e:
