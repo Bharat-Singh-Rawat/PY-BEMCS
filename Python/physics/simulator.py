@@ -246,7 +246,8 @@ class DigitalTwinSimulator(
         t_current = self.iteration * self.dt
         grids = params.get('grids', [])
 
-        self._step_t0 = _time_mod.perf_counter()
+        from physics.active_clock import get_active_clock
+        self._step_t0 = get_active_clock()
         self.transmitted_ions_step = 0.0
         self.transmitted3_step = 0.0
         self.exit_ion_current_step = 0.0

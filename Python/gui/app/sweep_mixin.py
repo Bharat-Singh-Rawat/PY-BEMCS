@@ -13,10 +13,21 @@ from PyQt5.QtCore import QTimer
 from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value, parse_grid_sweep_param
 from ..workers import ParallelSweepWorker
 from diagnostics.metrics import compute_rolling_variation
+from physics.active_clock import ActiveDurationTracker, get_active_clock
 
 
 class SweepMixin:
     """Mixin managing the Parametric Sweep simulation workflow."""
+
+    def _get_sweep_total_timer(self):
+        if not hasattr(self, '_sweep_total_timer') or self._sweep_total_timer is None:
+            self._sweep_total_timer = ActiveDurationTracker(max_gap=2.0)
+        return self._sweep_total_timer
+
+    def _get_sweep_scenario_timer(self):
+        if not hasattr(self, '_sweep_scenario_timer') or self._sweep_scenario_timer is None:
+            self._sweep_scenario_timer = ActiveDurationTracker(max_gap=2.0)
+        return self._sweep_scenario_timer
 
     def _set_grid_edit_buttons_enabled(self, enabled: bool):
         """Enable or disable `+ Add Grid` / `- Remove Grid` buttons during active sweeps."""
@@ -517,7 +528,8 @@ class SweepMixin:
         self._sweep_stopped = False
         self._sweep_paused_current = False
         self._set_grid_edit_buttons_enabled(False)
-        self.sweep_scenario_start_wall_time = time.perf_counter()
+        self._get_sweep_scenario_timer().reset(start_running=True)
+        self.sweep_scenario_start_wall_time = get_active_clock()
         self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
         if hasattr(self, '_sweep_status_dict') and self._sweep_status_dict:
             self._sweep_status_dict.clear()
@@ -590,8 +602,10 @@ class SweepMixin:
         self._sweep_base_params = copy.deepcopy(self.get_params()) if hasattr(self, 'get_params') else {}
         self._scenario_domain_cache = {}
         self._current_rendered_scenario_grid_idx = None
-        self.sweep_start_wall_time = time.perf_counter()
-        self.sweep_scenario_start_wall_time = time.perf_counter()
+        self._get_sweep_total_timer().reset(start_running=True)
+        self.sweep_start_wall_time = get_active_clock()
+        self._get_sweep_scenario_timer().reset(start_running=True)
+        self.sweep_scenario_start_wall_time = get_active_clock()
         if hasattr(self, '_resume_simulation_timer'):
             self._resume_simulation_timer()
 
@@ -1927,7 +1941,10 @@ class SweepMixin:
 
     def _on_parallel_sweep_finished(self, results):
         self.sweep_results = results
-        total_time = time.perf_counter() - getattr(self, 'sweep_start_wall_time', time.perf_counter())
+        if hasattr(self, '_sweep_total_timer') and self._sweep_total_timer is not None:
+            total_time = self._sweep_total_timer.get_duration()
+        else:
+            total_time = get_active_clock() - getattr(self, 'sweep_start_wall_time', get_active_clock())
         if self.sweep_config is not None:
             self.sweep_config["total_computation_time_s"] = float(total_time)
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
@@ -2089,7 +2106,10 @@ class SweepMixin:
     def _record_sweep_scenario_result(self, scenario_idx, parameter_value, steady_reached, scenario_iters, max_iters_hit=None, comp_time_s=None):
         """Records final steady-state physical observables for the completed scenario."""
         if comp_time_s is None:
-            comp_time_s = time.perf_counter() - getattr(self, 'sweep_scenario_start_wall_time', time.perf_counter())
+            if hasattr(self, '_sweep_scenario_timer') and self._sweep_scenario_timer is not None:
+                comp_time_s = self._sweep_scenario_timer.get_duration()
+            else:
+                comp_time_s = get_active_clock() - getattr(self, 'sweep_scenario_start_wall_time', get_active_clock())
 
         sim = self.sim
         t_sim_us = (sim.iteration * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
@@ -2305,7 +2325,8 @@ class SweepMixin:
             was_running = getattr(self, 'sim_isRunning', False)
             self.build_domain(force=True)
             self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
-            self.sweep_scenario_start_wall_time = time.perf_counter()
+            self._get_sweep_scenario_timer().reset(start_running=was_running)
+            self.sweep_scenario_start_wall_time = get_active_clock()
             self._sweep_paused_current = False
             if was_running:
                 if not getattr(self, 'sim_isRunning', False):
@@ -2386,7 +2407,10 @@ class SweepMixin:
         self._sweep_paused_current = False
         self._set_grid_edit_buttons_enabled(True)
 
-        total_time = time.perf_counter() - getattr(self, 'sweep_start_wall_time', time.perf_counter())
+        if hasattr(self, '_sweep_total_timer') and self._sweep_total_timer is not None:
+            total_time = self._sweep_total_timer.get_duration()
+        else:
+            total_time = get_active_clock() - getattr(self, 'sweep_start_wall_time', get_active_clock())
         if self.sweep_config is not None and "total_computation_time_s" not in self.sweep_config:
             self.sweep_config["total_computation_time_s"] = float(total_time)
 
@@ -2511,7 +2535,11 @@ class SweepMixin:
                     "iter": scen_iter,
                     "parameter_value": values[cur_seq_idx] if cur_seq_idx < len(values) else 0.0,
                     "steady_state_reached": False,
-                    "computation_time_s": time.perf_counter() - getattr(self, 'sweep_scenario_start_wall_time', time.perf_counter()),
+                    "computation_time_s": (
+                        self._sweep_scenario_timer.get_duration()
+                        if hasattr(self, '_sweep_scenario_timer') and self._sweep_scenario_timer is not None
+                        else (get_active_clock() - getattr(self, 'sweep_scenario_start_wall_time', get_active_clock()))
+                    ),
                     "t_sim_us": float(getattr(sim, 'time_sim', 0.0)) * 1e6,
                     "min_pot": float(saddle_v) if np.isfinite(saddle_v) else 0.0,
                     "div": float(div_val) if np.isfinite(div_val) else 0.0,

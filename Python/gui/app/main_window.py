@@ -2,10 +2,12 @@
 DigitalTwinApp main window composed from modular UI and logic mixins.
 """
 import os
+import sys
 from PyQt5.QtWidgets import QMainWindow, QMessageBox
 from PyQt5.QtCore import QTimer
 
 from physics_engine import DigitalTwinSimulator
+from physics.active_clock import ActiveDurationTracker
 from ..config_io import _config_path, load_json_config
 from ..workers.simulation_worker import SimulationWorker
 from .ui_builder import UIBuilderMixin
@@ -149,6 +151,7 @@ class DigitalTwinApp(
         else:
             self._apply_defaults()
 
+        self._active_sim_timer = ActiveDurationTracker(max_gap=2.0)
         self.sim_wall_elapsed = 0.0
         self.sim_wall_start_time = None
         self.duration_clock_timer = QTimer(self)
@@ -246,7 +249,7 @@ class DigitalTwinApp(
                     pass
 
     def closeEvent(self, event):
-        """Prompt confirmation if simulation/sweep is running and safely shut down all workers."""
+        """Prompt confirmation if simulation/sweep is running and prompt to save data after a simulation has run."""
         if self.is_simulation_running():
             reply = QMessageBox.question(
                 self,
@@ -258,6 +261,57 @@ class DigitalTwinApp(
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
+        else:
+            # Check if unsaved simulation or sweep data exists after a simulation has run
+            has_sim_data = hasattr(self, 'iter_history') and len(self.iter_history) > 0
+            has_sweep_data = bool(getattr(self, 'sweep_results', [])) or bool(getattr(self, '_sweep_status_dict', {}))
+            is_saved = getattr(self, '_data_saved', False)
+
+            if (has_sim_data or has_sweep_data) and not is_saved:
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Save Simulation Data")
+                msg_box.setIcon(QMessageBox.Question)
+                msg_box.setText("Attention: all unsaved data will be lost. Would you like to save data before closing?")
+                btn_save = msg_box.addButton("Save", QMessageBox.AcceptRole)
+                btn_dont_save = msg_box.addButton("Don't Save", QMessageBox.DestructiveRole)
+                btn_cancel = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+                msg_box.setDefaultButton(btn_save)
+                msg_box.setEscapeButton(btn_cancel)
+                msg_box.exec_()
+
+                clicked = msg_box.clickedButton()
+                if clicked == btn_cancel or clicked is None:
+                    event.ignore()
+                    return
+                elif clicked == btn_save:
+                    if has_sweep_data and hasattr(self, '_compile_and_show_interim_sweep_results'):
+                        self._compile_and_show_interim_sweep_results()
+                    elif hasattr(self, 'export_csv'):
+                        saved = self.export_csv()
+                        if saved is False:
+                            event.ignore()
+                            return
 
         self._shutdown_background_tasks()
         event.accept()
+
+    def nativeEvent(self, eventType, message):
+        """Handle Windows power broadcast events (suspend/resume) to ensure
+        the simulation active duration clock freezes cleanly across sleep."""
+        if eventType == b"windows_generic_MSG" and sys.platform == "win32":
+            try:
+                import ctypes
+                import ctypes.wintypes
+                msg = ctypes.wintypes.MSG.from_address(message.__int__())
+                if msg.message == 0x0218:  # WM_POWERBROADCAST
+                    # PBT_APMSUSPEND = 0x0004
+                    if msg.wParam == 0x0004:
+                        if hasattr(self, '_active_sim_timer') and self._active_sim_timer is not None:
+                            self._active_sim_timer.pause()
+                    # PBT_APMRESUMEAUTOMATIC = 0x0012, PBT_APMRESUMESUSPEND = 0x0007
+                    elif msg.wParam in (0x0007, 0x0012):
+                        if self.is_simulation_running() and hasattr(self, '_active_sim_timer') and self._active_sim_timer is not None:
+                            self._active_sim_timer.start()
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)

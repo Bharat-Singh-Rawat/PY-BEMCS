@@ -33,7 +33,7 @@ class ExportMixin:
         n = len(self.iter_history)
         if n == 0:
             QMessageBox.warning(self, "No Data", "No simulation history data to export.")
-            return
+            return False
 
         # Determine active export columns from user selection
         selected = getattr(self, 'export_selected_params', None)
@@ -60,7 +60,7 @@ class ExportMixin:
                 "No Parameters Selected",
                 "No data parameters are currently selected for export.\n\nPlease click 'Parameters' to select at least one parameter."
             )
-            return
+            return False
 
         startdir = _safe_start_dir()
         if not os.access(startdir, os.W_OK):
@@ -71,7 +71,7 @@ class ExportMixin:
             self, "Export Data", suggested, "CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)"
         )
         if not file_name:
-            return
+            return False
 
         if "(*.txt)" in selected_filter and file_name.lower().endswith(".csv"):
             file_name = file_name[:-4] + ".txt"
@@ -122,13 +122,17 @@ class ExportMixin:
                         pass
                 self.lbl_status.setText("Data export cancelled.")
                 QMessageBox.information(self, "Cancelled", "Data export was cancelled.")
+                return False
             else:
                 progress.setValue(n)
                 self.lbl_status.setText(f"Data saved: {file_name}")
+                self._data_saved = True
                 QMessageBox.information(self, "Success", f"Data exported:\n{file_name}")
+                return True
         except Exception as e:
             self.lbl_status.setText("Data export failed.")
             QMessageBox.critical(self, "Export Error", f"Failed to export data:\n{e}")
+            return False
         finally:
             progress.close()
             self.sim_isRunning = was_running

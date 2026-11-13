@@ -331,6 +331,9 @@ class ParallelSweepWorker(QThread):
 
         results = []
         completed_count = 0
+        from physics.active_clock import ActiveDurationTracker
+        sweep_tracker = ActiveDurationTracker(max_gap=2.0)
+        sweep_tracker.start()
         sweep_t0 = time.perf_counter()
 
         self.progress_updated.emit(0, total_count, f"Starting parallel sweep with {self.n_cores} worker cores...")
@@ -372,7 +375,7 @@ class ParallelSweepWorker(QThread):
                 self.sweep_error.emit(f"Process pool error: {e}")
             return
         finally:
-            self.total_computation_time_s = time.perf_counter() - sweep_t0
+            self.total_computation_time_s = sweep_tracker.get_duration()
             if self.sweep_config is not None:
                 self.sweep_config["total_computation_time_s"] = float(self.total_computation_time_s)
             _active_workers.discard(self)

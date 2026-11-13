@@ -58,8 +58,10 @@ def step_end_accounting(sim, ctx: StepContext):
     sim.low_ppc_cells = int(np.count_nonzero(low_ppc_mask))
 
     if sim._perf_monitor is not None:
-        import time as _time_mod
-        step_wall = _time_mod.perf_counter() - sim._step_t0
+        from physics.active_clock import get_active_clock
+        step_wall = get_active_clock() - getattr(sim, '_step_t0', get_active_clock())
+        if step_wall > 2.0:
+            step_wall = min(step_wall, 0.5)
         sim._perf_monitor.record_step(sim, step_wall)
 
     return ctx.remeshed, ctx.min_pot, ctx.current_div, sim.T_grids, ctx.trans_last_frame

@@ -41,10 +41,12 @@ def step_inject(sim, ctx: StepContext):
     screen_r = grids[0]['r'] if grids else 0.80
 
     user_inj_y = params.get('inj_y_length_mm', params.get('inj_y_length', None))
+    geometry = getattr(sim, 'geometry', 'half_hole')
+    max_inj_y = (0.5 * sim.Ly) if geometry == 'one_hole' else (sim.Ly - sim.dy)
     if user_inj_y is not None and float(user_inj_y) > 0.0:
-        inj_y_span = min(float(user_inj_y), sim.Ly - sim.dy)
+        inj_y_span = min(float(user_inj_y), max_inj_y)
     else:
-        inj_y_span = min(screen_r, sim.Ly - sim.dy) if grids else (sim.Ly - sim.dy)
+        inj_y_span = min(screen_r, max_inj_y) if grids else max_inj_y
 
     if 'injection_area_scale' in params:
         if is_axisymmetric:

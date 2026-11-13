@@ -171,10 +171,14 @@ class ConfigMixin:
             self.adv_params["Ly"] = auto_Ly
 
     def _on_geometry_changed(self, idx):
-        """Update domain size when geometry mode is changed."""
+        """Update domain size and validate injection parameters when geometry mode is changed."""
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         if not getattr(self, '_user_overrode_Ly', False):
             self.adv_params["Ly"] = auto_Ly
+        if "inj_y_length_mm" in self.inputs:
+            cur_val = float(self.inputs["inj_y_length_mm"].value())
+            if cur_val > 0.0:
+                self._on_inj_y_length_changed(cur_val)
 
     def _on_coordinate_system_changed(self, idx):
         """Handle coordinate system switch between Cartesian and Axisymmetric."""
@@ -239,16 +243,31 @@ class ConfigMixin:
             self.inputs["inj_y_length_mm"].blockSignals(False)
 
     def _on_inj_y_length_changed(self, val):
-        """Validate and clamp injection y-length if user sets it above domain height Ly."""
+        """Validate and clamp injection y-length if user sets it above domain boundary.
+        For one_hole geometry, injection is evaluated from the hole center (yc = Ly/2),
+        so the maximum span to either boundary is Ly/2 (covering the full [0, Ly] domain).
+        For half_hole, it is evaluated from y=0 to Ly.
+        """
         if val <= 0.0:
             return
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         Ly_curr = float(self.adv_params.get("Ly", auto_Ly))
-        if val > Ly_curr:
+        geom = self.combo_geometry.currentText() if hasattr(self, 'combo_geometry') else "half_hole"
+        max_allowed = (Ly_curr / 2.0) if geom == "one_hole" else Ly_curr
+        if val > max_allowed:
             if "inj_y_length_mm" in self.inputs:
                 self.inputs["inj_y_length_mm"].blockSignals(True)
-                self.inputs["inj_y_length_mm"].setValue(Ly_curr)
+                self.inputs["inj_y_length_mm"].setValue(max_allowed)
                 self.inputs["inj_y_length_mm"].blockSignals(False)
+            warn_msg = (
+                f"Injection Y-Length clamped to Ly/2 ({max_allowed:.3g} mm) for one-hole geometry "
+                f"(evaluated from hole center Ly/2, covering full domain [0, Ly])."
+                if geom == "one_hole" else
+                f"Injection Y-Length clamped to domain height Ly ({max_allowed:.3g} mm)."
+            )
+            print(f"[Warning] {warn_msg}")
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Status: {warn_msg}")
 
     def _update_inj_y_length(self):
         """Auto-update injection y-length when screen grid radius changes, if not user overridden."""

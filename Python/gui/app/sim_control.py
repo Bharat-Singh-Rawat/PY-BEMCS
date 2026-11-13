@@ -5,32 +5,64 @@ import copy
 import time
 import numpy as np
 from PyQt5.QtWidgets import QMessageBox, QApplication
+from physics.active_clock import ActiveDurationTracker, get_active_clock
 
 
 class SimControlMixin:
     """Mixin providing simulation execution, pause/resume, and domain mesh initialization."""
 
+    def _ensure_active_timer(self):
+        """Ensure the ActiveDurationTracker instance exists on this object."""
+        if not hasattr(self, '_active_sim_timer') or self._active_sim_timer is None:
+            self._active_sim_timer = ActiveDurationTracker(max_gap=2.0)
+            if getattr(self, 'sim_wall_elapsed', 0.0) > 0.0:
+                self._active_sim_timer.total_elapsed = float(self.sim_wall_elapsed)
+        return self._active_sim_timer
+
     def get_simulation_duration(self):
-        """Returns the total elapsed wall-clock duration of the simulation in seconds."""
-        elapsed = getattr(self, 'sim_wall_elapsed', 0.0)
-        is_running = (
-            self.is_simulation_running()
-            if hasattr(self, 'is_simulation_running')
-            else getattr(self, 'sim_isRunning', False)
-        )
-        if is_running and getattr(self, 'sim_wall_start_time', None) is not None:
-            elapsed += time.perf_counter() - self.sim_wall_start_time
-        return elapsed
+        """Returns the total elapsed active duration of the simulation in seconds (excluding suspension/sleep)."""
+        timer = self._ensure_active_timer()
+        return timer.get_duration()
 
     def update_simulation_timer(self):
         """Refreshes the top simulation duration stopwatch and plasma timestamp."""
         if not hasattr(self, 'lbl_sim_timer'):
             return
+
+        timer = self._ensure_active_timer()
+        is_running = (
+            self.is_simulation_running()
+            if hasattr(self, 'is_simulation_running')
+            else getattr(self, 'sim_isRunning', False)
+        )
+        if is_running and not timer.running:
+            timer.start()
+        elif not is_running and timer.running:
+            timer.pause()
+
+        timer.tick()
+        self.sim_wall_elapsed = timer.total_elapsed
+
+        if hasattr(self, '_sweep_scenario_timer') and self._sweep_scenario_timer is not None:
+            if is_running and not self._sweep_scenario_timer.running:
+                self._sweep_scenario_timer.start()
+            elif not is_running and self._sweep_scenario_timer.running:
+                self._sweep_scenario_timer.pause()
+            self._sweep_scenario_timer.tick()
+
+        if hasattr(self, '_sweep_total_timer') and self._sweep_total_timer is not None:
+            if is_running and not self._sweep_total_timer.running:
+                self._sweep_total_timer.start()
+            elif not is_running and self._sweep_total_timer.running:
+                self._sweep_total_timer.pause()
+            self._sweep_total_timer.tick()
+
         elapsed = self.get_simulation_duration()
-        hours = int(elapsed // 3600)
-        minutes = int((elapsed % 3600) // 60)
-        seconds = int(elapsed % 60)
-        tenths = int((elapsed - int(elapsed)) * 10)
+        total_tenths = int(round(elapsed * 10))
+        hours = total_tenths // 36000
+        minutes = (total_tenths % 36000) // 600
+        seconds = (total_tenths % 600) // 10
+        tenths = total_tenths % 10
         self.lbl_sim_timer.setText(f"⏱ Simulation Duration: {hours:02d}:{minutes:02d}:{seconds:02d}.{tenths:01d}")
 
         is_sweep = (
@@ -45,11 +77,15 @@ class SimControlMixin:
 
     def reset_simulation_timer(self):
         """Resets the simulation duration timer back to zero."""
+        timer = self._ensure_active_timer()
+        is_running = (
+            self.is_simulation_running()
+            if hasattr(self, 'is_simulation_running')
+            else getattr(self, 'sim_isRunning', False)
+        )
+        timer.reset(start_running=is_running)
         self.sim_wall_elapsed = 0.0
-        if getattr(self, 'sim_isRunning', False):
-            self.sim_wall_start_time = time.perf_counter()
-        else:
-            self.sim_wall_start_time = None
+        self.sim_wall_start_time = get_active_clock() if is_running else None
         self.update_simulation_timer()
 
     def update_sim_status_badge(self, status):
@@ -80,14 +116,16 @@ class SimControlMixin:
             )
 
     def _resume_simulation_timer(self):
-        if getattr(self, 'sim_wall_start_time', None) is None:
-            self.sim_wall_start_time = time.perf_counter()
+        timer = self._ensure_active_timer()
+        timer.start()
+        self.sim_wall_start_time = get_active_clock()
         self.update_sim_status_badge("RUNNING")
 
     def _pause_simulation_timer(self):
-        if getattr(self, 'sim_wall_start_time', None) is not None:
-            self.sim_wall_elapsed = getattr(self, 'sim_wall_elapsed', 0.0) + (time.perf_counter() - self.sim_wall_start_time)
-            self.sim_wall_start_time = None
+        timer = self._ensure_active_timer()
+        timer.pause()
+        self.sim_wall_elapsed = timer.total_elapsed
+        self.sim_wall_start_time = None
         self.update_sim_status_badge("PAUSED")
 
     def _extract_domain_signature(self):
@@ -223,12 +261,18 @@ class SimControlMixin:
         self._sim_worker._last_damage_version = -1
         self._sim_worker._last_damage_copy = None
         self.sim_isRunning = False
+        self._data_saved = False
         self.btn_toggle.setText("2. START BEAM")
         if not getattr(self, 'is_sweep_active', False):
+            if hasattr(self, '_active_sim_timer') and self._active_sim_timer is not None:
+                self._active_sim_timer.reset()
             self.sim_wall_elapsed = 0.0
             self.sim_wall_start_time = None
+        elif getattr(self, '_active_sim_timer', None) is not None:
+            self._active_sim_timer.start()
+            self.sim_wall_start_time = get_active_clock()
         elif getattr(self, 'sim_wall_start_time', None) is None:
-            self.sim_wall_start_time = time.perf_counter()
+            self.sim_wall_start_time = get_active_clock()
         self.update_sim_status_badge("READY")
         self.update_simulation_timer()
         self.iter_history.clear()

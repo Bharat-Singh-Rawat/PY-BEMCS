@@ -415,10 +415,10 @@ class UIBuilderMixin:
         control_layout.addLayout(row_inj_y)
         self.inputs["inj_y_length_mm"].setToolTip(
             "Transverse / radial span for ion injection at the upstream boundary [mm].\n\n"
-            "Default = Screen grid aperture radius (r_screen).\n"
-            "Can be set larger than r_screen (up to domain height Ly) to model plasma sheath expansion and ions\n"
-            "originating from above the screen grid webbing that are funneled into the aperture (crossover enhancement).\n\n"
-            "Set to 0 to auto-track the screen grid radius. Clamped automatically to at most Ly."
+            "• In half_hole (axisymmetric or Cartesian half-domain): evaluated from centerline y = 0 to y = inj_y_length (clamped at Ly).\n"
+            "• In one_hole (centered hole): evaluated from hole center yc = Ly/2 outward by ±inj_y_length (clamped at Ly/2, since inj_y_length = Ly/2 covers the entire [0, Ly] domain).\n"
+            "• Default = Screen grid aperture radius (r_screen).\n\n"
+            "Set to 0 or click Auto to auto-track the screen grid radius."
         )
         self.inputs["inj_y_length_mm"].valueChanged.connect(self._on_inj_y_length_changed)
 

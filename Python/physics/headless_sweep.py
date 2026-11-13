@@ -259,7 +259,10 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     state_file = payload.get("state_file")
     scatter_limit = payload.get("scatter_limit", 1000)
 
-    t_start = time.perf_counter()
+    from physics.active_clock import ActiveDurationTracker, get_active_clock
+    scenario_timer = ActiveDurationTracker(max_gap=2.0)
+    scenario_timer.start()
+    t_start = get_active_clock()
 
     # Apply parameter variation
     scenario_params = apply_sweep_param_to_dict(
@@ -337,7 +340,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             break
 
         if pause_file and os.path.exists(pause_file):
-            t_pause_start = time.perf_counter()
+            scenario_timer.pause()
+            t_pause_start = get_active_clock()
             try:
                 prim_xy, e_prim, cex_xy, e_cex, elec_xy = extract_display_particles(sim, scatter_limit)
             except Exception:
@@ -359,7 +363,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 if cancel_file and os.path.exists(cancel_file):
                     break
                 time.sleep(0.05)
-            t_start += (time.perf_counter() - t_pause_start)
+            scenario_timer.start()
+            t_start += (get_active_clock() - t_pause_start)
             resumed_state = dict(paused_state)
             resumed_state["status"] = "running"
             if status_dict is not None:
@@ -368,6 +373,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 write_scenario_state(state_file, resumed_state)
 
         sim.step(scenario_params)
+        scenario_timer.tick()
         if hasattr(sim, 'get_total_energy'):
             try:
                 sim.get_total_energy()
@@ -419,7 +425,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
 
             t_us = (scenario_iters * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
             trans_c = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
-            cur_comp_time = time.perf_counter() - t_start
+            cur_comp_time = scenario_timer.get_duration()
 
             run_state = {
                 "status": "running",
@@ -512,7 +518,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     except Exception:
         pass
 
-    comp_time_s = time.perf_counter() - t_start
+    comp_time_s = scenario_timer.get_duration()
     t_sim_us = (sim.iteration * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
     e_tot = sim.energy_history_tot[-1] if hasattr(sim, 'energy_history_tot') and sim.energy_history_tot else 0.0
     q_net = sim.charge_history_q_net[-1] if hasattr(sim, 'charge_history_q_net') and sim.charge_history_q_net else 0.0
