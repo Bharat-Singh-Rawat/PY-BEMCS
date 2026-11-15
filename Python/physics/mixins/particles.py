@@ -7,8 +7,45 @@ import numpy as np
 class ParticlesMixin:
     """Particle buffer growth, particle injection buffers, and adaptive substepping."""
 
-    MAX_HARD_PARTICLES = 1_500_000
-    MAX_HARD_ELECTRONS = 1_500_000
+    MAX_HARD_PARTICLES = 2_500_000
+    MAX_HARD_ELECTRONS = 2_500_000
+
+    def check_runtime_risk(self) -> dict:
+        """
+        Check if particle population or grid bounds are approaching dangerous limits
+        that threaten system stability or cause out-of-memory freezing.
+        """
+        risk_data = {
+            "has_risk": False,
+            "risk_type": None,
+            "message": "",
+            "can_reshape_plume": False,
+            "recommended_Lx": None,
+        }
+
+        # 1. Particle buffer saturation check
+        if self.num_p >= int(self.MAX_HARD_PARTICLES * 0.90):
+            risk_data["has_risk"] = True
+            risk_data["risk_type"] = "particle_overflow"
+            risk_data["message"] = (
+                f"Active ion count ({self.num_p:,}) reached 90% of hard limit "
+                f"({self.MAX_HARD_PARTICLES:,}). Memory capacity near saturation."
+            )
+
+        # 2. Check downstream plume expansion risk
+        if hasattr(self, "plume_warning_active") and self.plume_warning_active:
+            # If active cells are high and simulation is taking excessive time per step
+            if hasattr(self, "nx") and hasattr(self, "ny") and (self.nx * self.ny > 1_000_000):
+                risk_data["has_risk"] = True
+                risk_data["risk_type"] = "plume_excess_memory"
+                risk_data["can_reshape_plume"] = True
+                risk_data["recommended_Lx"] = getattr(self, "recommended_Lx", round(self.Lx * 0.6, 3))
+                risk_data["message"] = (
+                    f"Simulation domain is very large ({self.nx * self.ny:,} cells, Lx={self.Lx:.2f} mm). "
+                    f"Downstream plume is consuming excessive memory and slowing iterations."
+                )
+
+        return risk_data
 
     def _add_ions(self, x, y, vx, vy, vz, is_cex):
         n_new = len(x)

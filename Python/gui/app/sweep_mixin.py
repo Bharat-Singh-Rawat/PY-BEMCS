@@ -10,7 +10,13 @@ import numpy as np
 from PyQt5.QtWidgets import QMessageBox, QApplication
 from PyQt5.QtCore import QTimer
 
-from ..dialogs import SweepSettingsDialog, SweepResultsDialog, format_sci_value, parse_grid_sweep_param
+from ..dialogs import (
+    SweepSettingsDialog,
+    SweepResultsDialog,
+    format_sci_value,
+    parse_grid_sweep_param,
+    format_comp_duration,
+)
 from ..workers import ParallelSweepWorker
 from diagnostics.metrics import compute_rolling_variation
 from physics.active_clock import ActiveDurationTracker, get_active_clock
@@ -21,12 +27,12 @@ class SweepMixin:
 
     def _get_sweep_total_timer(self):
         if not hasattr(self, '_sweep_total_timer') or self._sweep_total_timer is None:
-            self._sweep_total_timer = ActiveDurationTracker(max_gap=2.0)
+            self._sweep_total_timer = ActiveDurationTracker(max_gap=None)
         return self._sweep_total_timer
 
     def _get_sweep_scenario_timer(self):
         if not hasattr(self, '_sweep_scenario_timer') or self._sweep_scenario_timer is None:
-            self._sweep_scenario_timer = ActiveDurationTracker(max_gap=2.0)
+            self._sweep_scenario_timer = ActiveDurationTracker(max_gap=None)
         return self._sweep_scenario_timer
 
     def _set_grid_edit_buttons_enabled(self, enabled: bool):
@@ -980,7 +986,7 @@ class SweepMixin:
                 unit_str = f" {param_unit}" if param_unit else ""
 
                 comp_s = info.get("computation_time_s")
-                comp_tag = f", {comp_s:.1f}s" if (comp_s is not None and np.isfinite(comp_s) and comp_s > 0) else ""
+                comp_tag = f", {format_comp_duration(comp_s)}" if (comp_s is not None and np.isfinite(comp_s) and comp_s > 0) else ""
 
                 if status == "running":
                     tag = f"[▶ Running - {scen_iter} iters]"
@@ -1458,8 +1464,8 @@ class SweepMixin:
         p_eff = info.get("perveance_effective", 0.0)
 
         comp_s = info.get("computation_time_s")
-        comp_str = f" | Wall Time: {comp_s:.2f} s" if (comp_s is not None and np.isfinite(comp_s)) else ""
-        comp_diag_str = f"Computation Time: {comp_s:.2f} s\n" if (comp_s is not None and np.isfinite(comp_s)) else ""
+        comp_str = f" | Wall Time: {format_comp_duration(comp_s)}" if (comp_s is not None and np.isfinite(comp_s) and comp_s > 0) else ""
+        comp_diag_str = f"Computation Time: {format_comp_duration(comp_s)}\n" if (comp_s is not None and np.isfinite(comp_s) and comp_s > 0) else ""
 
         if hasattr(self, 'lblTime'):
             self.lblTime.setText(f"t_sim: {t_us:.2f} µs | Scenario {scenario_idx} [{status_tag}]")
@@ -1990,14 +1996,32 @@ class SweepMixin:
             print(f"[Steady State Window Warning] Error updating steady state monitor for scenario {scenario_idx}: {exc}")
 
     def _on_parallel_progress_updated(self, completed, total, status_text):
+        is_throttled = ("Memory Guard" in status_text) or ("Throttled" in status_text)
         if hasattr(self, 'lbl_sweep_badge'):
             n_cores = getattr(self.parallel_sweep_worker, 'n_cores', '') if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker else ''
-            core_str = f"{n_cores} cores | " if n_cores else ""
-            self.lbl_sweep_badge.setText(
-                f"⚡ Parallel Sweep [{core_str}{completed}/{total} Done]"
-            )
+            if is_throttled:
+                self.lbl_sweep_badge.setText(
+                    f"⚡ Parallel Sweep [⚠️ RAM Guard: 1-2 workers | {completed}/{total} Done]"
+                )
+                self.lbl_sweep_badge.setStyleSheet(
+                    "font-weight: bold; color: #b45309; background-color: #fffbeb; "
+                    "border: 1px solid #f59e0b; border-radius: 4px; padding: 2px 6px;"
+                )
+            else:
+                core_str = f"{n_cores} cores | " if n_cores else ""
+                self.lbl_sweep_badge.setText(
+                    f"⚡ Parallel Sweep [{core_str}{completed}/{total} Done]"
+                )
+                self.lbl_sweep_badge.setStyleSheet(
+                    "font-weight: bold; color: #1e3a8a; background-color: #dbeafe; "
+                    "border: 1px solid #93c5fd; border-radius: 4px; padding: 2px 6px;"
+                )
         if hasattr(self, 'lbl_status'):
             self.lbl_status.setText(status_text)
+            if is_throttled:
+                self.lbl_status.setStyleSheet("color: #b45309; font-weight: bold;")
+            else:
+                self.lbl_status.setStyleSheet("")
 
     def _on_parallel_scenario_completed(self, result_row, completed, total):
         self.sweep_results.append(result_row)
@@ -2023,12 +2047,16 @@ class SweepMixin:
 
     def _on_parallel_sweep_finished(self, results):
         self.sweep_results = results
-        if hasattr(self, '_sweep_total_timer') and self._sweep_total_timer is not None:
+        if hasattr(self, '_sweep_total_timer') and self._sweep_total_timer is not None and self._sweep_total_timer.get_duration() > 0:
             total_time = self._sweep_total_timer.get_duration()
+        elif hasattr(self, 'parallel_sweep_worker') and getattr(self.parallel_sweep_worker, 'total_computation_time_s', 0.0) > 0:
+            total_time = self.parallel_sweep_worker.total_computation_time_s
         else:
             total_time = get_active_clock() - getattr(self, 'sweep_start_wall_time', get_active_clock())
         if self.sweep_config is not None:
             self.sweep_config["total_computation_time_s"] = float(total_time)
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            self.parallel_sweep_worker.total_computation_time_s = float(total_time)
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
             if not hasattr(self, '_sweep_status_dict'):
                 self._sweep_status_dict = {}

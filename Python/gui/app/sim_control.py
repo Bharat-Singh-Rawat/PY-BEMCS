@@ -14,7 +14,7 @@ class SimControlMixin:
     def _ensure_active_timer(self):
         """Ensure the ActiveDurationTracker instance exists on this object."""
         if not hasattr(self, '_active_sim_timer') or self._active_sim_timer is None:
-            self._active_sim_timer = ActiveDurationTracker(max_gap=2.0)
+            self._active_sim_timer = ActiveDurationTracker(max_gap=30.0)
             if getattr(self, 'sim_wall_elapsed', 0.0) > 0.0:
                 self._active_sim_timer.total_elapsed = float(self.sim_wall_elapsed)
         return self._active_sim_timer
@@ -458,3 +458,55 @@ class SimControlMixin:
             self.update_sim_status_badge("STOPPED")
             self.lbl_status.setText("Status: Simulation worker stopped unexpectedly.")
             self.update_simulation_timer()
+
+    def _on_runtime_risk_detected(self, risk_data: dict):
+        """
+        Invoked when the background SimulationWorker detects runtime memory pressure,
+        excessive particle accumulation, or massive downstream plume overhead.
+        Presents user with the 3 choices: Stop, Reshape Plume, or Continue at Own Risk.
+        """
+        self._pause_simulation_timer()
+        self.sim_isRunning = False
+        if hasattr(self, 'btn_toggle'):
+            self.btn_toggle.setText("RESUME BEAM")
+        self.update_sim_status_badge("PAUSED")
+
+        msg = risk_data.get("message", "High memory or particle saturation detected.")
+        can_reshape = risk_data.get("can_reshape_plume", False)
+        rec_Lx = risk_data.get("recommended_Lx", None)
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Simulation Paused — Hardware & Grid Risk")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            f"<b>Simulation was paused for system safety.</b><br><br>"
+            f"{msg}<br><br>"
+            f"<b>Select an action:</b>"
+        )
+
+        btn_stop = box.addButton("Stop Simulation", QMessageBox.RejectRole)
+        btn_reshape = None
+        if can_reshape and rec_Lx:
+            btn_reshape = box.addButton(f"Reshape Plume (Lx -> {rec_Lx:.2f} mm)", QMessageBox.ActionRole)
+        btn_continue = box.addButton("Continue at Own Risk", QMessageBox.AcceptRole)
+
+        box.exec_()
+        clicked = box.clickedButton()
+
+        if clicked == btn_stop:
+            self.stop_sim()
+            self.lbl_status.setText("Status: Simulation stopped by user following hardware risk warning.")
+        elif btn_reshape is not None and clicked == btn_reshape:
+            if hasattr(self.sim, 'reshape_downstream_plume'):
+                self.sim.reshape_downstream_plume(new_Lx=rec_Lx)
+                if hasattr(self, 'inputs') and 'Lx' in self.inputs:
+                    self.inputs['Lx'].setValue(self.sim.Lx)
+                self.lbl_status.setText(f"Status: Plume reshaped (Lx={self.sim.Lx:.2f} mm). Resuming simulation...")
+                if hasattr(self, '_sim_worker'):
+                    self._sim_worker._risk_handled = False
+                self.start_sim()
+        elif clicked == btn_continue:
+            self.lbl_status.setText("Status: Resumed at own risk by user.")
+            if hasattr(self, '_sim_worker'):
+                self._sim_worker._risk_handled = False
+            self.start_sim()

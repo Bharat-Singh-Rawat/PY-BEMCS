@@ -150,3 +150,105 @@ def test_sim_control_mixin_reset_timer():
     win._active_sim_timer.total_elapsed = 15.0
     win.reset_simulation_timer()
     assert win.get_simulation_duration() == 0.0
+
+
+def test_active_duration_tracker_preserves_multi_second_steps():
+    """
+    Ensure that heavy PIC steps taking > 2 seconds (e.g. 3.5s per step at high
+    plasma density n0=10^19) are NEVER discarded when max_gap=None.
+    """
+    tracker = ActiveDurationTracker(max_gap=None)
+    tracker.start()
+
+    with patch("physics.active_clock.get_active_clock") as mock_clock:
+        mock_clock.return_value = 1000.0
+        tracker.start()
+
+        # Step 1: takes 3.8 seconds (dense PIC-MCC step at n0=10^19)
+        mock_clock.return_value = 1003.8
+        tracker.tick()
+        assert abs(tracker.get_duration() - 3.8) < 1e-4
+
+        # Step 2: takes 4.2 seconds
+        mock_clock.return_value = 1008.0
+        tracker.tick()
+        assert abs(tracker.get_duration() - 8.0) < 1e-4
+
+        # Step 3: multi-hour duration (3h 14m 56s = 11,696.0s)
+        mock_clock.return_value = 1000.0 + 11696.0
+        tracker.tick()
+        assert abs(tracker.get_duration() - 11696.0) < 1e-4
+
+
+def test_format_comp_duration_hours_and_minutes():
+    from gui.dialogs import format_comp_duration
+
+    # Sub-minute
+    assert format_comp_duration(5.42) == "5.42 s"
+    # Sub-hour
+    assert format_comp_duration(228.9) == "3m 48.9s (228.9 s)"
+    # Multi-hour (3 hours 14 minutes 56 seconds)
+    formatted = format_comp_duration(11696.0)
+    assert "3h 14m 56s" in formatted
+    assert "11696.0 s" in formatted
+
+
+def test_sweep_results_dialog_total_computation_time():
+    import tempfile
+    import os
+    from PyQt5.QtWidgets import QApplication
+    from gui.dialogs import SweepResultsDialog
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+
+    cfg = {
+        "param_id": "n0_plasma",
+        "param_label": "Plasma Density (m⁻³)",
+        "total_computation_time_s": 11696.0,
+        "max_iterations": 5000,
+    }
+    results = [
+        {
+            "scenario_idx": 1,
+            "parameter_value": 1e15,
+            "steady_state_reached": True,
+            "steady_iterations": 500,
+            "computation_time_s": 50.0,
+            "saddle_potential_V": -200.0,
+            "divergence_deg": 12.0,
+            "exit_ion_current_A": 0.01,
+            "transparency": 0.95,
+        },
+        {
+            "scenario_idx": 10,
+            "parameter_value": 1e19,
+            "steady_state_reached": True,
+            "steady_iterations": 5000,
+            "computation_time_s": 11696.0,
+            "saddle_potential_V": -200.0,
+            "divergence_deg": 12.0,
+            "exit_ion_current_A": 0.01,
+            "transparency": 0.95,
+        },
+    ]
+
+    dlg = SweepResultsDialog(cfg, results)
+    item_comp10 = dlg.table.item(1, 4).text()
+    assert "3h 14m 56s" in item_comp10
+    assert "11696.0 s" in item_comp10
+
+    # Test export CSV header and rows
+    with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".csv") as tmp:
+        tmp_path = tmp.name
+    try:
+        dlg._write_tabular(tmp_path, is_txt=False, notify=False)
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "# Total Computational Time: 3h 14m 56s (11696.0 s)" in content
+        assert "11696.0000" in content
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+

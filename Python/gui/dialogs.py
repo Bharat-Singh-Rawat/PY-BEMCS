@@ -2069,7 +2069,7 @@ def format_comp_duration(seconds):
         return f"{mins}m {secs:04.1f}s ({seconds:.1f} s)"
     hrs = int(mins // 60)
     mins = mins % 60
-    return f"{hrs}h {mins:02d}m {int(secs):02d}s"
+    return f"{hrs}h {mins:02d}m {int(secs):02d}s ({seconds:.1f} s)"
 
 
 class SweepResultsDialog(QDialog):
@@ -2094,8 +2094,8 @@ class SweepResultsDialog(QDialog):
         unconverged_count = sum(1 for r in results if not r.get("steady_state_reached", True))
 
         total_time = sweep_config.get("total_computation_time_s")
-        if total_time is None:
-            valid_times = [r.get("computation_time_s") for r in results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s"))]
+        if total_time is None or total_time <= 0:
+            valid_times = [r.get("computation_time_s") for r in results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s")) and r.get("computation_time_s") > 0]
             if valid_times:
                 total_time = sum(valid_times)
 
@@ -2259,8 +2259,8 @@ class SweepResultsDialog(QDialog):
         param_label = self.sweep_config.get("param_label", "Parameter")
 
         total_time = self.sweep_config.get("total_computation_time_s")
-        if total_time is None:
-            valid_times = [r.get("computation_time_s") for r in self.results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s"))]
+        if total_time is None or total_time <= 0:
+            valid_times = [r.get("computation_time_s") for r in self.results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s")) and r.get("computation_time_s") > 0]
             if valid_times:
                 total_time = sum(valid_times)
 
@@ -2270,7 +2270,7 @@ class SweepResultsDialog(QDialog):
             writer.writerow([f"# Swept Parameter: {param_label}"])
             writer.writerow([f"# Total Scenarios: {len(self.results)}"])
             if total_time is not None and total_time > 0:
-                writer.writerow([f"# Total Computational Time: {format_comp_duration(total_time)} ({total_time:.3f} s)"])
+                writer.writerow([f"# Total Computational Time: {format_comp_duration(total_time)}"])
 
             if unconverged:
                 writer.writerow([
@@ -2366,8 +2366,8 @@ class SweepResultsDialog(QDialog):
 
         unconverged_count = sum(1 for r in self.results if not r.get("steady_state_reached", True))
         total_time = self.sweep_config.get("total_computation_time_s")
-        if total_time is None:
-            valid_times = [r.get("computation_time_s") for r in self.results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s"))]
+        if total_time is None or total_time <= 0:
+            valid_times = [r.get("computation_time_s") for r in self.results if r.get("computation_time_s") is not None and isinstance(r.get("computation_time_s"), (int, float)) and np.isfinite(r.get("computation_time_s")) and r.get("computation_time_s") > 0]
             if valid_times:
                 total_time = sum(valid_times)
         data = {

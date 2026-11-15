@@ -260,7 +260,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     scatter_limit = payload.get("scatter_limit", 1000)
 
     from physics.active_clock import ActiveDurationTracker, get_active_clock
-    scenario_timer = ActiveDurationTracker(max_gap=2.0)
+    scenario_timer = ActiveDurationTracker(max_gap=None)
     scenario_timer.start()
     t_start = get_active_clock()
 

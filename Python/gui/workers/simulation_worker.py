@@ -53,6 +53,8 @@ class SimulationWorker(QThread):
     step_done = pyqtSignal(dict)
     # Emitted when the worker thread finishes its run loop
     sim_finished = pyqtSignal()
+    # Emitted when runtime memory, particle overflow, or plume risk is detected
+    runtime_risk_detected = pyqtSignal(dict)
 
     def __init__(self, sim, parent=None):
         super().__init__(parent)
@@ -66,6 +68,7 @@ class SimulationWorker(QThread):
         self._last_snap_time = 0.0
         self._min_snap_interval = 0.033  # 30 FPS target for decoupled GUI rendering
         self._last_emitted_iter = -1     # tracks the latest iteration sent to GUI
+        self._risk_handled = False
 
     # ---- control interface (called from GUI thread) ----
     def start_sim(self, params, run_id=0):
@@ -344,6 +347,17 @@ class SimulationWorker(QThread):
             else:
                 remeshed, min_pot, current_div, T_grids = step_out
                 trans_last_frame = 0.0
+
+            # Runtime Risk Guard: pause and alert if memory or particle saturation occurs
+            if hasattr(self.sim, 'check_runtime_risk') and (getattr(self.sim, 'iteration', 0) % 25 == 0):
+                risk = self.sim.check_runtime_risk()
+                if risk.get('has_risk', False) and not self._risk_handled:
+                    self._risk_handled = True
+                    with self._lock:
+                        self._running = False
+                    self._emit_snapshot(params, run_id, remeshed, min_pot, current_div, T_grids, trans_last_frame)
+                    self.runtime_risk_detected.emit(risk)
+                    break
 
             # Check if a snapshot should be generated and emitted to the GUI
             now = time.perf_counter()

@@ -14,6 +14,10 @@ from ..mesh_utils import (
     evaluate_mesh_efield_variation,
     compute_debye_upstream_gap,
 )
+from ..hardware import (
+    detect_hardware_profile,
+    estimate_mesh_memory_gb,
+)
 
 
 class DomainMixin:
@@ -246,13 +250,23 @@ class DomainMixin:
         upstream_gap = max(upstream_gap, self.dx * 2)
         self.upstream_gap_mm = upstream_gap
 
+        x_last_exit = upstream_gap + (sum(g['t'] + g['gap'] for g in grids) - grids[-1]['gap']) if grids else 1.0
+        min_Lx = x_last_exit + (self.dx * 2.0)
         grid_Lx = (upstream_gap + total_grid_thickness) if grids else 3.0
         user_Lx = params.get('Lx', None)
         if user_Lx is not None and float(user_Lx) > 0:
-            min_Lx = upstream_gap + total_grid_thickness if grids else 1.0
             self.Lx = max(float(user_Lx), min_Lx)
         else:
             self.Lx = grid_Lx
+
+        # Optional downstream plume truncation to avoid excessive vacuum mesh cells
+        if grids and params.get('truncate_downstream_plume', False):
+            r_accel_bound = grids[-1]['r']
+            max_plume = float(params.get('max_plume_length_mm', 2.5 * r_accel_bound))
+            trunc_Lx = round(x_last_exit + max_plume, 3)
+            if trunc_Lx < self.Lx:
+                print(f"[Domain Plume] Truncating downstream plume Lx from {self.Lx:.3f} mm to {trunc_Lx:.3f} mm (plume length={max_plume:.2f} mm).")
+                self.Lx = max(trunc_Lx, min_Lx)
 
         if 'div_plane_x' in params and params['div_plane_x'] is not None:
             self.div_plane_x = float(params['div_plane_x'])
@@ -458,6 +472,23 @@ class DomainMixin:
             self.first_grid_entry_iter = None
             self._last_neut_injected = 0
             self._domain_built = True
+        else:
+            # Ensure 2D spatial grid arrays match new (ny, nx) if mesh shape changed
+            if not hasattr(self, 'isBound') or self.isBound.shape != (self.ny, self.nx):
+                self.V        = np.zeros((self.ny, self.nx), dtype=np.float64)
+                self.rho      = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+                self.isBound  = np.zeros((self.ny, self.nx), dtype=bool)
+                self.V_fixed  = np.zeros((self.ny, self.nx), dtype=np.float64)
+                self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float64)
+                self.Ex       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+                self.Ey       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+                self.Bx       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+                self.By       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+                self.Bz       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
+                self.Tmap     = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
+                self.T_map    = self.Tmap
+                self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
+            self._domain_built = True
 
         inj_time = params.get("inj_time", 0.0)
 
@@ -481,29 +512,91 @@ class DomainMixin:
         else:
             inj_y_span = min(float(grids[0]['r']), max_inj_y) if grids else max_inj_y
 
-        MAX_PARTICLE_BUDGET = float(params.get('max_particle_budget', 400_000.0))
-        total_cells = max(int(self.nx * self.ny), 1)
-        effective_ppc = max(3.0, min(self.target_ppc, MAX_PARTICLE_BUDGET / total_cells))
+        # Hardware-aware budget ceiling: bounded to at least 1,000,000 for extreme scenarios
+        hw = detect_hardware_profile()
+        user_budget = params.get('max_particle_budget', None)
+        if user_budget is not None and float(user_budget) > 0.0:
+            MAX_PARTICLE_BUDGET = max(1_000_000.0, float(user_budget))
+        else:
+            MAX_PARTICLE_BUDGET = max(1_000_000.0, float(hw.max_particle_budget))
 
-        # Estimate real ions in the upstream presheath region
+        # Real presheath injection geometry
         x_screen_mm = float(grids[0].get('x', getattr(self, 'upstream_gap_mm', 0.8))) if grids else getattr(self, 'upstream_gap_mm', 0.8)
         x_screen_m = max(x_screen_mm, 0.1) * 1e-3
+
+        # Count active cells in the presheath injection cylinder
+        ix_presheath = int(np.searchsorted(self.x_coords, x_screen_mm, side='right'))
+        iy_inj = int(np.searchsorted(self.y_coords, inj_y_span, side='right'))
+        n_presheath_cells = max(1, ix_presheath * iy_inj)
 
         if self.is_axisymmetric and grids:
             r_inj_m = inj_y_span * 1e-3
             presheath_vol = x_screen_m * np.pi * (r_inj_m ** 2)
             avg_cell_vol = np.pi * r_inj_m * dy_m * hx_m[0]
-            base_weight = bohm_factor * n0 * avg_cell_vol / effective_ppc
         else:
             _unit_depth_m = 1e-3
             presheath_vol = x_screen_m * (inj_y_span * 1e-3) * _unit_depth_m
             cell_vol = self.cell_vol_1d[0]
-            base_weight = bohm_factor * n0 * cell_vol / effective_ppc
+            avg_cell_vol = cell_vol
 
         n_real_presheath = bohm_factor * n0 * presheath_vol
+
+        # Expected steady-state particle population based on real injection flux & transit time
+        v_bohm_est = np.sqrt(self.q_ion * Te_up / self.m_ion)
+        v_beam_est = max(v_bohm_est * 5.0, np.sqrt(v_bohm_est**2 + 2.0 * self.q_ion * 1000.0 / self.m_ion))
+        speed_ratio = v_beam_est / max(v_bohm_est, 1.0)
+        beam_length_mm = max(0.0, self.Lx - x_screen_mm)
+        ratio_beam_to_presheath = (beam_length_mm / max(x_screen_mm, 0.1)) / max(speed_ratio, 1.0)
+
+        n_nominal_presheath_macro = n_presheath_cells * self.target_ppc
+        est_total_macroparticles = n_nominal_presheath_macro * (1.0 + ratio_beam_to_presheath)
+
+        # Conditional Presheath Budgeting:
+        # If expected total particles <= MAX_PARTICLE_BUDGET, leave target_ppc 100% UNMODIFIED!
+        if est_total_macroparticles <= MAX_PARTICLE_BUDGET:
+            effective_ppc = self.target_ppc
+            modulated_budget = False
+        else:
+            budget_scale = MAX_PARTICLE_BUDGET / max(est_total_macroparticles, 1.0)
+            effective_ppc = max(10.0, min(self.target_ppc, self.target_ppc * budget_scale))
+            modulated_budget = True
+
+        base_weight = bohm_factor * n0 * avg_cell_vol / effective_ppc
         w_presheath_budget = n_real_presheath / MAX_PARTICLE_BUDGET
 
         self.macro_weight = max(base_weight, w_presheath_budget, 1.0)
+        self.effective_ppc = effective_ppc
+        self.max_particle_budget = MAX_PARTICLE_BUDGET
+
+        # Pre-flight Downstream Plume Memory Check & Advisory Warning
+        total_cells = self.nx * self.ny
+        r_accel_exit = grids[-1]['r'] if grids else 1.0
+        plume_len = max(0.0, self.Lx - x_last_grid_end)
+        recommended_plume_len = min(plume_len, 2.5 * r_accel_exit)
+        self.recommended_Lx = round(x_last_grid_end + recommended_plume_len, 3)
+
+        if plume_len > 3.0 * r_accel_exit and total_cells > 300_000:
+            self.plume_warning_active = True
+            self.plume_excess_cells = int(total_cells * (1.0 - self.recommended_Lx / max(self.Lx, 1e-6)))
+            ram_gb = estimate_mesh_memory_gb(self.nx, self.ny)
+            if modulated_budget:
+                print(
+                    f"[Hardware & Physics Warning] Downstream plume region is very long (plume={plume_len:.2f} mm > 3*r_accel, "
+                    f"Lx={self.Lx:.2f} mm, mesh={total_cells:,} cells, est. RAM={ram_gb:.2f} GB). "
+                    f"Because downstream plume is not truncated, Particles Per Cell (PPC) must be modulated "
+                    f"(effective PPC={effective_ppc:.1f} vs target={self.target_ppc:.1f}) to remain within "
+                    f"the hardware memory budget ({MAX_PARTICLE_BUDGET:,.0f} particles). "
+                    f"Truncating downstream plume to Lx <= {self.recommended_Lx:.2f} mm will reduce mesh by "
+                    f"~{self.plume_excess_cells:,} cells and allow higher unconstrained PPC."
+                )
+            else:
+                print(
+                    f"[Hardware Advisory] Downstream plume region is long (plume={plume_len:.2f} mm, "
+                    f"Lx={self.Lx:.2f} mm, mesh={total_cells:,} cells, est. RAM={ram_gb:.2f} GB). "
+                    f"Consider truncating downstream plume to Lx <= {self.recommended_Lx:.2f} mm to save compute time."
+                )
+        else:
+            self.plume_warning_active = False
         self.mask_grids = []
         self.T_grids    = []
         self.isBound.fill(False)
@@ -665,3 +758,44 @@ class DomainMixin:
         y_idx = int(np.clip(round(y_c_first / self.dy), 0, self.ny - 1))
         self.min_pot = float(self.V[y_idx, x_idx])
         self.saddle_point_potential = self.min_pot
+
+    def reshape_downstream_plume(self, new_Lx=None, params=None):
+        """
+        Dynamically truncate the downstream plume region at runtime to reduce memory
+        and accelerate execution while preserving particle state inside the valid domain.
+        """
+        target_Lx = new_Lx or getattr(self, 'recommended_Lx', None)
+        if target_Lx is None or target_Lx >= self.Lx:
+            return False
+
+        old_Lx = self.Lx
+        cfg = dict(getattr(self, '_last_params', {}))
+        if params:
+            cfg.update(params)
+        cfg['Lx'] = target_Lx
+
+        # Update last grid gap to match truncated plume
+        if 'grids' in cfg and cfg['grids']:
+            import copy
+            grids_copy = copy.deepcopy(cfg['grids'])
+            x_last_exit = self.upstream_gap_mm + sum(g['t'] + g['gap'] for g in grids_copy) - grids_copy[-1]['gap']
+            grids_copy[-1]['gap'] = max(0.05, round(target_Lx - x_last_exit, 3))
+            cfg['grids'] = grids_copy
+
+        # Retain particles that fall within the new domain bounds
+        if self.num_p > 0:
+            valid_p = (self.p_x[:self.num_p] < target_Lx)
+            if not np.all(valid_p):
+                valid_idx = np.where(valid_p)[0]
+                n_rem = len(valid_idx)
+                self.p_x[:n_rem] = self.p_x[valid_idx]
+                self.p_y[:n_rem] = self.p_y[valid_idx]
+                self.p_vx[:n_rem] = self.p_vx[valid_idx]
+                self.p_vy[:n_rem] = self.p_vy[valid_idx]
+                self.p_vz[:n_rem] = self.p_vz[valid_idx]
+                self.p_isCEX[:n_rem] = self.p_isCEX[valid_idx]
+                self.num_p = n_rem
+
+        self.build_domain(cfg, preserve_state=True)
+        print(f"[Plume Reshape] Downstream plume truncated from {old_Lx:.3f} mm to {self.Lx:.3f} mm. Mesh now has {self.nx * self.ny:,} cells.")
+        return True

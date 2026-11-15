@@ -7,13 +7,17 @@ import time
 import atexit
 import tempfile
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from physics.headless_sweep import (
     run_single_sweep_scenario_worker,
     write_scenario_state,
     read_scenario_state,
+)
+from physics.hardware import (
+    detect_hardware_profile,
+    estimate_payload_ram_gb,
 )
 
 # Global registry of active worker instances for emergency atexit cleanup
@@ -341,7 +345,7 @@ class ParallelSweepWorker(QThread):
         results = list(self.existing_results)
         completed_count = len(results)
         from physics.active_clock import ActiveDurationTracker
-        sweep_tracker = ActiveDurationTracker(max_gap=2.0)
+        sweep_tracker = ActiveDurationTracker(max_gap=None)
         sweep_tracker.start()
         sweep_t0 = time.perf_counter()
 
@@ -364,46 +368,96 @@ class ParallelSweepWorker(QThread):
             _active_workers.discard(self)
             return
 
-        executor = ProcessPoolExecutor(max_workers=self.n_cores)
+        hw = detect_hardware_profile()
+        usable_ram = hw.usable_ram_gb
+        max_workers = min(self.n_cores, hw.max_cores_to_use)
+
+        executor = ProcessPoolExecutor(max_workers=max_workers)
         self._executor = executor
 
-        try:
-            future_to_idx = {
-                executor.submit(run_single_sweep_scenario_worker, p): p["scenario_idx"]
-                for p in payloads
-            }
+        # Dynamic RAM-Aware Scenario Scheduler
+        pending_payloads = list(payloads)
+        payload_ram = {p["scenario_idx"]: estimate_payload_ram_gb(p) for p in payloads}
+        running_futures = {}  # future -> (scenario_idx, estimated_ram)
+        current_ram_alloc = 0.0
 
-            for future in as_completed(future_to_idx):
+        def submit_next_if_possible():
+            nonlocal current_ram_alloc
+            while pending_payloads and len(running_futures) < max_workers:
+                next_p = pending_payloads[0]
+                scen_ram = payload_ram.get(next_p["scenario_idx"], 1.5)
+                # Allow launch if memory fits, or if no workers are running (guarantee forward progress)
+                if len(running_futures) == 0 or (current_ram_alloc + scen_ram <= usable_ram):
+                    p = pending_payloads.pop(0)
+                    current_ram_alloc += scen_ram
+                    fut = executor.submit(run_single_sweep_scenario_worker, p)
+                    running_futures[fut] = (p["scenario_idx"], scen_ram)
+                else:
+                    # Wait for running workers to finish to free memory
+                    break
+
+            # Advise user when concurrency is throttled for heavy memory scenarios
+            running_count = len(running_futures)
+            active_scens = [s[0] for s in running_futures.values()]
+            if running_count <= 2 and max_workers > 2 and current_ram_alloc >= usable_ram * 0.35:
+                throttle_msg = (
+                    f"⚠️ Memory Guard: Throttled to {running_count} concurrent worker(s) for high-RAM scenario(s) {active_scens} "
+                    f"({current_ram_alloc:.1f} GB allocated) to prevent RAM saturation."
+                )
+                self.progress_updated.emit(completed_count, total_count, throttle_msg)
+
+        try:
+            submit_next_if_possible()
+
+            while running_futures:
                 if self._canceled:
                     break
-                try:
-                    row = future.result()
-                    results.append(row)
-                    completed_count += 1
-                    s_idx = row.get("scenario_idx")
-                    if s_idx in self.final_status_dict:
-                        self.final_status_dict[s_idx]["status"] = "done"
-                        self.final_status_dict[s_idx]["iter"] = row.get("steady_iterations", 0)
-                        self.final_status_dict[s_idx]["steady_iterations"] = row.get("steady_iterations", 0)
-                        self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
-                        self.final_status_dict[s_idx]["div"] = row.get("div", 0.0)
-                        self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
-                    val_str = f"{row['parameter_value']:.4g}"
-                    c_time = row.get("computation_time_s", 0.0)
-                    time_info = f" in {c_time:.1f}s" if (isinstance(c_time, (int, float)) and c_time > 0) else ""
-                    self.scenario_completed.emit(row, completed_count, total_count)
-                    self.progress_updated.emit(
-                        completed_count, total_count,
-                        f"Completed Scenario {row['scenario_idx']}/{total_count} (value={val_str}{time_info})"
-                    )
-                except Exception as exc:
-                    failed_idx = future_to_idx.get(future)
-                    if failed_idx and failed_idx in self.final_status_dict:
-                        self.final_status_dict[failed_idx]["status"] = "stopped"
-                    if not self._canceled:
-                        self._canceled = True
-                        self.sweep_error.emit(f"Scenario {failed_idx} error: {exc}")
-                    break
+
+                done_futures = [f for f in running_futures.keys() if f.done()]
+                if not done_futures:
+                    try:
+                        done_set, _ = wait(running_futures.keys(), return_when=FIRST_COMPLETED, timeout=0.2)
+                        done_futures = list(done_set)
+                    except Exception:
+                        time.sleep(0.05)
+
+                for future in done_futures:
+                    if future not in running_futures:
+                        continue
+                    scen_idx, scen_ram = running_futures.pop(future)
+                    current_ram_alloc = max(0.0, current_ram_alloc - scen_ram)
+
+                    try:
+                        row = future.result()
+                        results.append(row)
+                        completed_count += 1
+                        sweep_tracker.tick()
+                        s_idx = row.get("scenario_idx")
+                        if s_idx in self.final_status_dict:
+                            self.final_status_dict[s_idx]["status"] = "done"
+                            self.final_status_dict[s_idx]["iter"] = row.get("steady_iterations", 0)
+                            self.final_status_dict[s_idx]["steady_iterations"] = row.get("steady_iterations", 0)
+                            self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
+                            self.final_status_dict[s_idx]["div"] = row.get("div", 0.0)
+                            self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
+                        val_str = f"{row['parameter_value']:.4g}"
+                        c_time = row.get("computation_time_s", 0.0)
+                        time_info = f" in {c_time:.1f}s" if (isinstance(c_time, (int, float)) and c_time > 0) else ""
+                        self.scenario_completed.emit(row, completed_count, total_count)
+                        self.progress_updated.emit(
+                            completed_count, total_count,
+                            f"Completed Scenario {row['scenario_idx']}/{total_count} (value={val_str}{time_info})"
+                        )
+                    except Exception as exc:
+                        failed_idx = scen_idx
+                        if failed_idx and failed_idx in self.final_status_dict:
+                            self.final_status_dict[failed_idx]["status"] = "stopped"
+                        if not self._canceled:
+                            self._canceled = True
+                            self.sweep_error.emit(f"Scenario {failed_idx} error: {exc}")
+                        break
+
+                submit_next_if_possible()
 
         except Exception as e:
             if not self._canceled:

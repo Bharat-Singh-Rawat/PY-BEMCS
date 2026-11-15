@@ -151,7 +151,7 @@ class DigitalTwinApp(
         else:
             self._apply_defaults()
 
-        self._active_sim_timer = ActiveDurationTracker(max_gap=2.0)
+        self._active_sim_timer = ActiveDurationTracker(max_gap=30.0)
         self.sim_wall_elapsed = 0.0
         self.sim_wall_start_time = None
         self.duration_clock_timer = QTimer(self)
@@ -172,6 +172,7 @@ class DigitalTwinApp(
         self.scatter_limit = getattr(self._sim_worker, '_scatter_limit', SimulationWorker.MAX_SCATTER)
         self._sim_worker.step_done.connect(self._on_step_result)
         self._sim_worker.sim_finished.connect(self._on_worker_finished)
+        self._sim_worker.runtime_risk_detected.connect(self._on_runtime_risk_detected)
 
     def is_simulation_running(self):
         """Check if any simulation is currently running (regular beam simulation or parametric sweep)."""

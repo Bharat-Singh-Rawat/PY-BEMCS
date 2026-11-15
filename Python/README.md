@@ -25,6 +25,11 @@
 ## 🌟 Key Features & Upgrades
 
 * **Dual-Kernel Architecture (Taichi GPU + CPU Fallback)**: High-throughput 2D3V Boris particle advancement with fused in-register sub-stepping, bilinear charge deposition, and parallel GPU wall collision and boundary tracking accelerated with Taichi (Vulkan, CUDA, CPU) with seamless, vectorized pure-NumPy CPU fallback kernels for maximum portability across any machine.
+* **Machine-Aware Hardware Profiling & Adaptive Resource Allocation**: Automatic host hardware discovery (RAM, logical/physical CPU cores, GPU/Vulkan acceleration) persisted in `configurations/hardware_profile.json`, automatically scaling memory budgets, pre-allocating particle buffers, and balancing parallel sweep workloads.
+* **Presheath-Volume Particle Budgeting**: Real presheath-volume weighting ($N_{\text{inj}} = n_{x,\text{presheath}} \times n_{y,\text{inj}}$) eliminates artificial particle dilution across long domains, guaranteeing unconstrained target PPC (50--200) across low/mid densities ($10^{15}\dots 10^{17}\,\text{m}^{-3}$) while enforcing a hardware-scaled $\ge 1{,}000{,}000$ particle safety budget at extreme densities ($10^{19}\,\text{m}^{-3}$).
+* **Dynamic RAM-Aware Sweep Scheduler & Throttling Guard**: Parametric sweep engine dynamically scales concurrent execution workers based on real-time available system memory (throttling to 1--2 workers on heavy meshes) and presents an intuitive `[⚠️ RAM Guard: 1-2 workers]` alert badge in the GUI.
+* **Downstream Plume Truncation & Pre-Flight Advisory**: Automated pre-flight detection of excessively long downstream plume regions ($L_{\text{plume}} > 3 \cdot r_{\text{accel}}$), offering interactive runtime pause warnings and automatic geometric truncation (`"truncate_downstream_plume": true`) that cuts mesh size by >20% without impacting optical extraction physics.
+* **Simulation Timer & Exact Computational Clock**: High-resolution wall-clock tracking accounting for active computation time (`ActiveSimulationTimer`), ensuring exported metrics reflect exact execution duration independent of sleep/pause states.
 * **Coordinate Systems (Cartesian 2D Slab vs. Axisymmetric $r\text{--}z$ Cylindrical)**: Configurable via `"coordinate_system": "axisymmetric"` (or `"cartesian"`). In Axisymmetric mode, the solver models true 3D circular beamlets with exact annular control volumes ($V_{\mathrm{cell}} = 2\pi r \Delta r h_i^x$), on-axis L'Hôpital boundary condition ($c_{N,0} = 4.0$), Birdsall & Langdon local-Cartesian coordinate rotation preserving canonical angular momentum ($L_z = r v_\theta$) and transverse kinetic energy, uniform circular injection ($r = r_{\mathrm{inj}}\sqrt{U}$), and true 3D beamlet cone divergence ($\theta_{\mathrm{3D}} = \arctan2(\sqrt{v_r^2 + v_\theta^2}, v_x)$).
 * **Specular Symmetry Reflection**: In `half_hole` and axisymmetric modes, particles crossing the symmetry boundary ($y < 0$) or outer domain ($y > L_y$) undergo physical specular reflection ($y \leftarrow -y, v_y \leftarrow -v_y$) rather than being deleted, preserving high-angle crossover rays and resolving low-density divergence underprediction.
 * **Automated Numerical Physics Controls**: Built-in automated checks for spatial Debye length resolution ($\Delta x, \Delta y \le \lambda_{\mathrm{D}}$), plasma frequency integration limits ($\Delta t \le 2\pi/\omega_{\mathrm{pi}}$), and CFL velocity limits ($v_{\max} \Delta t \le \Delta x$).
@@ -79,9 +84,10 @@ Python/
 │   ├── config.json                 # Primary JSON simulation configuration
 │   ├── configNSTAR.json            # NSTAR benchmark configuration
 │   ├── configRF.json               # RF co-extraction configuration
-│   └── newConfig.json              # Custom/experimental multi-grid configuration
+│   ├── newConfig.json              # Custom/experimental multi-grid configuration
+│   └── hardware_profile.json       # Host hardware capabilities & adaptive memory bounds
 ├── analyses/                       # Technical analysis reports & solver verification
-│   ├── injection_ppc_analysis.md   # Particle injection & PPC scaling report
+│   ├── injection_ppc_analysis.md   # Particle injection, PPC scaling & hardware budgeting report
 │   ├── low_density_divergence_report.md # Beam divergence investigation & NSTAR study
 │   ├── new_mesh_configuration.md   # Non-uniform multi-zone mesh walkthrough
 │   └── poisson_solver_convergence_report.md # Poisson convergence & adaptive solver report
@@ -109,6 +115,8 @@ Python/
 ├── physics/                        # Computational PIC-MCC physics core
 │   ├── simulator.py                # DigitalTwinSimulator state container & orchestrator
 │   ├── backend.py                  # Taichi backend initialization & GPU memory management
+│   ├── hardware.py                 # System discovery, RAM estimation & hardware profile manager
+│   ├── active_clock.py             # Active simulation runtime clock tracking
 │   ├── constants.py                # Fundamental physical constants (SI) & materials
 │   ├── mesh_utils.py               # Multi-zone non-uniform mesh & domain zoning routines
 │   ├── headless_sweep.py           # Headless parallel scenario runner & convergence checker

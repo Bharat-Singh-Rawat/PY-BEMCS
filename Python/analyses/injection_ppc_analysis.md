@@ -268,3 +268,37 @@ Set `"target_ppc": 600`.
 * Total ions: $\approx 50,000$ particles.
 * Even the fastest ions in the narrowest grid barrel maintain $> 40$ macroparticles per cell simultaneously.
 * Runs seamlessly under Taichi Vulkan GPU acceleration.
+
+---
+
+## 8. Machine-Aware Resource Management & Dynamic Presheath Budgeting (November 2026 Upgrade)
+
+### 8.1 Physical Presheath vs. Bounding-Box Budgeting
+A critical bottleneck identified during wide parametric sweeps ($n_0 = 10^{15} \to 10^{19}\text{ m}^{-3}$) was that dividing safety caps by the entire rectangular domain bounding box (`total_cells = nx * ny`) unnecessarily penalized low and moderate densities ($10^{15}\text{--}10^{17}\text{ m}^{-3}$), artificially reducing presheath PPC to $3\text{--}17$ despite the simulation running with $< 50,000$ total particles.
+
+In the updated architecture (`physics/mixins/domain.py`):
+1. **Presheath Injection Geometry Only**: The engine counts the physical injection cells ($N_{\text{presheath\_cells}} = n_{x,\text{presheath}} \times n_{y,\text{inj}}$) within the real plasma cylinder ($V_{\text{presheath}} = x_{\text{screen}} \cdot \pi r_{\text{inj}}^2$).
+2. **Conditional Unconstrained Budgeting**:
+   - If expected total steady-state macroparticles $\le \text{MAX\_PARTICLE\_BUDGET}$ (bound to at least $1,000,000$), the user's requested `target_ppc` (e.g. 50–200 PPC) is **100% unconstrained and unthrottled**.
+   - If expected total particles would breach the hardware limit (as occurs at $n_0 = 10^{19}\text{ m}^{-3}$ on sub-Debye meshes), the budget scales smoothly to prevent Out-Of-Memory (OOM) freezing.
+
+### 8.2 Machine Hardware Discovery (`physics/hardware.py` & `hardware_profile.json`)
+The system now automatically profiles the host computer's hardware using Python standard library primitives:
+* **Physical & Available RAM**: Queries OS memory dynamically (e.g. 31.65 GB total, 21.5 GB usable).
+* **Logical & Physical CPU Cores**: Queries available parallel execution threads.
+* **Persistent Configuration**: Saved to `configurations/hardware_profile.json`, allowing user overrides for RAM ceilings (`max_ram_usage_percent`, `reserved_os_ram_gb`, `max_particle_budget`).
+
+### 8.3 Dynamic RAM-Aware Parametric Sweep Scheduling
+Instead of launching a static thread pool that crashes system RAM on heavy scenarios:
+1. `ParallelSweepWorker` estimates each scenario's memory footprint from its discrete Laplacian SuperLU factor matrix: $\text{RAM}_{\text{LU}} \approx \mathcal{O}(N_x \cdot N_y^{1.45})$.
+2. **Light Scenarios ($n_0 \le 10^{17}\text{ m}^{-3}$)**: Automatically run on full CPU cores (8–10 parallel workers).
+3. **Heavy Scenarios ($n_0 \ge 3 \times 10^{18}\text{ m}^{-3}$)**: Automatically throttle concurrency to **1–2 workers**, keeping system RAM strictly below hardware limits.
+4. **Visual UI Alert**: The top-bar badge and status label dynamically display amber warning indicators when memory throttling is active (`⚡ Parallel Sweep [⚠️ RAM Guard: 1-2 workers | X/Y Done]`).
+
+### 8.4 Downstream Plume Truncation & Pre-Flight Advisory
+* **Pre-flight Estimation**: If the downstream plume is excessively long ($L_{\text{plume}} > 3 \cdot r_{\text{accel}}$) and mesh resolution creates $> 300,000$ cells, the simulator warns the user before starting that without downstream plume truncation, particles per cell must be modulated.
+* **Opt-in Truncation**: Setting `"truncate_downstream_plume": true` automatically restricts the plume to $2.5 \cdot r_{\text{accel}}$, reducing cell count by $25\%\text{--}55\%$ without affecting extraction optics.
+* **Runtime Cooperative Pause**: If memory or particle saturation occurs at runtime, the simulation pauses and presents an interactive dialog offering:
+  1. *Stop Simulation*
+  2. *Reshape Downstream Plume* (truncates $L_x$ and re-meshes on the fly while preserving valid beam particles)
+  3. *Continue at Own Risk*

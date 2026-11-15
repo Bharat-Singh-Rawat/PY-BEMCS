@@ -82,18 +82,22 @@ class ActiveDurationTracker:
     --------
     1. Unbiased OS monotonic clock:
        Uses QueryUnbiasedInterruptTime on Windows / CLOCK_MONOTONIC on Linux.
-    2. Heartbeat Delta Gap Rejection:
-       Any delta between ticks or updates exceeding `max_gap` (default 2.0 s)
-       is detected as a suspension or sleep event and completely rejected from
-       the accumulated elapsed duration.
+    2. Heartbeat Delta Gap Rejection (optional):
+       When `max_gap` is specified (> 0), any delta between ticks exceeding
+       `max_gap` is detected as a suspension or sleep event and completely
+       rejected from the accumulated elapsed duration.
+       When `max_gap` is None (default), gap rejection is disabled, and the tracker
+       continuously accumulates duration using the OS unbiased clock without
+       arbitrary step duration thresholds (crucial for numerical PIC steps which
+       can take several seconds per iteration at high plasma/neutral densities).
     3. Thread-safe control:
        Safe to query or update from GUI or worker threads.
     """
 
-    DEFAULT_MAX_GAP = 2.0  # seconds
+    DEFAULT_MAX_GAP: Optional[float] = None  # None: gap rejection disabled (uses unbiased OS clock)
 
-    def __init__(self, max_gap: float = DEFAULT_MAX_GAP):
-        self.max_gap = float(max_gap)
+    def __init__(self, max_gap: Optional[float] = DEFAULT_MAX_GAP):
+        self.max_gap = float(max_gap) if (max_gap is not None and max_gap > 0) else None
         self.total_elapsed: float = 0.0
         self.last_tick: Optional[float] = None
         self.running: bool = False
@@ -111,7 +115,7 @@ class ActiveDurationTracker:
             if self.running and self.last_tick is not None:
                 now = get_active_clock()
                 dt = now - self.last_tick
-                if 0.0 < dt < self.max_gap:
+                if dt > 0.0 and (self.max_gap is None or dt < self.max_gap):
                     self.total_elapsed += dt
             self.running = False
             self.last_tick = None
@@ -129,13 +133,13 @@ class ActiveDurationTracker:
 
     def tick(self) -> float:
         """
-        Periodic heartbeat update (e.g. called on every 100ms timer timeout).
+        Periodic heartbeat or step update.
 
         Accumulates elapsed time since the previous tick if and only if:
         - The tracker is running.
-        - The delta is positive and strictly less than `max_gap`.
+        - The delta is positive and (if max_gap is set) strictly less than `max_gap`.
 
-        If `dt >= max_gap`, a suspension / sleep / freeze event occurred:
+        If `max_gap` is set and `dt >= max_gap`, a suspension / sleep / freeze event occurred:
         the gap is discarded and not added to `total_elapsed`.
         """
         with self._lock:
@@ -146,7 +150,7 @@ class ActiveDurationTracker:
             now = get_active_clock()
             if self.last_tick is not None:
                 dt = now - self.last_tick
-                if 0.0 < dt < self.max_gap:
+                if dt > 0.0 and (self.max_gap is None or dt < self.max_gap):
                     self.total_elapsed += dt
                 # dt >= max_gap: suspension gap! Discarded.
 
@@ -163,7 +167,7 @@ class ActiveDurationTracker:
             if self.running and self.last_tick is not None:
                 now = get_active_clock()
                 dt = now - self.last_tick
-                if 0.0 < dt < self.max_gap:
+                if dt > 0.0 and (self.max_gap is None or dt < self.max_gap):
                     elapsed += dt
             return elapsed
 

@@ -170,6 +170,7 @@ def test_divergence_graph():
     assert any("θ95" in t for t in leg_texts), f"Expected θ95 in legend texts, got {leg_texts}"
 
     # Clean up
+    app._data_saved = True
     app.close()
     print("ALL TESTS PASSED SUCCESSFULLY!")
 
