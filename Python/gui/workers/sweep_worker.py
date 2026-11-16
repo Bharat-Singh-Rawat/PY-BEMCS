@@ -3,6 +3,7 @@ Background worker executing multi-scenario sweeps concurrently via ProcessPoolEx
 """
 
 import os
+import copy
 import time
 import atexit
 import tempfile

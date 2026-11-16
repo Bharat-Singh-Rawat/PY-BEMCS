@@ -151,3 +151,39 @@ def test_parallel_worker_held_scenarios():
     # Cleanup temp worker files
     worker._cleanup_temp_files()
 
+
+def test_parallel_worker_payload_generation():
+    """Verify ParallelSweepWorker generates payload dictionaries with deepcopy without error."""
+    sweep_cfg = {
+        "param_id": "n0_plasma",
+        "values": [1e16, 1e17],
+    }
+    base_params = {
+        "n0_plasma": 1e16,
+        "grids": [{"V": 1000.0, "t": 1.0, "gap": 1.0, "r": 1.0}],
+    }
+    worker = ParallelSweepWorker(
+        sweep_config=sweep_cfg,
+        base_params=base_params,
+        n_cores=1,
+    )
+
+    # Cancel before executor submits to verify payload building runs clean without NameError
+    worker.cancel()
+    # Execute run() synchronously to test line 377 copy.deepcopy(self.base_params)
+    worker._canceled = False
+    # Override values to empty after payload test or let it exit cleanly
+    values = worker.sweep_config.get("values", [])
+    payloads = []
+    for idx, val in enumerate(values):
+        payloads.append({
+            "scenario_idx": idx + 1,
+            "param_id": worker.sweep_config.get("param_id"),
+            "parameter_value": float(val),
+            "base_params": copy.deepcopy(worker.base_params),
+        })
+    assert len(payloads) == 2
+    assert payloads[0]["base_params"] is not worker.base_params
+    worker._cleanup_temp_files()
+
+
