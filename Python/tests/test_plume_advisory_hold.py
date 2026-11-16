@@ -187,3 +187,41 @@ def test_parallel_worker_payload_generation():
     worker._cleanup_temp_files()
 
 
+def test_sweep_mixin_prompt_scenario_plume_advisory():
+    """Verify SweepMixin._prompt_scenario_plume_advisory handles os and releases scenario without NameError."""
+    from gui.app.main_window import DigitalTwinApp
+
+    qt_app = QApplication.instance() or QApplication(sys.argv)
+    app = DigitalTwinApp()
+
+    app.sweep_config = {"param_id": "n0_plasma", "values": [1e16, 1.12e18]}
+    app._scenarios_pending_advisory = {
+        2: {
+            "has_advisory": True,
+            "scenario_idx": 2,
+            "parameter_value": 1.12e18,
+            "n0": 1.12e18,
+            "plume_len": 8.0,
+            "r_accel": 0.8,
+            "Lx": 12.94,
+            "recommended_Lx": 7.44,
+            "total_cells": 1_540_000,
+            "excess_cells": 350_000,
+            "pct_reduction": 23.5,
+            "est_ram_gb": 1.85,
+            "target_ppc": 200.0,
+            "effective_ppc": 22.0,
+        }
+    }
+    app._scenario_advisory_decisions = {}
+
+    # Under offscreen test environment, it should execute without blocking and set decision to 'truncate'
+    app._prompt_scenario_plume_advisory(2)
+    assert 2 in app._scenario_advisory_decisions
+    assert app._scenario_advisory_decisions[2] == "truncate"
+
+    app._data_saved = True
+    app.close()
+
+
+

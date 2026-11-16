@@ -4,6 +4,8 @@ Coordinates automated execution across multiple physical scenarios,
 steady-state condition checks, scenario transitions, and results collection.
 """
 
+import os
+import sys
 import time
 import copy
 import numpy as np
@@ -876,60 +878,66 @@ class SweepMixin:
 
     def _prompt_scenario_plume_advisory(self, scenario_idx: int):
         """Show interactive modal dialog for a held scenario and apply choice."""
-        adv_info = getattr(self, '_scenarios_pending_advisory', {}).get(scenario_idx)
-        if not adv_info:
-            return
+        try:
+            adv_info = getattr(self, '_scenarios_pending_advisory', {}).get(scenario_idx)
+            if not adv_info:
+                return
 
-        from gui.dialogs import ScenarioPlumeAdvisoryDialog
+            from gui.dialogs import ScenarioPlumeAdvisoryDialog
 
-        remaining_held = [
-            s for s in getattr(self, '_scenarios_pending_advisory', {}).keys()
-            if s not in getattr(self, '_scenario_advisory_decisions', {})
-        ]
+            remaining_held = [
+                s for s in getattr(self, '_scenarios_pending_advisory', {}).keys()
+                if s not in getattr(self, '_scenario_advisory_decisions', {})
+            ]
 
-        # In automated test environments (offscreen), default to truncate without blocking
-        if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("PYTEST_CURRENT_TEST"):
-            choice = "truncate"
-            apply_all = True
-        else:
-            dlg = ScenarioPlumeAdvisoryDialog(
-                scen_num=scenario_idx,
-                advisory_info=adv_info,
-                remaining_held_count=len(remaining_held),
-                parent=self,
-            )
-            dlg.exec_()
-            choice = dlg.get_choice()
-            apply_all = dlg.apply_to_all()
+            # In automated test environments (offscreen), default to truncate without blocking
+            if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("PYTEST_CURRENT_TEST"):
+                choice = "truncate"
+                apply_all = True
+            else:
+                dlg = ScenarioPlumeAdvisoryDialog(
+                    scen_num=scenario_idx,
+                    advisory_info=adv_info,
+                    remaining_held_count=len(remaining_held),
+                    parent=self,
+                )
+                dlg.exec_()
+                choice = dlg.get_choice()
+                apply_all = dlg.apply_to_all()
 
-        targets = remaining_held if apply_all else [scenario_idx]
+            targets = remaining_held if apply_all else [scenario_idx]
 
-        if choice in ("truncate", "full"):
-            truncate_plume = (choice == "truncate")
-            for s_num in targets:
-                self._scenario_advisory_decisions[s_num] = choice
+            if choice in ("truncate", "full"):
+                truncate_plume = (choice == "truncate")
+                for s_num in targets:
+                    self._scenario_advisory_decisions[s_num] = choice
 
-                # Release in parallel sweep worker
-                if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-                    self.parallel_sweep_worker.release_scenario(s_num, truncate_plume=truncate_plume)
+                    # Release in parallel sweep worker
+                    if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+                        self.parallel_sweep_worker.release_scenario(s_num, truncate_plume=truncate_plume)
 
-                # In sequential sweep if this is the active scenario:
-                if not getattr(self, 'is_parallel_sweep', False) and getattr(self, 'sweep_current_idx', 0) + 1 == s_num:
-                    if hasattr(self, 'sim'):
-                        self.sim.truncate_downstream_plume = truncate_plume
-                    self._apply_sweep_value(self.sweep_config["param_id"], adv_info.get("parameter_value"))
-                    self.build_domain(force=True)
-                    if not getattr(self, 'sim_isRunning', False):
-                        self.sim.injection_enabled = True
-                        self.sim_isRunning = True
-                        self._resume_simulation_timer()
-                        self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
-                        self.update_sim_status_badge("RUNNING")
+                    # In sequential sweep if this is the active scenario:
+                    if not getattr(self, 'is_parallel_sweep', False) and getattr(self, 'sweep_current_idx', 0) + 1 == s_num:
+                        if hasattr(self, 'sim'):
+                            self.sim.truncate_downstream_plume = truncate_plume
+                        self._apply_sweep_value(self.sweep_config["param_id"], adv_info.get("parameter_value"))
+                        self.build_domain(force=True)
+                        if not getattr(self, 'sim_isRunning', False):
+                            self.sim.injection_enabled = True
+                            self.sim_isRunning = True
+                            self._resume_simulation_timer()
+                            self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
+                            self.update_sim_status_badge("RUNNING")
 
-            self._update_scenario_selector_dropdown()
-            strategy_name = "Truncated Plume (High PPC)" if truncate_plume else "Full Domain (Modulated PPC)"
+                self._update_scenario_selector_dropdown()
+                strategy_name = "Truncated Plume (High PPC)" if truncate_plume else "Full Domain (Modulated PPC)"
+                if hasattr(self, 'lbl_status'):
+                    self.lbl_status.setText(f"Status: Scenario(s) {targets} released with {strategy_name}.")
+        except Exception as err:
+            import traceback
+            traceback.print_exc()
             if hasattr(self, 'lbl_status'):
-                self.lbl_status.setText(f"Status: Scenario(s) {targets} released with {strategy_name}.")
+                self.lbl_status.setText(f"Status: Error in plume advisory dialog: {err}")
 
     def _on_sweep_scenario_selected(self, index):
         """User switched scenario in top dropdown: immediately refresh canvas, inputs, and toggle button."""
@@ -937,12 +945,16 @@ class SweepMixin:
             return
         scenario_idx = index + 1
 
-        # Check if selected scenario requires user action on downstream plume advisory
-        if (
-            scenario_idx in getattr(self, '_scenarios_pending_advisory', {})
-            and scenario_idx not in getattr(self, '_scenario_advisory_decisions', {})
-        ):
-            self._prompt_scenario_plume_advisory(scenario_idx)
+        try:
+            # Check if selected scenario requires user action on downstream plume advisory
+            if (
+                scenario_idx in getattr(self, '_scenarios_pending_advisory', {})
+                and scenario_idx not in getattr(self, '_scenario_advisory_decisions', {})
+            ):
+                self._prompt_scenario_plume_advisory(scenario_idx)
+        except Exception as err:
+            import traceback
+            traceback.print_exc()
 
         cfg = getattr(self, 'sweep_config', {})
         values = cfg.get("values", [])
