@@ -244,6 +244,118 @@ def estimate_payload_ram_gb(payload: dict) -> float:
     return estimate_mesh_memory_gb(nx, ny) + 1.2
 
 
+def check_scenario_plume_advisory(params: dict) -> dict:
+    """
+    Evaluate whether a scenario will trigger the downstream plume memory warning and PPC modulation.
+    Returns a dictionary with advisory details if triggered, or {'has_advisory': False} otherwise.
+    """
+    import numpy as np
+
+    grids = params.get("grids", [])
+    if not grids:
+        return {"has_advisory": False}
+
+    if params.get("truncate_downstream_plume", False):
+        return {"has_advisory": False}
+
+    n0 = float(params.get("n0_plasma", params.get("n0", 1e17)))
+    Te_up = float(params.get("Te_up", 2.9))
+    ratio_debye = float(params.get(r"\deltax/debye_length", params.get("dx_over_debye", 0.8)))
+
+    eps0 = 8.8541878128e-12
+    q = 1.602176634e-19
+    debye_length = np.sqrt(eps0 * Te_up / (q * max(n0, 1.0) * 0.61))
+    debye_mm = debye_length * 1e3
+    dx = max(0.001, ratio_debye * debye_mm)
+    dy = dx
+
+    user_gap = float(params.get('upstream_gap_mm', 0.0))
+    screen_r = float(grids[0]['r']) if grids else 0.80
+    upstream_gap = user_gap if user_gap > 0.0 else (0.75 * screen_r)
+
+    total_grid_thickness = sum(float(g['t']) + float(g['gap']) for g in grids) if grids else 3.0
+    x_last_grid_end = upstream_gap + total_grid_thickness - float(grids[-1]['gap']) if grids else 1.0
+
+    user_Lx = params.get('Lx', None)
+    if user_Lx is not None and float(user_Lx) > 0:
+        Lx = float(user_Lx)
+    else:
+        Lx = upstream_gap + total_grid_thickness
+
+    user_Ly = params.get('Ly', None)
+    if user_Ly is not None and float(user_Ly) > 0:
+        Ly = float(user_Ly)
+    else:
+        dis_cham = params.get("discharge_chamber")
+        pitch = float(params.get("pitch_mm", dis_cham.get("pitch_mm", 3.0) if isinstance(dis_cham, dict) else 3.0))
+        d_bound = 0.5 * (screen_r + pitch)
+        geometry = str(params.get('geometry', 'half_hole')).strip().lower()
+        if geometry == 'two_holes':
+            Ly = 4.0 * d_bound
+        elif geometry == 'one_hole':
+            Ly = 2.0 * d_bound
+        else:
+            Ly = d_bound
+
+    nx = max(12, int(Lx / dx) + 1)
+    ny = max(12, int(Ly / dy) + 1)
+    total_cells = nx * ny
+
+    r_accel_exit = float(grids[-1]['r'])
+    plume_len = max(0.0, Lx - x_last_grid_end)
+    recommended_plume_len = min(plume_len, 2.5 * r_accel_exit)
+    recommended_Lx = round(x_last_grid_end + recommended_plume_len, 3)
+
+    if plume_len > 3.0 * r_accel_exit and total_cells > 300_000:
+        excess_cells = int(total_cells * (1.0 - recommended_Lx / max(Lx, 1e-6)))
+        est_ram_gb = estimate_mesh_memory_gb(nx, ny)
+        target_ppc = float(params.get('target_ppc', 40.0))
+
+        hw = detect_hardware_profile()
+        max_budget = max(1_000_000.0, float(hw.max_particle_budget))
+
+        user_inj_y = params.get('inj_y_length_mm', params.get('inj_y_length', None))
+        geometry = str(params.get('geometry', 'half_hole')).strip().lower()
+        max_inj_y = (0.5 * Ly) if geometry == 'one_hole' else (Ly - dy)
+        inj_y_span = min(float(user_inj_y), max_inj_y) if (user_inj_y is not None and float(user_inj_y) > 0) else min(float(screen_r), max_inj_y)
+
+        ix_presheath = max(1, int(upstream_gap / dx))
+        iy_inj = max(1, int(inj_y_span / dy))
+        n_presheath_cells = max(1, ix_presheath * iy_inj)
+
+        beam_len = max(0.0, Lx - upstream_gap)
+        ratio_beam = (beam_len / max(upstream_gap, 0.1)) / 5.0
+        est_total_macro = n_presheath_cells * target_ppc * (1.0 + ratio_beam)
+
+        if est_total_macro > max_budget:
+            budget_scale = max_budget / max(est_total_macro, 1.0)
+            effective_ppc = max(10.0, min(target_ppc, target_ppc * budget_scale))
+            modulated = True
+        else:
+            effective_ppc = target_ppc
+            modulated = False
+
+        pct_reduction = (excess_cells / max(total_cells, 1)) * 100.0
+
+        return {
+            "has_advisory": True,
+            "plume_len": plume_len,
+            "r_accel": r_accel_exit,
+            "Lx": Lx,
+            "recommended_Lx": recommended_Lx,
+            "total_cells": total_cells,
+            "excess_cells": excess_cells,
+            "pct_reduction": pct_reduction,
+            "est_ram_gb": est_ram_gb,
+            "target_ppc": target_ppc,
+            "effective_ppc": effective_ppc,
+            "modulated_budget": modulated,
+            "n0": n0,
+        }
+
+    return {"has_advisory": False}
+
+
 def estimate_optimal_worker_concurrency(
     scenario_cells_list: list,
     hardware_profile: Optional[HardwareProfile] = None,

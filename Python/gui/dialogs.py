@@ -2391,4 +2391,142 @@ class SweepResultsDialog(QDialog):
             QMessageBox.information(self, "Export Complete", f"Sweep results successfully saved to:\n{fpath}")
 
 
+class ScenarioPlumeAdvisoryDialog(QDialog):
+    """
+    Interactive modal dialog prompted when a sweep scenario triggers the
+    hardware plume warning and PPC modulation advisory.
+    Allows user to:
+      1. Truncate downstream plume to recommended Lx (saving mesh RAM & restoring high PPC).
+      2. Keep full domain with modulated PPC.
+      3. Optionally apply this decision to all other held scenarios in the sweep.
+    """
+    def __init__(self, scen_num: int, advisory_info: dict, remaining_held_count: int = 0, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Scenario {scen_num} - Hardware & Physics Advisory")
+        self.setMinimumWidth(540)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
+
+        self.choice = "hold"
+        self._apply_to_all = False
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # Header box
+        header_frame = QFrame()
+        header_frame.setStyleSheet(
+            "QFrame { background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 10px; }"
+        )
+        h_layout = QVBoxLayout(header_frame)
+        h_layout.setContentsMargins(4, 4, 4, 4)
+        h_layout.setSpacing(4)
+
+        val_str = f"{advisory_info.get('n0', 1e18):.3e}"
+        lbl_title = QLabel(f"<b>⚠️ Hardware & Physics Advisory: Scenario {scen_num} (n₀ = {val_str} m⁻³)</b>")
+        lbl_title.setStyleSheet("color: #92400e; font-size: 13px;")
+        h_layout.addWidget(lbl_title)
+
+        lbl_desc = QLabel(
+            "The downstream plume region in this scenario is very long relative to the accelerator aperture, "
+            "producing a large number of vacuum mesh cells. To prevent out-of-memory crashes, Particles Per Cell (PPC) "
+            "must be modulated unless the downstream region is truncated."
+        )
+        lbl_desc.setWordWrap(True)
+        lbl_desc.setStyleSheet("color: #78350f; font-size: 11px;")
+        h_layout.addWidget(lbl_desc)
+        layout.addWidget(header_frame)
+
+        # Metrics summary table / form
+        grp_metrics = QGroupBox("Scenario Mesh & Particle Budget")
+        form_metrics = QFormLayout(grp_metrics)
+        form_metrics.setLabelAlignment(Qt.AlignRight)
+
+        plume_len = advisory_info.get("plume_len", 8.0)
+        r_accel = advisory_info.get("r_accel", 0.8)
+        Lx = advisory_info.get("Lx", 12.94)
+        rec_Lx = advisory_info.get("recommended_Lx", 7.44)
+        total_cells = advisory_info.get("total_cells", 1_500_000)
+        excess_cells = advisory_info.get("excess_cells", 350_000)
+        pct_red = advisory_info.get("pct_reduction", 23.0)
+        ram_gb = advisory_info.get("est_ram_gb", 1.8)
+        target_ppc = advisory_info.get("target_ppc", 200.0)
+        effective_ppc = advisory_info.get("effective_ppc", 20.0)
+
+        form_metrics.addRow("Current Domain Extent:", QLabel(f"<b>Lx = {Lx:.2f} mm</b> (Plume gap = {plume_len:.2f} mm > 3 × r_accel)"))
+        form_metrics.addRow("Mesh Grid Size:", QLabel(f"<b>{total_cells:,} cells</b> (Est. Memory: ~{ram_gb:.2f} GB)"))
+        form_metrics.addRow("Target PPC vs Budget:", QLabel(f"Target = {target_ppc:.0f} PPC → <b>Modulated to {effective_ppc:.1f} PPC</b>"))
+        form_metrics.addRow("Recommended Truncation:", QLabel(f"<b>Lx ≤ {rec_Lx:.2f} mm</b> (Frees ~{excess_cells:,} cells, -{pct_red:.1f}% RAM)"))
+        layout.addWidget(grp_metrics)
+
+        # Options guidance
+        lbl_guide = QLabel(
+            "<b>Select how you want to execute this scenario:</b><br>"
+            "• <b>Truncate Downstream Plume (Recommended)</b>: Slices excess downstream plume to 2.5×r_accel. "
+            "Preserves optical extraction physics and divergence exactly, reduces RAM by >20%, and unlocks higher PPC.<br>"
+            "• <b>Keep Full Domain</b>: Retains the full 8 mm downstream plume, but runs with modulated PPC (~20) "
+            "to prevent hardware memory saturation."
+        )
+        lbl_guide.setWordWrap(True)
+        lbl_guide.setStyleSheet("color: #334155; font-size: 11px;")
+        layout.addWidget(lbl_guide)
+
+        # Apply to all checkbox
+        if remaining_held_count > 1:
+            self.chk_apply_all = QCheckBox(
+                f"Apply this choice to all remaining scenarios with this advisory ({remaining_held_count} scenarios)"
+            )
+            self.chk_apply_all.setStyleSheet("font-weight: bold; color: #1e293b; margin-top: 4px;")
+            self.chk_apply_all.setChecked(True)
+            layout.addWidget(self.chk_apply_all)
+        else:
+            self.chk_apply_all = None
+
+        # Action buttons
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(8)
+
+        btn_hold = QPushButton("⏸ Keep on Hold")
+        btn_hold.setToolTip("Leave this scenario held; do not start it yet")
+        btn_hold.clicked.connect(self._on_hold)
+        btn_box.addWidget(btn_hold)
+
+        btn_box.addStretch()
+
+        btn_full = QPushButton("🌐 Keep Full Domain")
+        btn_full.setStyleSheet("background-color: #f1f5f9; color: #0f172a; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 4px;")
+        btn_full.setToolTip("Run this scenario with full domain length and modulated PPC")
+        btn_full.clicked.connect(self._on_full)
+        btn_box.addWidget(btn_full)
+
+        btn_trunc = QPushButton("✂️ Truncate Plume (Recommended)")
+        btn_trunc.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px 14px; border-radius: 4px;")
+        btn_trunc.setToolTip(f"Truncate downstream plume to Lx <= {rec_Lx:.2f} mm to save RAM and restore high PPC")
+        btn_trunc.clicked.connect(self._on_truncate)
+        btn_box.addWidget(btn_trunc)
+
+        layout.addLayout(btn_box)
+
+    def _on_truncate(self):
+        self.choice = "truncate"
+        self._apply_to_all = bool(self.chk_apply_all and self.chk_apply_all.isChecked())
+        self.accept()
+
+    def _on_full(self):
+        self.choice = "full"
+        self._apply_to_all = bool(self.chk_apply_all and self.chk_apply_all.isChecked())
+        self.accept()
+
+    def _on_hold(self):
+        self.choice = "hold"
+        self._apply_to_all = False
+        self.reject()
+
+    def get_choice(self) -> str:
+        return self.choice
+
+    def apply_to_all(self) -> bool:
+        return self._apply_to_all
+
+
+
 

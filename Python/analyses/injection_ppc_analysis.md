@@ -302,3 +302,17 @@ Instead of launching a static thread pool that crashes system RAM on heavy scena
   1. *Stop Simulation*
   2. *Reshape Downstream Plume* (truncates $L_x$ and re-meshes on the fly while preserving valid beam particles)
   3. *Continue at Own Risk*
+
+### 8.5 Per-Scenario Hold & Interactive Advisory Workflow in Sweeps
+When executing multi-scenario parametric sweeps (e.g. density sweeps across decades):
+1. **Pre-flight Advisory Hold**:
+   - Light scenarios (e.g. $n_0 = 10^{16}\text{ m}^{-3}$) launch and execute immediately without delay.
+   - Scenarios exceeding the $300{,}000$ mesh cell and plume length threshold (e.g. $n_0 \ge 1.12 \times 10^{18}\text{ m}^{-3}$) are automatically placed on **Advisory Hold** (`[⚠️ Action Required - Plume Advisory]`).
+2. **Interactive User Decision Dialog (`ScenarioPlumeAdvisoryDialog`)**:
+   - When the user selects a held scenario from the top dropdown (or clicks `⚠️ CONFIGURE`), an interactive modal dialog presents the exact mesh footprint, RAM estimate, and PPC impact.
+   - The user chooses between:
+     - **Truncate Downstream Plume (Recommended)**: Slices excess vacuum plume to $2.5 \cdot r_{\text{accel}}$, reducing mesh cells by $>20\%$, saving RAM, and restoring unconstrained target PPC.
+     - **Keep Full Domain**: Simulates the full un-truncated plume with automatically modulated PPC to fit within hardware memory boundaries.
+   - **Batch Application**: An opt-in checkbox (*Apply to all remaining scenarios on hold*) allows resolving all remaining heavy scenarios in one click.
+3. **Queue Progression**:
+   - If all un-held scenarios finish and only held scenarios remain, the engine automatically surfaces the advisory dialog for the next scenario in line, preventing unmonitored sweeps from stalling.

@@ -648,6 +648,24 @@ class SweepMixin:
         if hasattr(self, '_resume_simulation_timer'):
             self._resume_simulation_timer()
 
+        # Scan scenarios for downstream plume memory advisories
+        from physics.hardware import check_scenario_plume_advisory
+        from physics.headless_sweep import apply_sweep_param_to_dict
+
+        self._scenarios_pending_advisory = {}
+        self._scenario_advisory_decisions = {}
+
+        base_params = copy.deepcopy(self.get_params()) if hasattr(self, 'get_params') else {}
+        for idx, val in enumerate(config.get("values", [])):
+            scen_num = idx + 1
+            scen_params = apply_sweep_param_to_dict(base_params, config.get("param_id", ""), val, sweep_config=config)
+            adv = check_scenario_plume_advisory(scen_params)
+            if adv.get("has_advisory", False):
+                adv["scenario_idx"] = scen_num
+                adv["parameter_value"] = val
+                adv["param_id"] = config.get("param_id", "")
+                self._scenarios_pending_advisory[scen_num] = adv
+
         total_scenarios = len(config.get("values", []))
         param_label = config.get("param_label", "Parameter")
         use_parallel = config.get("parallel", False) and total_scenarios > 0
@@ -657,13 +675,15 @@ class SweepMixin:
             self.combo_sweep_scenario.blockSignals(True)
             self.combo_sweep_scenario.clear()
             for idx, val in enumerate(config.get("values", [])):
+                scen_num = idx + 1
                 val_str = (
                     format_sci_value(val)
                     if (config.get("param_id") in ("n0_plasma", "n0") or abs(val) >= 1e4 or (0 < abs(val) <= 1e-3))
                     else f"{val:.3g}"
                 )
                 unit_str = f" {config.get('param_unit', '')}" if config.get('param_unit') else ""
-                self.combo_sweep_scenario.addItem(f"Scenario {idx + 1}: {config.get('param_id', 'param')} = {val_str}{unit_str}  [⏳ Queued]")
+                tag = "[⚠️ Action Required - Plume Advisory]" if scen_num in self._scenarios_pending_advisory else "[⏳ Queued]"
+                self.combo_sweep_scenario.addItem(f"Scenario {scen_num}: {config.get('param_id', 'param')} = {val_str}{unit_str}  {tag}")
             self.combo_sweep_scenario.setCurrentIndex(0)
             self.combo_sweep_scenario.blockSignals(False)
             self.combo_sweep_scenario.setVisible(True)
@@ -675,6 +695,16 @@ class SweepMixin:
             n_cores = int(config.get("n_cores", 8))
             self._start_parallel_sweep(config, n_cores)
             return
+
+        # Check if Scenario 1 in sequential sweep triggers the plume advisory
+        if 1 in self._scenarios_pending_advisory and 1 not in self._scenario_advisory_decisions:
+            self._prompt_scenario_plume_advisory(1)
+            if 1 not in self._scenario_advisory_decisions:
+                self._sweep_paused_current = True
+                self.sim_isRunning = False
+                if hasattr(self, 'lbl_status'):
+                    self.lbl_status.setText("Status: Scenario 1 held awaiting plume decision. Select it in dropdown to choose.")
+                return
 
         first_val = config["values"][0] if total_scenarios > 0 else 0.0
         first_val_str = (
@@ -701,8 +731,10 @@ class SweepMixin:
 
         # Apply initial scenario value
         self._apply_sweep_value(config["param_id"], first_val)
+        if hasattr(self, 'sim'):
+            self.sim.truncate_downstream_plume = (self._scenario_advisory_decisions.get(1) == "truncate")
+        self.build_domain(force=True)
 
-        # Domain was built by the user before starting the sweep
         self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
         self.sweep_scenario_entry_iter = None
 
@@ -796,6 +828,11 @@ class SweepMixin:
         self._current_rendered_scenario_grid_idx = None
         scatter_limit = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 2000))
 
+        held_indices = [
+            s for s in getattr(self, '_scenarios_pending_advisory', {}).keys()
+            if s not in getattr(self, '_scenario_advisory_decisions', {})
+        ]
+
         self.parallel_sweep_worker = ParallelSweepWorker(
             config,
             base_params,
@@ -804,12 +841,14 @@ class SweepMixin:
             parent=self,
             remaining_indices=remaining_indices,
             existing_results=self.sweep_results,
+            held_scenarios=held_indices,
         )
 
         self.parallel_sweep_worker.progress_updated.connect(self._on_parallel_progress_updated)
         self.parallel_sweep_worker.scenario_completed.connect(self._on_parallel_scenario_completed)
         self.parallel_sweep_worker.sweep_finished.connect(self._on_parallel_sweep_finished)
         self.parallel_sweep_worker.sweep_error.connect(self._on_parallel_sweep_error)
+        self.parallel_sweep_worker.scenario_action_needed.connect(self._on_scenario_action_needed)
 
         # Start live GUI monitor timer to sync top-bar dropdown items and active canvas view
         if not hasattr(self, 'sweep_monitor_timer') or self.sweep_monitor_timer is None:
@@ -830,11 +869,81 @@ class SweepMixin:
                 self._update_toggle_btn_for_scenario(active_idx + 1)
                 self._render_sweep_scenario_snapshot(active_idx + 1)
 
+    def _on_scenario_action_needed(self, scenario_idx: int, adv_info: dict):
+        """Worker reached a held scenario; prompt user for decision."""
+        if scenario_idx not in getattr(self, '_scenario_advisory_decisions', {}):
+            self._prompt_scenario_plume_advisory(scenario_idx)
+
+    def _prompt_scenario_plume_advisory(self, scenario_idx: int):
+        """Show interactive modal dialog for a held scenario and apply choice."""
+        adv_info = getattr(self, '_scenarios_pending_advisory', {}).get(scenario_idx)
+        if not adv_info:
+            return
+
+        from gui.dialogs import ScenarioPlumeAdvisoryDialog
+
+        remaining_held = [
+            s for s in getattr(self, '_scenarios_pending_advisory', {}).keys()
+            if s not in getattr(self, '_scenario_advisory_decisions', {})
+        ]
+
+        # In automated test environments (offscreen), default to truncate without blocking
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("PYTEST_CURRENT_TEST"):
+            choice = "truncate"
+            apply_all = True
+        else:
+            dlg = ScenarioPlumeAdvisoryDialog(
+                scen_num=scenario_idx,
+                advisory_info=adv_info,
+                remaining_held_count=len(remaining_held),
+                parent=self,
+            )
+            dlg.exec_()
+            choice = dlg.get_choice()
+            apply_all = dlg.apply_to_all()
+
+        targets = remaining_held if apply_all else [scenario_idx]
+
+        if choice in ("truncate", "full"):
+            truncate_plume = (choice == "truncate")
+            for s_num in targets:
+                self._scenario_advisory_decisions[s_num] = choice
+
+                # Release in parallel sweep worker
+                if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+                    self.parallel_sweep_worker.release_scenario(s_num, truncate_plume=truncate_plume)
+
+                # In sequential sweep if this is the active scenario:
+                if not getattr(self, 'is_parallel_sweep', False) and getattr(self, 'sweep_current_idx', 0) + 1 == s_num:
+                    if hasattr(self, 'sim'):
+                        self.sim.truncate_downstream_plume = truncate_plume
+                    self._apply_sweep_value(self.sweep_config["param_id"], adv_info.get("parameter_value"))
+                    self.build_domain(force=True)
+                    if not getattr(self, 'sim_isRunning', False):
+                        self.sim.injection_enabled = True
+                        self.sim_isRunning = True
+                        self._resume_simulation_timer()
+                        self._sim_worker.start_sim(self.get_params(), run_id=getattr(self, '_sim_run_id', 0))
+                        self.update_sim_status_badge("RUNNING")
+
+            self._update_scenario_selector_dropdown()
+            strategy_name = "Truncated Plume (High PPC)" if truncate_plume else "Full Domain (Modulated PPC)"
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.setText(f"Status: Scenario(s) {targets} released with {strategy_name}.")
+
     def _on_sweep_scenario_selected(self, index):
         """User switched scenario in top dropdown: immediately refresh canvas, inputs, and toggle button."""
         if index < 0:
             return
         scenario_idx = index + 1
+
+        # Check if selected scenario requires user action on downstream plume advisory
+        if (
+            scenario_idx in getattr(self, '_scenarios_pending_advisory', {})
+            and scenario_idx not in getattr(self, '_scenario_advisory_decisions', {})
+        ):
+            self._prompt_scenario_plume_advisory(scenario_idx)
+
         cfg = getattr(self, 'sweep_config', {})
         values = cfg.get("values", [])
         param_id = cfg.get("param_id", "")
@@ -988,6 +1097,11 @@ class SweepMixin:
                 comp_s = info.get("computation_time_s")
                 comp_tag = f", {format_comp_duration(comp_s)}" if (comp_s is not None and np.isfinite(comp_s) and comp_s > 0) else ""
 
+                is_held_advisory = (
+                    scen_num in getattr(self, '_scenarios_pending_advisory', {})
+                    and scen_num not in getattr(self, '_scenario_advisory_decisions', {})
+                )
+
                 if status == "running":
                     tag = f"[▶ Running - {scen_iter} iters]"
                 elif status == "paused":
@@ -996,6 +1110,8 @@ class SweepMixin:
                     tag = f"[✔ Done - {scen_iter} iters{comp_tag}]"
                 elif status == "stopped":
                     tag = f"[⏹ Stopped]"
+                elif is_held_advisory or status == "action_required":
+                    tag = "[⚠️ Action Required - Plume Advisory]"
                 else:
                     tag = "[⏳ Queued]"
 
@@ -1038,6 +1154,8 @@ class SweepMixin:
 
         from physics.headless_sweep import apply_sweep_param_to_dict
         scenario_params = apply_sweep_param_to_dict(base_params, param_id, val, sweep_config=cfg)
+        if getattr(self, '_scenario_advisory_decisions', {}).get(scenario_idx) == "truncate":
+            scenario_params["truncate_downstream_plume"] = True
 
         try:
             from physics.simulator import DigitalTwinSimulator
@@ -1110,6 +1228,14 @@ class SweepMixin:
         if not hasattr(self, 'btn_toggle'):
             return
 
+        is_held = (
+            scenario_idx in getattr(self, '_scenarios_pending_advisory', {})
+            and scenario_idx not in getattr(self, '_scenario_advisory_decisions', {})
+        )
+        if is_held:
+            self.btn_toggle.setText("⚠️ CONFIGURE")
+            return
+
         # Parallel sweep worker running (either active or paused/stopped)
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning():
             is_paused = self.parallel_sweep_worker.is_scenario_paused(scenario_idx)
@@ -1169,6 +1295,14 @@ class SweepMixin:
         if cur_idx < 0:
             cur_idx = 0
         scen_num = cur_idx + 1
+
+        # If scenario is held on downstream plume advisory, prompt user choice
+        if (
+            scen_num in getattr(self, '_scenarios_pending_advisory', {})
+            and scen_num not in getattr(self, '_scenario_advisory_decisions', {})
+        ):
+            self._prompt_scenario_plume_advisory(scen_num)
+            return
 
         # Case A: Parallel sweep active
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning():
@@ -2463,8 +2597,28 @@ class SweepMixin:
         values = cfg["values"]
 
         if self.sweep_current_idx < len(values):
+            next_scen_num = self.sweep_current_idx + 1
+            if (
+                next_scen_num in getattr(self, '_scenarios_pending_advisory', {})
+                and next_scen_num not in getattr(self, '_scenario_advisory_decisions', {})
+            ):
+                self._prompt_scenario_plume_advisory(next_scen_num)
+                if next_scen_num not in getattr(self, '_scenario_advisory_decisions', {}):
+                    self._sweep_paused_current = True
+                    self.sim_isRunning = False
+                    if hasattr(self, 'lbl_status'):
+                        self.lbl_status.setText(
+                            f"Status: Scenario {next_scen_num} held awaiting plume decision. Select it in dropdown to choose."
+                        )
+                    if hasattr(self, 'btn_toggle'):
+                        self.btn_toggle.setText("RESUME BEAM")
+                    self._update_sweep_action_button_state()
+                    return
+
             next_val = values[self.sweep_current_idx]
             self._apply_sweep_value(cfg["param_id"], next_val)
+            if hasattr(self, 'sim'):
+                self.sim.truncate_downstream_plume = (self._scenario_advisory_decisions.get(next_scen_num) == "truncate")
             was_running = getattr(self, 'sim_isRunning', False)
             self.build_domain(force=True)
             self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)

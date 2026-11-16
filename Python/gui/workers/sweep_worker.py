@@ -47,14 +47,17 @@ class ParallelSweepWorker(QThread):
     progress_updated = pyqtSignal(int, int, str)     # (completed_count, total_count, status_text)
     sweep_finished = pyqtSignal(list)                # (all_sorted_results)
     sweep_error = pyqtSignal(str)                    # (error_message)
+    scenario_action_needed = pyqtSignal(int, dict)   # (scenario_idx, advisory_info)
 
-    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=2000, parent=None, remaining_indices: list = None, existing_results: list = None):
+    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=2000, parent=None, remaining_indices: list = None, existing_results: list = None, held_scenarios: list = None):
         super().__init__(parent)
         self.sweep_config = sweep_config
         self.base_params = base_params
         self.scatter_limit = scatter_limit
         self.remaining_indices = set(remaining_indices) if remaining_indices is not None else None
         self.existing_results = list(existing_results) if existing_results is not None else []
+        self.held_scenarios = set(held_scenarios) if held_scenarios is not None else set()
+        self._all_payloads_ref = []
         total_cpus = os.cpu_count() or 16
         self.n_cores = int(n_cores) if n_cores and n_cores > 0 else max(1, total_cpus // 2)
         self.total_computation_time_s = 0.0
@@ -98,9 +101,11 @@ class ParallelSweepWorker(QThread):
                     pass
 
             is_already_done = (self.remaining_indices is not None and scen_num not in self.remaining_indices)
+            is_held = scen_num in self.held_scenarios
             ex_row = existing_map.get(scen_num, {})
             init_st = {
-                "status": "done" if is_already_done else "queued",
+                "status": "done" if is_already_done else ("action_required" if is_held else "queued"),
+                "held": is_held,
                 "iter": ex_row.get("steady_iterations", 0) if is_already_done else 0,
                 "max_iters": max_iters,
                 "parameter_value": float(val),
@@ -217,6 +222,42 @@ class ParallelSweepWorker(QThread):
             return True
         return False
 
+    def is_scenario_held(self, scen_num: int) -> bool:
+        """Check if scenario is currently held awaiting user decision."""
+        return scen_num in getattr(self, 'held_scenarios', set())
+
+    def release_scenario(self, scen_num: int, truncate_plume: bool = False):
+        """Release a scenario from the held advisory state so it can execute."""
+        if not hasattr(self, 'held_scenarios'):
+            self.held_scenarios = set()
+        self.held_scenarios.discard(scen_num)
+
+        # Update payload parameters
+        for p in getattr(self, '_all_payloads_ref', []):
+            if p.get("scenario_idx") == scen_num:
+                if not isinstance(p.get("base_params"), dict):
+                    p["base_params"] = dict(self.base_params)
+                else:
+                    p["base_params"] = dict(p["base_params"])
+                p["base_params"]["truncate_downstream_plume"] = bool(truncate_plume)
+                if not isinstance(p.get("sweep_config"), dict):
+                    p["sweep_config"] = {}
+                p["sweep_config"]["truncate_downstream_plume"] = bool(truncate_plume)
+
+        if scen_num in self.final_status_dict and self.final_status_dict[scen_num].get("status") not in ("done", "running"):
+            self.final_status_dict[scen_num]["status"] = "queued"
+            self.final_status_dict[scen_num]["held"] = False
+        sf = self.state_files.get(scen_num)
+        if sf and os.path.exists(sf):
+            try:
+                st = read_scenario_state(sf)
+                if st and st.get("status") not in ("done", "running"):
+                    st["status"] = "queued"
+                    st["held"] = False
+                    write_scenario_state(sf, st)
+            except Exception:
+                pass
+
     def set_active_view_scenario(self, scen_num):
         """Record which scenario is currently being viewed in the GUI."""
         if hasattr(self, 'active_view_file'):
@@ -230,11 +271,15 @@ class ParallelSweepWorker(QThread):
         """Thread-safe snapshot dictionary of all scenario execution states."""
         res = dict(getattr(self, 'final_status_dict', {}))
         paused_set = getattr(self, '_paused_scenarios', set())
+        held_set = getattr(self, 'held_scenarios', set())
         for scen_num, sf in getattr(self, 'state_files', {}).items():
             st = read_scenario_state(sf)
             if st is not None:
                 if st.get("status") != "done":
-                    if scen_num in paused_set:
+                    if scen_num in held_set:
+                        st["status"] = "action_required"
+                        st["held"] = True
+                    elif scen_num in paused_set:
                         st["status"] = "paused"
                     elif st.get("status") == "paused" and not self.is_scenario_paused(scen_num):
                         st["status"] = "running"
@@ -329,7 +374,7 @@ class ParallelSweepWorker(QThread):
                 "scenario_idx": scen_idx,
                 "param_id": param_id,
                 "parameter_value": float(val),
-                "base_params": self.base_params,
+                "base_params": copy.deepcopy(self.base_params),
                 "sweep_config": {
                     "auto_update_upstream_gap": bool(self.sweep_config.get("auto_update_upstream_gap", False)),
                     "upstream_gap_coupling": self.sweep_config.get("upstream_gap_coupling"),
@@ -341,6 +386,7 @@ class ParallelSweepWorker(QThread):
                 "active_view_file": self.active_view_file,
                 "scatter_limit": getattr(self, 'scatter_limit', 2000),
             })
+        self._all_payloads_ref = payloads
 
         results = list(self.existing_results)
         completed_count = len(results)
@@ -375,7 +421,7 @@ class ParallelSweepWorker(QThread):
         executor = ProcessPoolExecutor(max_workers=max_workers)
         self._executor = executor
 
-        # Dynamic RAM-Aware Scenario Scheduler
+        # Dynamic RAM-Aware Scenario Scheduler with Held Scenario Support
         pending_payloads = list(payloads)
         payload_ram = {p["scenario_idx"]: estimate_payload_ram_gb(p) for p in payloads}
         running_futures = {}  # future -> (scenario_idx, estimated_ram)
@@ -384,11 +430,21 @@ class ParallelSweepWorker(QThread):
         def submit_next_if_possible():
             nonlocal current_ram_alloc
             while pending_payloads and len(running_futures) < max_workers:
-                next_p = pending_payloads[0]
+                chosen_idx = -1
+                for idx_cand, cand in enumerate(pending_payloads):
+                    if cand["scenario_idx"] not in self.held_scenarios:
+                        chosen_idx = idx_cand
+                        break
+
+                if chosen_idx < 0:
+                    # All remaining pending payloads are currently held
+                    break
+
+                next_p = pending_payloads[chosen_idx]
                 scen_ram = payload_ram.get(next_p["scenario_idx"], 1.5)
                 # Allow launch if memory fits, or if no workers are running (guarantee forward progress)
                 if len(running_futures) == 0 or (current_ram_alloc + scen_ram <= usable_ram):
-                    p = pending_payloads.pop(0)
+                    p = pending_payloads.pop(chosen_idx)
                     current_ram_alloc += scen_ram
                     fut = executor.submit(run_single_sweep_scenario_worker, p)
                     running_futures[fut] = (p["scenario_idx"], scen_ram)
@@ -409,17 +465,36 @@ class ParallelSweepWorker(QThread):
         try:
             submit_next_if_possible()
 
-            while running_futures:
+            last_prompted_held = None
+            while running_futures or pending_payloads:
                 if self._canceled:
                     break
 
+                submit_next_if_possible()
+
                 done_futures = [f for f in running_futures.keys() if f.done()]
                 if not done_futures:
-                    try:
-                        done_set, _ = wait(running_futures.keys(), return_when=FIRST_COMPLETED, timeout=0.2)
-                        done_futures = list(done_set)
-                    except Exception:
-                        time.sleep(0.05)
+                    if running_futures:
+                        try:
+                            done_set, _ = wait(running_futures.keys(), return_when=FIRST_COMPLETED, timeout=0.2)
+                            done_futures = list(done_set)
+                        except Exception:
+                            time.sleep(0.05)
+                    else:
+                        # All running workers completed, but pending payloads are held awaiting user action
+                        if pending_payloads:
+                            first_held = pending_payloads[0]["scenario_idx"]
+                            if first_held != last_prompted_held:
+                                last_prompted_held = first_held
+                                self.scenario_action_needed.emit(first_held, {})
+                                self.progress_updated.emit(
+                                    completed_count, total_count,
+                                    f"⏸ Sweep paused: Scenario {first_held} requires user decision (Downstream Plume Advisory)."
+                                )
+                            time.sleep(0.15)
+                            continue
+                        else:
+                            break
 
                 for future in done_futures:
                     if future not in running_futures:
