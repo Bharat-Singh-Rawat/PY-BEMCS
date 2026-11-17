@@ -42,7 +42,15 @@ class DiagnosticsMixin:
             if hasattr(self, 'cell_vol_1d') and len(self.cell_vol_1d) == self.nx:
                 cvol = np.tile(self.cell_vol_1d, (self.ny, 1))
             else:
-                cvol = np.full((self.ny, self.nx), (self.dx * 1e-3) * (self.dy * 1e-3) * 1e-3)
+                dx_m = float(getattr(self, 'dx', 0.05)) * 1e-3
+                dy_m = float(getattr(self, 'dy', 0.05)) * 1e-3
+                if getattr(self, 'is_axisymmetric', False):
+                    r_coords_m = ((np.arange(self.ny) + 0.5) * dy_m if not hasattr(self, 'y_coords')
+                                  else self.y_coords * 1e-3)
+                    V_rad = 2.0 * np.pi * np.maximum(r_coords_m, dy_m * 0.25) * dy_m
+                    cvol = np.outer(V_rad, np.full(self.nx, dx_m))
+                else:
+                    cvol = np.full((self.ny, self.nx), dx_m * dy_m * 1e-3)
 
         sp = species.lower().strip()
 
@@ -58,15 +66,15 @@ class DiagnosticsMixin:
                 iy = np.clip(np.round(ey / self.dy).astype(int), 0, self.ny - 1)
                 flat_idx = iy * self.nx + ix
                 counts = np.bincount(flat_idx, minlength=self.nx * self.ny).reshape((self.ny, self.nx))
-                density += (counts * self.macro_weight) / cvol
+                density += (counts * self.macro_weight) / np.maximum(cvol, 1e-25)
 
             # 2. Boltzmann fluid electrons
             if sp != 'kinetic_electrons' and hasattr(self, 'V') and self.V is not None and self.V.shape == (self.ny, self.nx):
                 grids = getattr(self, 'grids', [{'V': 1000}])
                 v_offset = getattr(self, 'V_plasma_offset', 20.0)
                 V_p = grids[0]['V'] + v_offset if grids else 1020.0
-                Te = getattr(self, 'Te_up', 3.0)
-                n0 = getattr(self, 'n0_plasma', 1e17)
+                Te = getattr(self, 'Te_up', getattr(self, 'Te', 3.0))
+                n0 = getattr(self, 'n0_plasma', getattr(self, 'n0', 1e17))
                 bf = np.exp((np.minimum(self.V, V_p) - V_p) / max(Te, 1e-4))
                 density += n0 * bf
 
@@ -76,7 +84,29 @@ class DiagnosticsMixin:
 
             return density
 
-        # Ion species
+        # Check if full-mesh PPC maps are available (simulation runtime or sweep snapshot)
+        has_ppc = (
+            hasattr(self, 'current_ppc_map')
+            and self.current_ppc_map is not None
+            and getattr(self.current_ppc_map, 'shape', None) == (self.ny, self.nx)
+            and (np.any(self.current_ppc_map > 0) or getattr(self, 'num_p', 0) == 0)
+        )
+
+        if has_ppc:
+            if sp in ('cex', 'cex_ions'):
+                counts = getattr(self, 'current_cex_ppc_map', np.zeros_like(self.current_ppc_map)).astype(np.float64)
+            elif sp in ('primary', 'primary_ions'):
+                cex = getattr(self, 'current_cex_ppc_map', np.zeros_like(self.current_ppc_map))
+                counts = np.maximum(0.0, self.current_ppc_map - cex).astype(np.float64)
+            else:
+                counts = self.current_ppc_map.astype(np.float64)
+
+            density = (counts * float(getattr(self, 'macro_weight', 1e8))) / np.maximum(cvol, 1e-25)
+            if hasattr(self, 'isBound') and self.isBound is not None and self.isBound.shape == (self.ny, self.nx):
+                density[self.isBound] = 0.0
+            return density
+
+        # Ion species fallback (bincounting discrete px, py)
         density = np.zeros((self.ny, self.nx), dtype=np.float64)
         n_p = int(getattr(self, 'num_p', 0))
         if n_p == 0:
@@ -104,7 +134,7 @@ class DiagnosticsMixin:
         iy = np.clip(np.round(py / self.dy).astype(int), 0, self.ny - 1)
         flat_idx = iy * self.nx + ix
         counts = np.bincount(flat_idx, minlength=self.nx * self.ny).reshape((self.ny, self.nx))
-        density = (counts * self.macro_weight) / cvol
+        density = (counts * self.macro_weight) / np.maximum(cvol, 1e-25)
 
         if hasattr(self, 'isBound') and self.isBound is not None and self.isBound.shape == (self.ny, self.nx):
             density[self.isBound] = 0.0

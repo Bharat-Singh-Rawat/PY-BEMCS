@@ -367,13 +367,7 @@ class RenderingMixin:
         self._update_ebs_xlim(snap['iteration'])
         self._update_div_scroll_range(snap['iteration'])
 
-        if len(self.ebs_history) > 0:
-            y_min = min(self.ebs_history)
-            y_max = max(self.ebs_history)
-            if y_max <= y_min:
-                y_max = y_min + 1.0
-            pad = max(5.0, 0.1 * (y_max - y_min))
-            self.ax_ebs.set_ylim(y_min - pad, y_max + pad)
+        self._update_ebs_ylim()
 
         self._update_div_plot_visibility()
 
@@ -789,6 +783,22 @@ class RenderingMixin:
         else:
             self.ax_ebs.set_xlim(max(0, current_iter - 400), max(100, current_iter))
 
+    def _update_ebs_ylim(self):
+        """Autoscale Y-limits for ax_ebs based on recent/visible midline potential history."""
+        if not hasattr(self, 'ax_ebs') or not hasattr(self, 'ebs_history'):
+            return
+        valid_ebs = [v for v in self.ebs_history if v is not None and np.isfinite(v)]
+        if not valid_ebs:
+            self.ax_ebs.set_ylim(-100, 100)
+            return
+        visible = valid_ebs[-400:] if len(valid_ebs) > 400 else valid_ebs
+        min_v = float(min(visible))
+        max_v = float(max(visible))
+        if max_v <= min_v:
+            max_v = min_v + 1.0
+        pad = max(15.0, abs(max_v - min_v) * 0.15)
+        self.ax_ebs.set_ylim(min_v - pad, max_v + pad)
+
     def set_ebs_xaxis_unit(self, unit: str):
         """Set the active x-axis unit specifically for midline potential ('iterations' or 'microseconds')."""
         return self.set_xaxis_unit(unit, target='ebs')
@@ -823,6 +833,8 @@ class RenderingMixin:
             x_data_ebs = self._get_plot_x_data('ebs')
             if hasattr(self, 'line_ebs') and hasattr(self, 'ebs_history'):
                 self.line_ebs.set_data(x_data_ebs, self.ebs_history)
+            if hasattr(self, '_update_ebs_ylim'):
+                self._update_ebs_ylim()
 
             if cur_iter > 0:
                 if hasattr(self, '_update_ebs_xlim'):

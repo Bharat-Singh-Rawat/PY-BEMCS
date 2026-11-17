@@ -49,8 +49,33 @@ def step_end_accounting(sim, ctx: StepContext):
     ppc_flat = np.bincount(flat_idx, minlength=sim.nx * sim.ny)
     ppc_map = ppc_flat.reshape((sim.ny, sim.nx))
     sim.current_ppc_map = ppc_map
+    if not hasattr(sim, 'accum_ppc_map') or sim.accum_ppc_map is None or sim.accum_ppc_map.shape != (sim.ny, sim.nx):
+        sim.accum_ppc_map = np.zeros_like(ppc_map, dtype=np.float64)
     sim.accum_ppc_map += ppc_map
-    sim.ppc_steps_count += 1
+    sim.ppc_steps_count = getattr(sim, 'ppc_steps_count', 0) + 1
+
+    # Species-resolved PPC accounting (Primary vs CEX ions)
+    if hasattr(sim, 'p_isCEX') and sim.p_isCEX is not None and len(sim.p_isCEX) >= sim.num_p and sim.num_p > 0:
+        is_cex = sim.p_isCEX[:sim.num_p]
+        if np.any(is_cex):
+            cex_flat = np.bincount(flat_idx[is_cex], minlength=sim.nx * sim.ny)
+            sim.current_cex_ppc_map = cex_flat.reshape((sim.ny, sim.nx))
+        else:
+            sim.current_cex_ppc_map = np.zeros((sim.ny, sim.nx), dtype=np.int32)
+    else:
+        sim.current_cex_ppc_map = np.zeros((sim.ny, sim.nx), dtype=np.int32)
+
+    sim.current_prim_ppc_map = np.maximum(0, sim.current_ppc_map - sim.current_cex_ppc_map)
+    if not hasattr(sim, 'accum_cex_ppc_map') or sim.accum_cex_ppc_map is None or sim.accum_cex_ppc_map.shape != (sim.ny, sim.nx):
+        sim.accum_cex_ppc_map = np.zeros((sim.ny, sim.nx), dtype=np.float64)
+    sim.accum_cex_ppc_map += sim.current_cex_ppc_map
+
+    # Exit ion current history for steady-state stationarity evaluation
+    i_exit_now = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
+    if not hasattr(sim, 'ion_current_history') or sim.ion_current_history is None:
+        sim.ion_current_history = []
+    sim.ion_current_history.append(i_exit_now)
+    sim.exit_ion_current_history = sim.ion_current_history
 
     thresh = getattr(sim, 'min_ppc_threshold', 3)
     low_ppc_mask = (ppc_map > 0) & (ppc_map < thresh)

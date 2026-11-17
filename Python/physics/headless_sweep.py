@@ -476,6 +476,11 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "grids": scenario_params.get("grids", []),
                 "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
                 "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+                "current_cex_ppc_map": getattr(sim, 'current_cex_ppc_map', None).copy() if getattr(sim, 'current_cex_ppc_map', None) is not None else None,
+                "accum_cex_ppc_map": getattr(sim, 'accum_cex_ppc_map', None).copy() if getattr(sim, 'accum_cex_ppc_map', None) is not None else None,
+                "cell_vol_2d": getattr(sim, 'cell_vol_2d', None).copy() if getattr(sim, 'cell_vol_2d', None) is not None else None,
+                "n0_plasma": float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))),
+                "Te_up": float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0))),
                 "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
                 "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
                 "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
@@ -514,6 +519,10 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                     histories_to_check.append(sim.charge_history_q_net[-scenario_iters:])
                 if hasattr(sim, 'potential_history') and len(sim.potential_history) >= window:
                     histories_to_check.append(sim.potential_history[-scenario_iters:])
+                if hasattr(sim, 'ion_current_history') and len(sim.ion_current_history) >= window:
+                    histories_to_check.append(sim.ion_current_history[-scenario_iters:])
+                elif len(ion_current_hist) >= window:
+                    histories_to_check.append(ion_current_hist[-scenario_iters:])
 
                 if histories_to_check:
                     all_under = True
@@ -632,6 +641,11 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "grids": scenario_params.get("grids", []),
         "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
         "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+        "current_cex_ppc_map": getattr(sim, 'current_cex_ppc_map', None).copy() if getattr(sim, 'current_cex_ppc_map', None) is not None else None,
+        "accum_cex_ppc_map": getattr(sim, 'accum_cex_ppc_map', None).copy() if getattr(sim, 'accum_cex_ppc_map', None) is not None else None,
+        "cell_vol_2d": getattr(sim, 'cell_vol_2d', None).copy() if getattr(sim, 'cell_vol_2d', None) is not None else None,
+        "n0_plasma": float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))),
+        "Te_up": float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0))),
         "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
         "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
         "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],

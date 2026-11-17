@@ -439,6 +439,7 @@ class TestSweepMixinParallelAppIntegration(unittest.TestCase):
         self.win.inputs["neut_x"].setValue(5.0)
 
     def tearDown(self):
+        self.win._data_saved = True
         if hasattr(self.win, '_sim_worker') and self.win._sim_worker.isRunning():
             self.win._sim_worker.stop(wait_ms=1000)
         if hasattr(self.win, 'parallel_sweep_worker') and self.win.parallel_sweep_worker is not None:

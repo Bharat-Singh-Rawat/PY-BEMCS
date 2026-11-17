@@ -178,6 +178,49 @@ class DensityWindow(QWidget):
         if self._cached_sim is not None:
             self.update_plot(self._cached_sim, is_new_step=False)
 
+    def _get_effective_density_map(self, sim, sp_k: str, is_accum: bool, cur_shape: tuple) -> tuple:
+        """Compute the 2D density map for species sp_k under either instantaneous or time-averaged mode."""
+        if is_accum and self._accum_count > 0 and sp_k in self._accum_maps and self._accum_maps[sp_k].shape == cur_shape:
+            return self._accum_maps[sp_k] / float(self._accum_count), f"Time-Averaged ({self._accum_count} steps)"
+
+        if is_accum and hasattr(sim, 'accum_ppc_map') and getattr(sim, 'accum_ppc_map', None) is not None and getattr(sim, 'ppc_steps_count', 0) > 0:
+            n_steps = max(1, int(sim.ppc_steps_count))
+            cvol = getattr(sim, 'cell_vol_2d', None)
+            if cvol is None or cvol.shape != cur_shape:
+                dx_m = float(getattr(sim, 'dx', 0.05)) * 1e-3
+                dy_m = float(getattr(sim, 'dy', 0.05)) * 1e-3
+                if getattr(sim, 'is_axisymmetric', False):
+                    r_coords_m = ((np.arange(sim.ny) + 0.5) * dy_m if not hasattr(sim, 'y_coords')
+                                  else sim.y_coords * 1e-3)
+                    V_rad = 2.0 * np.pi * np.maximum(r_coords_m, dy_m * 0.25) * dy_m
+                    cvol = np.outer(V_rad, np.full(sim.nx, dx_m))
+                else:
+                    cvol = np.full(cur_shape, dx_m * dy_m * 1e-3)
+
+            counts = None
+            if sp_k in ('cex', 'cex_ions'):
+                if hasattr(sim, 'accum_cex_ppc_map') and sim.accum_cex_ppc_map is not None:
+                    counts = sim.accum_cex_ppc_map / float(n_steps)
+            elif sp_k in ('primary', 'primary_ions'):
+                if hasattr(sim, 'accum_cex_ppc_map') and sim.accum_cex_ppc_map is not None:
+                    counts = np.maximum(0.0, sim.accum_ppc_map - sim.accum_cex_ppc_map) / float(n_steps)
+                else:
+                    counts = sim.accum_ppc_map / float(n_steps)
+            elif sp_k in ('electrons', 'electron', 'kinetic_electrons', 'boltzmann_electrons'):
+                counts = None
+            else:
+                counts = sim.accum_ppc_map / float(n_steps)
+
+            if counts is not None:
+                dens = (counts * float(getattr(sim, 'macro_weight', 1e8))) / np.maximum(cvol, 1e-25)
+                if hasattr(sim, 'isBound') and sim.isBound is not None and sim.isBound.shape == cur_shape:
+                    dens[sim.isBound] = 0.0
+                return dens, f"Time-Averaged ({n_steps} accumulated steps)"
+
+        # Instantaneous density
+        dens = sim.get_density_map(species=sp_k)
+        return dens, f"Instantaneous (Step {getattr(sim, 'iteration', 0)})"
+
     def update_plot(self, sim, is_new_step: bool = True):
         """Update and render the 2D density map and the two 1D radial profile graphs."""
         if sim is None or not hasattr(sim, 'nx') or sim.nx <= 0:
@@ -211,17 +254,7 @@ class DensityWindow(QWidget):
         active_label = self.combo_species.currentText()
 
         # Retrieve 2D density map for active species
-        if (
-            is_accum
-            and self._accum_count > 0
-            and active_key in self._accum_maps
-            and self._accum_maps[active_key].shape == cur_shape
-        ):
-            density_2d = self._accum_maps[active_key] / float(self._accum_count)
-            step_info = f"Time-Averaged ({self._accum_count} steps)"
-        else:
-            density_2d = sim.get_density_map(species=active_key)
-            step_info = f"Instantaneous (Step {getattr(sim, 'iteration', 0)})"
+        density_2d, step_info = self._get_effective_density_map(sim, active_key, is_accum, cur_shape)
 
         # Divergence planes
         if hasattr(sim, 'get_divergence_plane_locations'):
@@ -346,10 +379,7 @@ class DensityWindow(QWidget):
         # --- Subplot 1: Grid Exit Plane (x1) ---
         for sp_k in species_to_plot:
             label, color, ls = species_styles.get(sp_k, (sp_k, "blue", "-"))
-            if is_accum and self._accum_count > 0 and sp_k in self._accum_maps and self._accum_maps[sp_k].shape == cur_shape:
-                sp_dens = self._accum_maps[sp_k] / float(self._accum_count)
-            else:
-                sp_dens = None
+            sp_dens, _ = self._get_effective_density_map(sim, sp_k, is_accum, cur_shape)
             _, prof = sim.get_radial_density_profile(x1, species=sp_k, density_map=sp_dens)
             prof_clipped = np.maximum(prof, floor_density)
             self.ax_p1.plot(y_pts, prof_clipped, label=label, color=color, linestyle=ls, linewidth=1.7)
@@ -366,10 +396,7 @@ class DensityWindow(QWidget):
         # --- Subplot 2: Second Divergence Plane (x2) ---
         for sp_k in species_to_plot:
             label, color, ls = species_styles.get(sp_k, (sp_k, "blue", "-"))
-            if is_accum and self._accum_count > 0 and sp_k in self._accum_maps and self._accum_maps[sp_k].shape == cur_shape:
-                sp_dens = self._accum_maps[sp_k] / float(self._accum_count)
-            else:
-                sp_dens = None
+            sp_dens, _ = self._get_effective_density_map(sim, sp_k, is_accum, cur_shape)
             _, prof = sim.get_radial_density_profile(x2, species=sp_k, density_map=sp_dens)
             prof_clipped = np.maximum(prof, floor_density)
             self.ax_p2.plot(y_pts, prof_clipped, label=label, color=color, linestyle=ls, linewidth=1.7)

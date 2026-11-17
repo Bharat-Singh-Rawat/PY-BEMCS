@@ -210,8 +210,11 @@ class DigitalTwinSimulator(
         self._poisson_direct_nr_remaining = 0
 
         self.accum_ppc_map   = np.zeros((self.ny, self.nx), dtype=np.float64)
+        self.accum_cex_ppc_map = np.zeros((self.ny, self.nx), dtype=np.float64)
         self.ppc_steps_count = 0
         self.current_ppc_map = np.zeros((self.ny, self.nx), dtype=int)
+        self.current_cex_ppc_map = np.zeros((self.ny, self.nx), dtype=int)
+        self.current_prim_ppc_map = np.zeros((self.ny, self.nx), dtype=int)
 
         self.energy_history_t    = []
         self.energy_history_ke_i = []
@@ -231,6 +234,8 @@ class DigitalTwinSimulator(
         self.charge_warning_threshold = 0.10
 
         self.potential_history   = []
+        self.ion_current_history = []
+        self.exit_ion_current_history = self.ion_current_history
 
         self.substep_history_iter = []
         self.substep_history_ion  = []

@@ -243,7 +243,11 @@ class SteadyStateWindow(QDialog):
             series["potential"] = np.asarray(app.ebs_history, dtype=np.float64)
 
         # 5. Exit Ion Current
-        if app is not None and hasattr(app, 'ion_current_exit_history') and len(app.ion_current_exit_history) > 0:
+        if hasattr(sim, 'ion_current_history') and len(sim.ion_current_history) > 0:
+            series["ion_current"] = np.asarray(sim.ion_current_history, dtype=np.float64)
+        elif hasattr(sim, 'exit_ion_current_history') and len(sim.exit_ion_current_history) > 0:
+            series["ion_current"] = np.asarray(sim.exit_ion_current_history, dtype=np.float64)
+        elif app is not None and hasattr(app, 'ion_current_exit_history') and len(app.ion_current_exit_history) > 0:
             series["ion_current"] = np.asarray(app.ion_current_exit_history, dtype=np.float64)
         elif app is not None and hasattr(app, 'ion_current_exit_avg_history') and len(app.ion_current_exit_avg_history) > 0:
             series["ion_current"] = np.asarray(app.ion_current_exit_avg_history, dtype=np.float64)

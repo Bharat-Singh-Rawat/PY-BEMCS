@@ -622,6 +622,11 @@ class DomainMixin:
         if hasattr(self, 'potential_history'):
             self.potential_history.clear()
 
+        if hasattr(self, 'ion_current_history'):
+            self.ion_current_history.clear()
+        if hasattr(self, 'exit_ion_current_history'):
+            self.exit_ion_current_history.clear()
+
         if hasattr(self, 'substep_history_iter'):
             self.substep_history_iter.clear()
             self.substep_history_ion.clear()

@@ -1572,11 +1572,18 @@ class SweepMixin:
                 self._update_ebs_xlim(cur_iter)
             elif hasattr(self, 'ax_ebs'):
                 self.ax_ebs.set_xlim(max(0, cur_iter - 400), max(100, cur_iter))
-                valid_ebs = [v for v in self.ebs_history if np.isfinite(v)]
+
+            if hasattr(self, '_update_ebs_ylim'):
+                self._update_ebs_ylim()
+            elif hasattr(self, 'ax_ebs'):
+                valid_ebs = [v for v in self.ebs_history if v is not None and np.isfinite(v)]
                 if valid_ebs:
-                    min_v = min(valid_ebs)
-                    max_v = max(valid_ebs)
-                    pad = max(20.0, abs(max_v - min_v) * 0.1)
+                    visible = valid_ebs[-400:] if len(valid_ebs) > 400 else valid_ebs
+                    min_v = float(min(visible))
+                    max_v = float(max(visible))
+                    if max_v <= min_v:
+                        max_v = min_v + 1.0
+                    pad = max(15.0, abs(max_v - min_v) * 0.15)
                     self.ax_ebs.set_ylim(min_v - pad, max_v + pad)
         else:
             div_val = info.get("div", 0.0)
@@ -1964,6 +1971,21 @@ class SweepMixin:
 
             self.sim.macro_weight = float(info.get("macro_weight", getattr(self.sim, 'macro_weight', 1e8)))
             self.sim.iteration = int(info.get("iter", 0))
+
+            # Sync PPC spatial maps and plasma physics parameters
+            self.sim.current_ppc_map = info.get("current_ppc_map")
+            self.sim.accum_ppc_map = info.get("accum_ppc_map")
+            self.sim.current_cex_ppc_map = info.get("current_cex_ppc_map")
+            self.sim.accum_cex_ppc_map = info.get("accum_cex_ppc_map")
+            self.sim.ppc_steps_count = int(info.get("ppc_steps_count", 0))
+            if info.get("cell_vol_2d") is not None:
+                self.sim.cell_vol_2d = info["cell_vol_2d"]
+            if info.get("n0_plasma") is not None:
+                self.sim.n0_plasma = float(info["n0_plasma"])
+            if info.get("Te_up") is not None:
+                self.sim.Te_up = float(info["Te_up"])
+            if info.get("V") is not None:
+                self.sim.V = info["V"]
 
             # Guarantee that X and Y match (cur_ny, cur_nx)
             if (
@@ -2371,6 +2393,10 @@ class SweepMixin:
                 histories_to_check.append(sim.potential_history[-scenario_iters:])
             elif hasattr(self, 'ebs_history') and len(self.ebs_history) >= window:
                 histories_to_check.append(self.ebs_history[-scenario_iters:])
+            if hasattr(sim, 'ion_current_history') and len(sim.ion_current_history) >= window:
+                histories_to_check.append(sim.ion_current_history[-scenario_iters:])
+            elif hasattr(self, 'ion_current_exit_history') and len(self.ion_current_exit_history) >= window:
+                histories_to_check.append(self.ion_current_exit_history[-scenario_iters:])
 
             if histories_to_check:
                 all_under_thresh = True
@@ -2630,7 +2656,7 @@ class SweepMixin:
             next_val = values[self.sweep_current_idx]
             self._apply_sweep_value(cfg["param_id"], next_val)
             if hasattr(self, 'sim'):
-                self.sim.truncate_downstream_plume = (self._scenario_advisory_decisions.get(next_scen_num) == "truncate")
+                self.sim.truncate_downstream_plume = (getattr(self, '_scenario_advisory_decisions', {}).get(next_scen_num) == "truncate")
             was_running = getattr(self, 'sim_isRunning', False)
             self.build_domain(force=True)
             self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
