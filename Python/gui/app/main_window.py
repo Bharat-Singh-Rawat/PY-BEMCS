@@ -118,6 +118,9 @@ class DigitalTwinApp(
         self._sweep_paused_current = False
         self.sweep_config = None
         self.sweep_results = []
+        self._sweep_status_dict = {}
+        self._sweep_tracking_buffers = {}
+        self._seq_scenario_histories = {}
         self.sweep_current_idx = 0
         self.sweep_scenario_start_iter = 0
         self.btn_resume_sweep = None

@@ -2657,6 +2657,210 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertAlmostEqual(gap_swept, 4.0, places=3)
         self.assertIn("[Warning]", buf.getvalue())
 
+    def test_export_data_and_particle_data_per_selected_scenario_in_sweep_mode(self):
+        """Verify Export Data and Export Particle Data work in sweep mode for whichever scenario is selected."""
+        import csv
+        import tempfile
+        from PyQt5.QtWidgets import QFileDialog
+
+        cfg = {
+            "param_id": "Te_up",
+            "param_label": "Upstream Electron Temp (eV)",
+            "param_unit": "eV",
+            "values": [2.0, 4.0, 6.0],
+            "window": 10,
+            "threshold": 1.0,
+            "max_iterations": 100,
+            "min_iterations": 10,
+        }
+        self.win.save_sweep_settings(cfg)
+        self.win.is_sweep_active = True
+        self.win.sweep_mode_armed = False
+
+        # Populate distinct telemetry & particle tracking data for Scenario 1 and Scenario 2; leave Scenario 3 queued
+        self.win._sweep_status_dict[1] = {
+            "status": "done",
+            "iter": 2,
+            "parameter_value": 2.0,
+            "iter_history": [1, 2],
+            "time_history": [5e-10, 10e-10],
+            "ebs_history": [-180.5, -181.0],
+            "div_history": [11.2, 11.4],
+            "div_mid_history": [9.1, 9.3],
+            "transparency_history": [0.85, 0.86],
+            "ion_current_exit_history": [0.0012, 0.0013],
+            "ion_current_exit_avg_history": [0.0012, 0.00125],
+            "transmitted_ions_history": [12, 13],
+            "active_cells_history": [400, 410],
+            "low_ppc_cells_history": [15, 14],
+            "T_histories": {0: [301.0, 302.0], 1: [305.0, 306.0], 2: [300.0, 300.5]},
+        }
+        ptcl_scen1 = np.array([
+            [5e-10, 1.1, 0.2, 10000.0, 200.0, 0.0, 650.0, 0],
+            [10e-10, 1.5, 0.3, 12000.0, 250.0, 0.0, 950.0, 1],
+        ], dtype=float)
+        self.win._sweep_tracking_buffers[1] = [ptcl_scen1]
+
+        self.win._sweep_status_dict[2] = {
+            "status": "done",
+            "iter": 3,
+            "parameter_value": 4.0,
+            "iter_history": [1, 2, 3],
+            "time_history": [5e-10, 10e-10, 15e-10],
+            "ebs_history": [-210.0, -212.0, -215.0],
+            "div_history": [14.0, 14.5, 15.0],
+            "div_mid_history": [10.0, 10.5, 11.0],
+            "transparency_history": [0.90, 0.91, 0.92],
+            "ion_current_exit_history": [0.0021, 0.0022, 0.0023],
+            "ion_current_exit_avg_history": [0.0021, 0.00215, 0.0022],
+            "transmitted_ions_history": [21, 22, 23],
+            "active_cells_history": [500, 520, 530],
+            "low_ppc_cells_history": [8, 7, 6],
+            "T_histories": {0: [310.0, 311.0, 312.0], 1: [320.0, 321.0, 322.0], 2: [302.0, 303.0, 304.0]},
+        }
+        ptcl_scen2 = np.array([
+            [5e-10, 2.1, 0.4, 20000.0, 500.0, 10.0, 1100.0, 0],
+            [10e-10, 2.5, 0.5, 22000.0, 600.0, 20.0, 1250.0, 0],
+            [15e-10, 2.9, 0.6, 24000.0, 700.0, 30.0, 1400.0, 2],
+        ], dtype=float)
+        self.win._sweep_tracking_buffers[2] = [ptcl_scen2]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Select Scenario 1 and export both telemetry and particle data
+            self.win.combo_sweep_scenario.setCurrentIndex(0)
+            self.win._on_sweep_scenario_selected(0)
+
+            csv_s1 = os.path.join(tmpdir, "scen1_data.csv")
+            trk_s1 = os.path.join(tmpdir, "scen1_ptcls.csv")
+
+            with patch.object(QFileDialog, "getSaveFileName", return_value=(csv_s1, "CSV Files (*.csv)")), \
+                 patch.object(QMessageBox, "information"):
+                ok1 = self.win.export_csv()
+            self.assertTrue(ok1)
+            self.assertTrue(os.path.isfile(csv_s1))
+
+            with open(csv_s1, "r", encoding="utf-8") as f:
+                rows1 = list(csv.reader(f))
+            self.assertEqual(len(rows1), 3)  # header + 2 rows
+            self.assertIn("iteration", rows1[0])
+            self.assertIn("transparency", rows1[0])
+            self.assertIn("grid_1_temp_K", rows1[0])
+            self.assertAlmostEqual(float(rows1[1][rows1[0].index("minpotential")]), -180.5)
+            self.assertAlmostEqual(float(rows1[2][rows1[0].index("beamdivergence°")]), 11.4)
+            self.assertAlmostEqual(float(rows1[2][rows1[0].index("grid_2_temp_K")]), 306.0)
+
+            with patch.object(QFileDialog, "getSaveFileName", return_value=(trk_s1, "CSV Files (*.csv)")), \
+                 patch.object(QMessageBox, "information"):
+                self.win.exporttrackingdata()
+            self.assertTrue(os.path.isfile(trk_s1))
+            with open(trk_s1, "r", encoding="utf-8") as f:
+                p_rows1 = list(csv.reader(f))
+            self.assertEqual(len(p_rows1), 3)  # header + 2 particles
+            self.assertAlmostEqual(float(p_rows1[1][p_rows1[0].index("x_mm")]), 1.1)
+            self.assertAlmostEqual(float(p_rows1[2][p_rows1[0].index("energy_eV")]), 950.0)
+
+            # 2. Switch to Scenario 2 and export both telemetry and particle data
+            self.win.combo_sweep_scenario.setCurrentIndex(1)
+            self.win._on_sweep_scenario_selected(1)
+
+            csv_s2 = os.path.join(tmpdir, "scen2_data.csv")
+            trk_s2 = os.path.join(tmpdir, "scen2_ptcls.csv")
+
+            with patch.object(QFileDialog, "getSaveFileName", return_value=(csv_s2, "CSV Files (*.csv)")), \
+                 patch.object(QMessageBox, "information"):
+                ok2 = self.win.export_csv()
+            self.assertTrue(ok2)
+            with open(csv_s2, "r", encoding="utf-8") as f:
+                rows2 = list(csv.reader(f))
+            self.assertEqual(len(rows2), 4)  # header + 3 rows
+            self.assertAlmostEqual(float(rows2[3][rows2[0].index("minpotential")]), -215.0)
+            self.assertAlmostEqual(float(rows2[3][rows2[0].index("beamdivergence°")]), 15.0)
+            self.assertAlmostEqual(float(rows2[3][rows2[0].index("ion_current_exit_avg_A")]), 0.0022)
+            self.assertAlmostEqual(float(rows2[3][rows2[0].index("grid_1_temp_K")]), 312.0)
+
+            with patch.object(QFileDialog, "getSaveFileName", return_value=(trk_s2, "CSV Files (*.csv)")), \
+                 patch.object(QMessageBox, "information"):
+                self.win.exporttrackingdata()
+            with open(trk_s2, "r", encoding="utf-8") as f:
+                p_rows2 = list(csv.reader(f))
+            self.assertEqual(len(p_rows2), 4)  # header + 3 particles
+            self.assertAlmostEqual(float(p_rows2[3][p_rows2[0].index("x_mm")]), 2.9)
+            self.assertAlmostEqual(float(p_rows2[3][p_rows2[0].index("energy_eV")]), 1400.0)
+
+            # 3. Switch to Scenario 3 (queued, 0 iterations) -> must warn "No Data" and not export Scenario 2's data
+            self.win.combo_sweep_scenario.setCurrentIndex(2)
+            self.win._on_sweep_scenario_selected(2)
+
+            with patch.object(QMessageBox, "warning") as mock_warn:
+                ok3 = self.win.export_csv()
+                self.assertFalse(ok3)
+                mock_warn.assert_called_once()
+                self.assertIn("No Data", mock_warn.call_args[0][1])
+
+            with patch.object(QMessageBox, "warning") as mock_warn_trk:
+                self.win.exporttrackingdata()
+                mock_warn_trk.assert_called_once()
+                self.assertIn("No Data", mock_warn_trk.call_args[0][1])
+
+        self.win.exit_sweep(confirm_choice="no")
+
+    def test_headless_worker_records_all_export_histories_and_particle_kinematics(self):
+        """Verify headless parallel sweep worker records full telemetry histories and particle kinematics."""
+        import tempfile
+        from physics.headless_sweep import run_single_sweep_scenario_worker, read_scenario_state
+
+        base_params = self.win.get_params()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_file = os.path.join(tmpdir, "scen1.bin")
+            trk_file = os.path.join(tmpdir, "scen1.trk.bin")
+            track_flag = os.path.join(tmpdir, "track.flag")
+            with open(track_flag, "w") as f:
+                f.write("1")
+
+            payload = {
+                "scenario_idx": 1,
+                "param_id": "Te_up",
+                "parameter_value": 3.0,
+                "base_params": base_params,
+                "steady_config": {
+                    "window": 5,
+                    "threshold": 1.0,
+                    "max_iterations": 4,
+                    "min_iterations": 2,
+                },
+                "state_file": state_file,
+                "trk_file": trk_file,
+                "track_ptcls_file": track_flag,
+                "scatter_limit": 500,
+            }
+            res = run_single_sweep_scenario_worker(payload)
+            self.assertEqual(res["steady_iterations"], 4)
+
+            st = read_scenario_state(state_file)
+            self.assertIsNotNone(st)
+            for key in (
+                "iter_history",
+                "time_history",
+                "ebs_history",
+                "div_history",
+                "div_mid_history",
+                "transparency_history",
+                "ion_current_exit_history",
+                "ion_current_exit_avg_history",
+                "transmitted_ions_history",
+                "active_cells_history",
+                "low_ppc_cells_history",
+            ):
+                self.assertIn(key, st)
+                self.assertEqual(len(st[key]), 4, f"Expected 4 entries in {key}")
+            self.assertIn("T_histories", st)
+            self.assertEqual(len(st["T_histories"][0]), 4)
+
+            trk_buf = read_scenario_state(trk_file)
+            self.assertIsInstance(trk_buf, list)
+            self.assertGreater(len(trk_buf), 0)
+            self.assertEqual(trk_buf[0].shape[1], 8)
+
 
 if __name__ == "__main__":
     unittest.main()

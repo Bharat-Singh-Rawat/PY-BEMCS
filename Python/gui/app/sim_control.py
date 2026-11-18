@@ -290,6 +290,17 @@ class SimControlMixin:
         self.lblTime.setText("t_sim:        — us")
         self.T_histories = {i: [] for i in range(len(self.grid_widgets))}
         self.tracking_buffer.clear()
+        if hasattr(self, '_is_in_sweep_mode') and self._is_in_sweep_mode():
+            active_scen = getattr(self, 'sweep_current_idx', 0) + 1
+            if hasattr(self, '_seq_scenario_histories') and isinstance(self._seq_scenario_histories, dict):
+                self._seq_scenario_histories.pop(active_scen, None)
+            if hasattr(self, '_sweep_tracking_buffers') and isinstance(self._sweep_tracking_buffers, dict):
+                self._sweep_tracking_buffers.pop(active_scen, None)
+        else:
+            if hasattr(self, '_seq_scenario_histories') and isinstance(self._seq_scenario_histories, dict):
+                self._seq_scenario_histories.clear()
+            if hasattr(self, '_sweep_tracking_buffers') and isinstance(self._sweep_tracking_buffers, dict):
+                self._sweep_tracking_buffers.clear()
         self.recorded_frames.clear()
         if hasattr(self, 'substep_history_iter'):
             self.substep_history_iter.clear()

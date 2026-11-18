@@ -50,7 +50,7 @@ class ParallelSweepWorker(QThread):
     sweep_error = pyqtSignal(str)                    # (error_message)
     scenario_action_needed = pyqtSignal(int, dict)   # (scenario_idx, advisory_info)
 
-    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=2000, parent=None, remaining_indices: list = None, existing_results: list = None, held_scenarios: list = None):
+    def __init__(self, sweep_config: dict, base_params: dict, n_cores: int = None, scatter_limit=2000, parent=None, remaining_indices: list = None, existing_results: list = None, held_scenarios: list = None, track_particles: bool = False):
         super().__init__(parent)
         self.sweep_config = sweep_config
         self.base_params = base_params
@@ -79,10 +79,15 @@ class ParallelSweepWorker(QThread):
         except Exception:
             pass
 
+        self.track_ptcls_file = os.path.join(tempfile.gettempdir(), f"pybemcs_sweep_{worker_token}.track_ptcls")
+        self.set_track_particles(bool(track_particles))
+
         # File-based state and pause tracking per scenario (fast, decoupled, zero-daemon)
         self.state_files = {}
         self.pause_files = {}
+        self.trk_files = {}
         self.final_status_dict = {}
+        self.final_tracking_buffers = {}
         self._paused_scenarios = set()
 
         values = self.sweep_config.get("values", [])
@@ -93,13 +98,16 @@ class ParallelSweepWorker(QThread):
             scen_num = idx + 1
             sf = os.path.join(tempfile.gettempdir(), f"pybemcs_scen_{worker_token}_{scen_num}.bin")
             pf = os.path.join(tempfile.gettempdir(), f"pybemcs_scen_{worker_token}_{scen_num}.pause")
+            tf = os.path.join(tempfile.gettempdir(), f"pybemcs_scen_{worker_token}_{scen_num}.trk.bin")
             self.state_files[scen_num] = sf
             self.pause_files[scen_num] = pf
-            if os.path.exists(pf):
-                try:
-                    os.remove(pf)
-                except Exception:
-                    pass
+            self.trk_files[scen_num] = tf
+            for f_clean in (pf, tf):
+                if os.path.exists(f_clean):
+                    try:
+                        os.remove(f_clean)
+                    except Exception:
+                        pass
 
             is_already_done = (self.remaining_indices is not None and scen_num not in self.remaining_indices)
             is_held = scen_num in self.held_scenarios
@@ -123,9 +131,15 @@ class ParallelSweepWorker(QThread):
                 "e_cex_eV": np.empty(0, dtype=np.float32),
                 "elec_xy": np.empty((0, 2), dtype=np.float32),
                 "iter_history": [],
+                "time_history": [],
                 "div_history": [],
                 "div_mid_history": [],
                 "ebs_history": [],
+                "transparency_history": [],
+                "ion_current_exit_avg_history": [],
+                "active_cells_history": [],
+                "low_ppc_cells_history": [],
+                "T_histories": {},
                 "energy_history_t": [],
                 "energy_history_ke_i": [],
                 "energy_history_ke_e": [],
@@ -268,6 +282,48 @@ class ParallelSweepWorker(QThread):
             except Exception:
                 pass
 
+    def set_track_particles(self, enabled: bool):
+        """Enable or disable particle kinematics recording across worker processes."""
+        self.track_particles_enabled = bool(enabled)
+        tf = getattr(self, 'track_ptcls_file', None)
+        if not tf:
+            return
+        if enabled:
+            try:
+                with open(tf, "w") as f:
+                    f.write("1")
+            except Exception:
+                pass
+        else:
+            if os.path.exists(tf):
+                try:
+                    os.remove(tf)
+                except Exception:
+                    pass
+
+    def get_scenario_tracking_buffer(self, scen_num: int) -> list:
+        """Read and return recorded particle kinematics list for scen_num."""
+        if not hasattr(self, 'final_tracking_buffers'):
+            self.final_tracking_buffers = {}
+        tf = getattr(self, 'trk_files', {}).get(scen_num)
+        if tf and os.path.exists(tf):
+            buf = read_scenario_state(tf)
+            if isinstance(buf, list):
+                self.final_tracking_buffers[scen_num] = buf
+                return buf
+        return list(self.final_tracking_buffers.get(scen_num, []))
+
+    def get_all_tracking_buffers(self) -> dict:
+        """Read all available scenario tracking buffers and return mapping {scen_num: list}."""
+        if not hasattr(self, 'final_tracking_buffers'):
+            self.final_tracking_buffers = {}
+        for scen_num, tf in getattr(self, 'trk_files', {}).items():
+            if tf and os.path.exists(tf):
+                buf = read_scenario_state(tf)
+                if isinstance(buf, list):
+                    self.final_tracking_buffers[scen_num] = buf
+        return dict(self.final_tracking_buffers)
+
     def get_status_dict(self):
         """Thread-safe snapshot dictionary of all scenario execution states."""
         res = dict(getattr(self, 'final_status_dict', {}))
@@ -307,9 +363,20 @@ class ParallelSweepWorker(QThread):
                     os.remove(pf)
             except Exception:
                 pass
+        for tf in getattr(self, 'trk_files', {}).values():
+            try:
+                if os.path.exists(tf):
+                    os.remove(tf)
+            except Exception:
+                pass
         if hasattr(self, 'active_view_file') and os.path.exists(self.active_view_file):
             try:
                 os.remove(self.active_view_file)
+            except Exception:
+                pass
+        if hasattr(self, 'track_ptcls_file') and os.path.exists(self.track_ptcls_file):
+            try:
+                os.remove(self.track_ptcls_file)
             except Exception:
                 pass
 
@@ -384,6 +451,9 @@ class ParallelSweepWorker(QThread):
                 "cancel_file": self.cancel_file,
                 "pause_file": self.pause_files.get(scen_idx),
                 "state_file": self.state_files.get(scen_idx),
+                "trk_file": self.trk_files.get(scen_idx),
+                "track_ptcls_file": getattr(self, 'track_ptcls_file', None),
+                "track_particles": bool(getattr(self, 'track_particles_enabled', False)),
                 "active_view_file": self.active_view_file,
                 "scatter_limit": getattr(self, 'scatter_limit', 2000),
             })
@@ -509,13 +579,20 @@ class ParallelSweepWorker(QThread):
                         completed_count += 1
                         sweep_tracker.tick()
                         s_idx = row.get("scenario_idx")
-                        if s_idx in self.final_status_dict:
-                            self.final_status_dict[s_idx]["status"] = "done"
-                            self.final_status_dict[s_idx]["iter"] = row.get("steady_iterations", 0)
-                            self.final_status_dict[s_idx]["steady_iterations"] = row.get("steady_iterations", 0)
-                            self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
-                            self.final_status_dict[s_idx]["div"] = row.get("div", 0.0)
-                            self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
+                        if s_idx is not None:
+                            sf = self.state_files.get(s_idx)
+                            if sf and os.path.exists(sf):
+                                st = read_scenario_state(sf)
+                                if st is not None:
+                                    self.final_status_dict[s_idx] = st
+                            if s_idx in self.final_status_dict:
+                                self.final_status_dict[s_idx]["status"] = "done"
+                                self.final_status_dict[s_idx]["iter"] = row.get("steady_iterations", 0)
+                                self.final_status_dict[s_idx]["steady_iterations"] = row.get("steady_iterations", 0)
+                                self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
+                                self.final_status_dict[s_idx]["div"] = row.get("divergence_deg", row.get("div", 0.0))
+                                self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
+                            self.get_scenario_tracking_buffer(s_idx)
                         val_str = f"{row['parameter_value']:.4g}"
                         c_time = row.get("computation_time_s", 0.0)
                         time_info = f" in {c_time:.1f}s" if (isinstance(c_time, (int, float)) and c_time > 0) else ""
@@ -550,6 +627,7 @@ class ParallelSweepWorker(QThread):
                     st = read_scenario_state(sf)
                     if st is not None:
                         self.final_status_dict[scen_num] = st
+                self.get_all_tracking_buffers()
             except Exception:
                 pass
 

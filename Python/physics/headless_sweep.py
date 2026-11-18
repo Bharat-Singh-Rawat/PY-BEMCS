@@ -255,9 +255,17 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     cancel_file = payload.get("cancel_file")
     pause_file = payload.get("pause_file")
     active_view_file = payload.get("active_view_file")
+    track_ptcls_file = payload.get("track_ptcls_file")
+    trk_file = payload.get("trk_file")
+    initial_track_ptcls = bool(payload.get("track_particles", False))
     status_dict = payload.get("status_dict")
     state_file = payload.get("state_file")
     scatter_limit = payload.get("scatter_limit", 1000)
+
+    def _is_tracking_particles() -> bool:
+        if track_ptcls_file is not None:
+            return os.path.exists(track_ptcls_file)
+        return initial_track_ptcls
 
     from physics.active_clock import ActiveDurationTracker, get_active_clock
     scenario_timer = ActiveDurationTracker(max_gap=None)
@@ -293,12 +301,21 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     e_cex = np.empty(0, dtype=np.float32)
     elec_xy = np.empty((0, 2), dtype=np.float32)
 
+    n_grids = len(scenario_params.get("grids", []))
     iter_hist = []
+    time_hist = []
     div_hist = []
     div_mid_hist = []
     ebs_hist = []
+    trans_hist = []
     ion_current_hist = []
+    ion_current_avg_hist = []
     trans_ions_hist = []
+    active_cells_hist = []
+    low_ppc_cells_hist = []
+    T_hists = {i: [] for i in range(n_grids)}
+    tracking_buffer = []
+    last_tracked_iter = -1
     last_valid_div = 0.0
     last_valid_div_mid = 0.0
 
@@ -320,11 +337,17 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "e_cex_eV": e_cex,
         "elec_xy": elec_xy,
         "iter_history": [],
+        "time_history": [],
         "div_history": [],
         "div_mid_history": [],
         "ebs_history": [],
+        "transparency_history": [],
         "ion_current_exit_history": [],
+        "ion_current_exit_avg_history": [],
         "transmitted_ions_history": [],
+        "active_cells_history": [],
+        "low_ppc_cells_history": [],
+        "T_histories": {i: [] for i in range(n_grids)},
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
@@ -347,6 +370,16 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 prim_xy, e_prim, cex_xy, e_cex, elec_xy = extract_display_particles(sim, scatter_limit)
             except Exception:
                 pass
+            if _is_tracking_particles() and last_tracked_iter != scenario_iters:
+                try:
+                    ptcl_data = sim.get_particle_kinematics()
+                    if ptcl_data.size > 0:
+                        tracking_buffer.append(ptcl_data)
+                        last_tracked_iter = scenario_iters
+                        if trk_file:
+                            write_scenario_state(trk_file, tracking_buffer)
+                except Exception:
+                    pass
             paused_state = dict(run_state) if 'run_state' in locals() else dict(init_state)
             paused_state["status"] = "paused"
             paused_state["iter"] = scenario_iters
@@ -355,6 +388,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             paused_state["cex_xy"] = cex_xy
             paused_state["e_cex_eV"] = e_cex
             paused_state["elec_xy"] = elec_xy
+            if status_dict is not None and trk_file is None:
+                paused_state["tracking_buffer"] = list(tracking_buffer)
             if status_dict is not None:
                 status_dict[scenario_idx] = paused_state
             if state_file:
@@ -363,6 +398,16 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             while os.path.exists(pause_file):
                 if cancel_file and os.path.exists(cancel_file):
                     break
+                if _is_tracking_particles() and len(tracking_buffer) == 0 and scenario_iters > 0:
+                    try:
+                        ptcl_data = sim.get_particle_kinematics()
+                        if ptcl_data.size > 0:
+                            tracking_buffer.append(ptcl_data)
+                            last_tracked_iter = scenario_iters
+                            if trk_file:
+                                write_scenario_state(trk_file, tracking_buffer)
+                    except Exception:
+                        pass
                 time.sleep(0.05)
             scenario_timer.start()
             t_start += (get_active_clock() - t_pause_start)
@@ -399,14 +444,41 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         if np.isfinite(div_m):
             last_valid_div_mid = div_m
 
+        dt_val = float(getattr(sim, 'dt', 5e-10))
+        t_sim_s = float(scenario_iters * dt_val)
+        trans_c = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
+        i_inst_c = float(getattr(sim, 'exit_ion_current_step', 0.0))
+        i_avg_c = float(getattr(sim, 'exit_ion_current_avg', i_inst_c))
+        i_step_c = i_avg_c
+        trans_ions_c = int(round(float(getattr(sim, 'transmitted_ions_step', 0.0))))
+        act_cells_c = int(getattr(sim, 'total_active_cells', 0))
+        low_ppc_c = int(getattr(sim, 'low_ppc_cells', 0))
+        t_grids_c = getattr(sim, 'T_grids', [])
+
         iter_hist.append(scenario_iters)
+        time_hist.append(t_sim_s)
         div_hist.append(div_c)
         div_mid_hist.append(div_m)
         ebs_hist.append(min_pot_c)
-        i_step_c = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
-        trans_ions_c = float(getattr(sim, 'transmitted_ions_step', 0.0))
-        ion_current_hist.append(i_step_c)
+        trans_hist.append(trans_c)
+        ion_current_hist.append(i_inst_c)
+        ion_current_avg_hist.append(i_avg_c)
         trans_ions_hist.append(trans_ions_c)
+        active_cells_hist.append(act_cells_c)
+        low_ppc_cells_hist.append(low_ppc_c)
+        for g_i, g_T in enumerate(t_grids_c):
+            T_hists.setdefault(g_i, []).append(float(g_T))
+
+        if _is_tracking_particles() and (scenario_iters % 10 == 0 or scenario_iters <= 5):
+            try:
+                ptcl_data = sim.get_particle_kinematics()
+                if ptcl_data.size > 0:
+                    tracking_buffer.append(ptcl_data)
+                    last_tracked_iter = scenario_iters
+                    if trk_file:
+                        write_scenario_state(trk_file, tracking_buffer)
+            except Exception:
+                pass
 
         if (status_dict is not None or state_file is not None) and (scenario_iters % 10 == 0 or scenario_iters <= 5):
             # Check if this scenario is currently being viewed in the GUI
@@ -424,8 +496,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 except Exception:
                     pass
 
-            t_us = (scenario_iters * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
-            trans_c = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
+            t_us = t_sim_s * 1e6
             cur_comp_time = scenario_timer.get_duration()
 
             run_state = {
@@ -447,11 +518,17 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "elec_xy": elec_xy,
                 "e_elec_eV": locals().get('e_elec', np.empty(0, dtype=np.float32)),
                 "iter_history": list(iter_hist),
+                "time_history": list(time_hist),
                 "div_history": list(div_hist),
                 "div_mid_history": list(div_mid_hist),
                 "ebs_history": list(ebs_hist),
+                "transparency_history": list(trans_hist),
                 "ion_current_exit_history": list(ion_current_hist),
+                "ion_current_exit_avg_history": list(ion_current_avg_hist),
                 "transmitted_ions_history": list(trans_ions_hist),
+                "active_cells_history": list(active_cells_hist),
+                "low_ppc_cells_history": list(low_ppc_cells_hist),
+                "T_histories": {k: list(v) for k, v in T_hists.items()},
                 "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
                 "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
                 "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
@@ -486,6 +563,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
                 "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
             }
+            if status_dict is not None and trk_file is None:
+                run_state["tracking_buffer"] = list(tracking_buffer)
             if status_dict is not None:
                 status_dict[scenario_idx] = run_state
             if state_file:
@@ -521,8 +600,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                     histories_to_check.append(sim.potential_history[-scenario_iters:])
                 if hasattr(sim, 'ion_current_history') and len(sim.ion_current_history) >= window:
                     histories_to_check.append(sim.ion_current_history[-scenario_iters:])
-                elif len(ion_current_hist) >= window:
-                    histories_to_check.append(ion_current_hist[-scenario_iters:])
+                elif len(ion_current_avg_hist) >= window:
+                    histories_to_check.append(ion_current_avg_hist[-scenario_iters:])
 
                 if histories_to_check:
                     all_under = True
@@ -541,6 +620,17 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec = extract_display_particles(sim, scatter_limit, return_electron_energy=True)
     except Exception:
         pass
+
+    if _is_tracking_particles() and last_tracked_iter != scenario_iters and scenario_iters > 0:
+        try:
+            ptcl_data = sim.get_particle_kinematics()
+            if ptcl_data.size > 0:
+                tracking_buffer.append(ptcl_data)
+                last_tracked_iter = scenario_iters
+        except Exception:
+            pass
+    if trk_file and len(tracking_buffer) > 0:
+        write_scenario_state(trk_file, tracking_buffer)
 
     comp_time_s = scenario_timer.get_duration()
     t_sim_us = (sim.iteration * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
@@ -612,11 +702,17 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "elec_xy": elec_xy,
         "e_elec_eV": e_elec,
         "iter_history": list(iter_hist),
+        "time_history": list(time_hist),
         "div_history": list(div_hist),
         "div_mid_history": list(div_mid_hist),
         "ebs_history": list(ebs_hist),
+        "transparency_history": list(trans_hist),
         "ion_current_exit_history": list(ion_current_hist),
+        "ion_current_exit_avg_history": list(ion_current_avg_hist),
         "transmitted_ions_history": list(trans_ions_hist),
+        "active_cells_history": list(active_cells_hist),
+        "low_ppc_cells_history": list(low_ppc_cells_hist),
+        "T_histories": {k: list(v) for k, v in T_hists.items()},
         "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
         "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
         "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
@@ -652,6 +748,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "result_row": res_row,
     }
+    if status_dict is not None and trk_file is None:
+        done_state["tracking_buffer"] = list(tracking_buffer)
 
     if status_dict is not None:
         status_dict[scenario_idx] = done_state

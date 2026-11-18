@@ -30,6 +30,8 @@ class ExportMixin:
         return progress
 
     def export_csv(self):
+        if hasattr(self, '_sync_selected_sweep_scenario_for_export'):
+            self._sync_selected_sweep_scenario_for_export()
         n = len(self.iter_history)
         if n == 0:
             QMessageBox.warning(self, "No Data", "No simulation history data to export.")
@@ -138,6 +140,8 @@ class ExportMixin:
             self.sim_isRunning = was_running
 
     def exporttrackingdata(self):
+        if hasattr(self, '_sync_selected_sweep_scenario_for_export'):
+            self._sync_selected_sweep_scenario_for_export()
         if len(self.tracking_buffer) == 0:
             QMessageBox.warning(self, "No Data", "No particle tracking data recorded.")
             return

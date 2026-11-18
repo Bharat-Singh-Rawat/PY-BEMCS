@@ -37,6 +37,299 @@ class SweepMixin:
             self._sweep_scenario_timer = ActiveDurationTracker(max_gap=None)
         return self._sweep_scenario_timer
 
+    def _is_in_sweep_mode(self) -> bool:
+        """Return True if sweep mode is armed, active, or has an active/completed sweep configuration."""
+        if getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False):
+            return True
+        if getattr(self, 'sweep_config', None) is not None:
+            return True
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None and self.parallel_sweep_worker.isRunning():
+            return True
+        return False
+
+    def _on_track_ptcls_toggled(self, checked: bool):
+        """Synchronize Record Kinematics checkbox state with parallel sweep worker processes."""
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            if hasattr(self.parallel_sweep_worker, 'set_track_particles'):
+                self.parallel_sweep_worker.set_track_particles(bool(checked))
+
+    def _get_merged_sweep_status_dict(self) -> dict:
+        """Return merged scenario status dictionary from cached state and parallel worker."""
+        status_dict = {}
+        if hasattr(self, '_sweep_status_dict') and self._sweep_status_dict:
+            status_dict.update(self._sweep_status_dict)
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            worker_dict = self.parallel_sweep_worker.get_status_dict()
+            for k, v in worker_dict.items():
+                if v and (v.get("iter", 0) > 0 or v.get("status") in ("running", "paused", "done")):
+                    status_dict[k] = v
+                elif k not in status_dict:
+                    status_dict[k] = v
+        return status_dict
+
+    def _record_seq_scenario_step(
+        self,
+        snap,
+        t_sim,
+        min_pot,
+        current_div,
+        current_div_mid,
+        transparency,
+        trans_last_frame,
+        T_grids,
+        ptcl_data=None,
+    ):
+        """Record a live sequential/armed simulation step into per-scenario history & tracking stores."""
+        scen_idx = getattr(self, 'sweep_current_idx', 0) + 1
+        if not hasattr(self, '_seq_scenario_histories') or not isinstance(self._seq_scenario_histories, dict):
+            self._seq_scenario_histories = {}
+        if not hasattr(self, '_sweep_tracking_buffers') or not isinstance(self._sweep_tracking_buffers, dict):
+            self._sweep_tracking_buffers = {}
+        if not hasattr(self, '_sweep_status_dict') or not isinstance(self._sweep_status_dict, dict):
+            self._sweep_status_dict = {}
+
+        h = self._seq_scenario_histories.get(scen_idx)
+        if h is not None and h.get("iter_history") and snap['iteration'] <= h["iter_history"][-1]:
+            h = None
+
+        n_grids = max(len(T_grids), len(getattr(self, 'grid_widgets', [])))
+        if h is None:
+            h = {
+                "iter_history": [],
+                "time_history": [],
+                "ebs_history": [],
+                "div_history": [],
+                "div_mid_history": [],
+                "transparency_history": [],
+                "transparency3_history": [],
+                "ion_current_exit_history": [],
+                "ion_current_exit_avg_history": [],
+                "transmitted_ions_history": [],
+                "active_cells_history": [],
+                "low_ppc_cells_history": [],
+                "T_histories": {i: [] for i in range(n_grids)},
+            }
+            self._seq_scenario_histories[scen_idx] = h
+
+        h["iter_history"].append(snap['iteration'])
+        h["time_history"].append(t_sim)
+        h["ebs_history"].append(min_pot)
+        h["div_history"].append(current_div)
+        h["div_mid_history"].append(current_div_mid)
+        h["transparency_history"].append(transparency)
+        h["transparency3_history"].append(trans_last_frame)
+        h["ion_current_exit_history"].append(snap['exit_ion_current_step'])
+        h["ion_current_exit_avg_history"].append(snap['exit_ion_current_avg'])
+        h["transmitted_ions_history"].append(int(round(snap['transmitted_ions_step'])))
+        h["active_cells_history"].append(snap['total_active_cells'])
+        h["low_ppc_cells_history"].append(snap['low_ppc_cells'])
+        for i, T in enumerate(T_grids):
+            h["T_histories"].setdefault(i, []).append(T)
+
+        if ptcl_data is not None and ptcl_data.size > 0:
+            self._sweep_tracking_buffers.setdefault(scen_idx, []).append(ptcl_data)
+
+        cfg = getattr(self, 'sweep_config', {}) or {}
+        values = cfg.get("values", [])
+        param_val = values[scen_idx - 1] if 0 <= (scen_idx - 1) < len(values) else 0.0
+        div_val = float(current_div) if (current_div is not None and np.isfinite(current_div)) else 0.0
+        div_mid_val = float(current_div_mid) if (current_div_mid is not None and np.isfinite(current_div_mid)) else 0.0
+
+        existing = self._sweep_status_dict.get(scen_idx, {})
+        st_name = "running" if getattr(self, 'sim_isRunning', False) else ("paused" if getattr(self, '_sweep_paused_current', False) else existing.get("status", "running"))
+        sim = getattr(self, 'sim', None)
+        self._sweep_status_dict[scen_idx] = {
+            **existing,
+            "status": st_name,
+            "iter": int(snap['iteration']),
+            "parameter_value": param_val,
+            "t_sim_us": float(t_sim * 1e6),
+            "div": div_val,
+            "div_mid": div_mid_val,
+            "exit_ion_current_A": float(snap['exit_ion_current_step']),
+            "transparency": float(transparency),
+            "prim_xy": snap.get('prim_xy', np.empty((0, 2))),
+            "e_prim_eV": snap.get('e_prim_eV', np.empty(0)),
+            "cex_xy": snap.get('cex_xy', np.empty((0, 2))),
+            "e_cex_eV": snap.get('e_cex_eV', np.empty(0)),
+            "elec_xy": snap.get('elec_xy', np.empty((0, 2))),
+            "e_elec_eV": snap.get('e_elec_eV', np.empty(0)),
+            "iter_history": list(h["iter_history"]),
+            "time_history": list(h["time_history"]),
+            "ebs_history": list(h["ebs_history"]),
+            "div_history": list(h["div_history"]),
+            "div_mid_history": list(h["div_mid_history"]),
+            "transparency_history": list(h["transparency_history"]),
+            "transparency3_history": list(h["transparency3_history"]),
+            "ion_current_exit_history": list(h["ion_current_exit_history"]),
+            "ion_current_exit_avg_history": list(h["ion_current_exit_avg_history"]),
+            "transmitted_ions_history": list(h["transmitted_ions_history"]),
+            "active_cells_history": list(h["active_cells_history"]),
+            "low_ppc_cells_history": list(h["low_ppc_cells_history"]),
+            "T_histories": {k: list(v) for k, v in h["T_histories"].items()},
+            "Lx": float(snap.get('Lx', getattr(sim, 'Lx', 3.0))),
+            "Ly": float(snap.get('Ly', getattr(sim, 'Ly', 3.0))),
+            "nx": int(snap.get('nx', getattr(sim, 'nx', 0))),
+            "ny": int(snap.get('ny', getattr(sim, 'ny', 0))),
+            "dx": float(snap.get('dx', getattr(sim, 'dx', 0.05))),
+            "dy": float(snap.get('dy', getattr(sim, 'dy', 0.05))),
+        }
+
+    def _get_sweep_scenario_tracking_buffer(self, scenario_idx: int) -> list:
+        """Retrieve the particle kinematics tracking buffer for a specific sweep scenario."""
+        if not hasattr(self, '_sweep_tracking_buffers') or not isinstance(self._sweep_tracking_buffers, dict):
+            self._sweep_tracking_buffers = {}
+
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            if hasattr(self.parallel_sweep_worker, 'get_scenario_tracking_buffer'):
+                w_buf = self.parallel_sweep_worker.get_scenario_tracking_buffer(scenario_idx)
+                if w_buf:
+                    self._sweep_tracking_buffers[scenario_idx] = list(w_buf)
+                    return list(w_buf)
+
+        if scenario_idx in self._sweep_tracking_buffers and len(self._sweep_tracking_buffers[scenario_idx]) > 0:
+            return list(self._sweep_tracking_buffers[scenario_idx])
+
+        status_dict = self._get_merged_sweep_status_dict()
+        info = status_dict.get(scenario_idx, {})
+        if isinstance(info.get("tracking_buffer"), list) and len(info["tracking_buffer"]) > 0:
+            self._sweep_tracking_buffers[scenario_idx] = list(info["tracking_buffer"])
+            return list(info["tracking_buffer"])
+
+        is_parallel = (
+            hasattr(self, 'parallel_sweep_worker')
+            and self.parallel_sweep_worker is not None
+        )
+        if (
+            not is_parallel
+            and scenario_idx == getattr(self, 'sweep_current_idx', 0) + 1
+            and info.get("status") not in ("queued", "action_required")
+            and scenario_idx not in self._sweep_tracking_buffers
+            and len(getattr(self, 'tracking_buffer', [])) > 0
+        ):
+            return list(self.tracking_buffer)
+
+        return []
+
+    def _sync_sweep_scenario_data_to_app(self, scenario_idx: int, info: dict = None):
+        """Synchronize app history lists and particle tracking buffer with the specified sweep scenario."""
+        if info is None:
+            status_dict = self._get_merged_sweep_status_dict()
+            info = dict(status_dict.get(scenario_idx, {}))
+        else:
+            info = dict(info)
+
+        seq_h = getattr(self, '_seq_scenario_histories', {}).get(scenario_idx)
+        if isinstance(seq_h, dict) and len(seq_h.get("iter_history", [])) >= len(info.get("iter_history") or []):
+            for k, v in seq_h.items():
+                if k == "T_histories":
+                    info[k] = {int(gk): list(gv) for gk, gv in v.items()}
+                else:
+                    info[k] = list(v)
+
+        iters = info.get("iter_history")
+        divs = info.get("div_history")
+        divs_mid = info.get("div_mid_history")
+        ebs = info.get("ebs_history")
+
+        if not iters and info.get("iter", 0) > 0 and (info.get("div") is not None or info.get("div_mid") is not None):
+            iters = [info.get("iter", 0)]
+            divs = [info.get("div", 0.0)]
+            divs_mid = [info.get("div_mid", 0.0)]
+            ebs = [info.get("saddle_potential_V", 0.0)]
+
+        n_grids = len(info.get("grids", []) or getattr(self, 'grid_widgets', []))
+
+        if iters and len(iters) > 0:
+            n = len(iters)
+            self.iter_history = list(iters)
+            self.div_history = list(divs) if divs is not None else [info.get("div", 0.0)] * n
+            self.div_mid_history = list(divs_mid) if divs_mid is not None else [info.get("div_mid", 0.0)] * n
+            self.ebs_history = list(ebs) if ebs is not None else [info.get("saddle_potential_V", 0.0)] * n
+            t_hist = info.get("time_history")
+            if t_hist is not None and len(t_hist) == n:
+                self.time_history = list(t_hist)
+            else:
+                dt = getattr(self.sim, 'dt', 5e-10) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-10
+                self.time_history = [it * dt for it in iters]
+
+            trans_hist = info.get("transparency_history")
+            if trans_hist is not None and len(trans_hist) > 0:
+                self.transparency_history = list(trans_hist)
+            elif "transparency" in info:
+                self.transparency_history = [float(info.get("transparency", 0.0))] * n
+            else:
+                self.transparency_history = []
+
+            self.transparency3_history = list(info.get("transparency3_history") or [])
+
+            i_exit_hist = info.get("ion_current_exit_history")
+            if i_exit_hist is not None and len(i_exit_hist) > 0:
+                self.ion_current_exit_history = list(i_exit_hist)
+            elif "exit_ion_current_A" in info:
+                self.ion_current_exit_history = [float(info.get("exit_ion_current_A", 0.0))] * n
+            else:
+                self.ion_current_exit_history = []
+
+            i_avg_hist = info.get("ion_current_exit_avg_history")
+            if i_avg_hist is not None and len(i_avg_hist) > 0:
+                self.ion_current_exit_avg_history = list(i_avg_hist)
+            else:
+                self.ion_current_exit_avg_history = list(self.ion_current_exit_history)
+
+            self.transmitted_ions_history = list(info.get("transmitted_ions_history") or [])
+            self.active_cells_history = list(info.get("active_cells_history") or [])
+            self.low_ppc_cells_history = list(info.get("low_ppc_cells_history") or [])
+
+            t_hists = info.get("T_histories")
+            if isinstance(t_hists, dict) and len(t_hists) > 0:
+                self.T_histories = {int(k): list(v) for k, v in t_hists.items()}
+            else:
+                self.T_histories = {i: [] for i in range(n_grids)}
+        else:
+            is_parallel = (
+                hasattr(self, 'parallel_sweep_worker')
+                and self.parallel_sweep_worker is not None
+            )
+            preserve_live_active = (
+                not info
+                and not is_parallel
+                and scenario_idx == getattr(self, 'sweep_current_idx', 0) + 1
+                and scenario_idx not in getattr(self, '_seq_scenario_histories', {})
+                and len(getattr(self, 'iter_history', [])) > 0
+            )
+            if not preserve_live_active:
+                self.iter_history = []
+                self.time_history = []
+                self.ebs_history = []
+                self.div_history = []
+                self.div_mid_history = []
+                self.transparency_history = []
+                self.transparency3_history = []
+                self.ion_current_exit_history = []
+                self.ion_current_exit_avg_history = []
+                self.transmitted_ions_history = []
+                self.active_cells_history = []
+                self.low_ppc_cells_history = []
+                self.T_histories = {i: [] for i in range(n_grids)}
+
+        self.tracking_buffer = self._get_sweep_scenario_tracking_buffer(scenario_idx)
+
+    def _sync_selected_sweep_scenario_for_export(self):
+        """Ensure history series and tracking_buffer match the selected sweep scenario right before export."""
+        if not self._is_in_sweep_mode():
+            return
+        if (
+            hasattr(self, 'combo_sweep_scenario')
+            and self.combo_sweep_scenario is not None
+            and self.combo_sweep_scenario.count() > 0
+            and self.combo_sweep_scenario.currentIndex() >= 0
+        ):
+            scenario_idx = self.combo_sweep_scenario.currentIndex() + 1
+        else:
+            scenario_idx = getattr(self, 'sweep_current_idx', 0) + 1
+        self._sync_sweep_scenario_data_to_app(scenario_idx)
+
     def _set_grid_edit_buttons_enabled(self, enabled: bool):
         """Enable or disable `+ Add Grid` / `- Remove Grid` buttons during active sweeps."""
         for attr in ("btn_add_grid", "btn_remove_grid"):
@@ -202,6 +495,8 @@ class SweepMixin:
         self.sweep_config = config
         self.sweep_results = []
         self._sweep_status_dict = {}
+        self._sweep_tracking_buffers = {}
+        self._seq_scenario_histories = {}
         self.sweep_current_idx = 0
         self.sweep_mode_armed = True
         self.is_sweep_active = False
@@ -635,6 +930,8 @@ class SweepMixin:
         self.sweep_config = config
         self.sweep_results = []
         self._sweep_status_dict = {}
+        self._sweep_tracking_buffers = {}
+        self._seq_scenario_histories = {}
         self.sweep_current_idx = 0
         self.is_sweep_active = True
         self.sweep_mode_armed = False
@@ -770,6 +1067,10 @@ class SweepMixin:
         if remaining_indices is None:
             self.sweep_results = []
             self._sweep_status_dict.clear()
+            if hasattr(self, '_sweep_tracking_buffers') and isinstance(self._sweep_tracking_buffers, dict):
+                self._sweep_tracking_buffers.clear()
+            if hasattr(self, '_seq_scenario_histories') and isinstance(self._seq_scenario_histories, dict):
+                self._seq_scenario_histories.clear()
             done_count = 0
         else:
             if not hasattr(self, 'sweep_results'):
@@ -835,6 +1136,7 @@ class SweepMixin:
             if s not in getattr(self, '_scenario_advisory_decisions', {})
         ]
 
+        track_ptcls = bool(self.chk_track_ptcls.isChecked()) if hasattr(self, 'chk_track_ptcls') and self.chk_track_ptcls is not None else False
         self.parallel_sweep_worker = ParallelSweepWorker(
             config,
             base_params,
@@ -844,6 +1146,7 @@ class SweepMixin:
             remaining_indices=remaining_indices,
             existing_results=self.sweep_results,
             held_scenarios=held_indices,
+            track_particles=track_ptcls,
         )
 
         self.parallel_sweep_worker.progress_updated.connect(self._on_parallel_progress_updated)
@@ -1522,30 +1825,11 @@ class SweepMixin:
         elif hasattr(self, 'scat_elec') and self.scat_elec is not None:
             self.scat_elec.set_offsets(np.empty((0, 2)))
 
-        # 2. Update Divergence and Saddle-Point Potential history graphs
-        iters = info.get("iter_history")
-        divs = info.get("div_history")
-        divs_mid = info.get("div_mid_history")
-        ebs = info.get("ebs_history")
+        # 2. Update Divergence and Saddle-Point Potential history graphs and sync telemetry/tracking
+        self._sync_sweep_scenario_data_to_app(scenario_idx, info)
 
-        if not iters and info.get("iter", 0) > 0 and (info.get("div") is not None or info.get("div_mid") is not None):
-            iters = [info.get("iter", 0)]
-            divs = [info.get("div", 0.0)]
-            divs_mid = [info.get("div_mid", 0.0)]
-            ebs = [info.get("saddle_potential_V", 0.0)]
-
+        iters = self.iter_history
         if iters and len(iters) > 0:
-            self.iter_history = list(iters)
-            self.div_history = list(divs) if divs is not None else []
-            self.div_mid_history = list(divs_mid) if divs_mid is not None else []
-            self.ebs_history = list(ebs) if ebs is not None else []
-            t_hist = info.get("time_history")
-            if t_hist is not None and len(t_hist) == len(iters):
-                self.time_history = list(t_hist)
-            else:
-                dt = getattr(self.sim, 'dt', 5e-10) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-10
-                self.time_history = [it * dt for it in iters]
-
             x_data_div = self._get_plot_x_data('div') if hasattr(self, '_get_plot_x_data') else self.iter_history
             x_data_ebs = self._get_plot_x_data('ebs') if hasattr(self, '_get_plot_x_data') else self.iter_history
             if hasattr(self, 'line_div'):
@@ -2195,22 +2479,30 @@ class SweepMixin:
         self.sweep_results.append(result_row)
         if not hasattr(self, '_sweep_status_dict'):
             self._sweep_status_dict = {}
+        if not hasattr(self, '_sweep_tracking_buffers'):
+            self._sweep_tracking_buffers = {}
         s_idx = result_row.get("scenario_idx")
         if s_idx is not None:
+            prev_info = self._sweep_status_dict.get(s_idx, {})
             self._sweep_status_dict[s_idx] = {
+                **prev_info,
                 "status": "done",
                 "iter": result_row.get("steady_iterations", 0),
                 "steady_iterations": result_row.get("steady_iterations", 0),
                 "parameter_value": result_row.get("parameter_value", 0.0),
                 "steady_state_reached": result_row.get("steady_state_reached", True),
                 "computation_time_s": result_row.get("computation_time_s", 0.0),
-                "div": result_row.get("div", 0.0),
-                "div_mid": result_row.get("div_mid", 0.0),
+                "div": result_row.get("divergence_deg", result_row.get("div", 0.0)),
+                "div_mid": result_row.get("divergence_2nd_plane_deg", result_row.get("div_mid", 0.0)),
                 "exit_ion_current_A": result_row.get("exit_ion_current_A", 0.0),
                 "transparency": result_row.get("transparency", 0.0),
             }
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
             self._sweep_status_dict.update(self.parallel_sweep_worker.get_status_dict())
+            if s_idx is not None and hasattr(self.parallel_sweep_worker, 'get_scenario_tracking_buffer'):
+                tb = self.parallel_sweep_worker.get_scenario_tracking_buffer(s_idx)
+                if tb:
+                    self._sweep_tracking_buffers[s_idx] = list(tb)
         self._update_sweep_scenario_combo_items()
 
     def _on_parallel_sweep_finished(self, results):
@@ -2229,6 +2521,12 @@ class SweepMixin:
             if not hasattr(self, '_sweep_status_dict'):
                 self._sweep_status_dict = {}
             self._sweep_status_dict.update(self.parallel_sweep_worker.get_status_dict())
+            if not hasattr(self, '_sweep_tracking_buffers'):
+                self._sweep_tracking_buffers = {}
+            if hasattr(self.parallel_sweep_worker, 'get_all_tracking_buffers'):
+                for k_scen, tb_list in self.parallel_sweep_worker.get_all_tracking_buffers().items():
+                    if tb_list:
+                        self._sweep_tracking_buffers[k_scen] = list(tb_list)
         if hasattr(self, 'sweep_monitor_timer') and self.sweep_monitor_timer is not None:
             self.sweep_monitor_timer.stop()
         if hasattr(self, '_pause_simulation_timer'):
@@ -2429,27 +2727,48 @@ class SweepMixin:
         sim = self.sim
         t_sim_us = (sim.iteration * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
 
+        seq_h = getattr(self, '_seq_scenario_histories', {}).get(scenario_idx, {})
+        rec_iters = list(seq_h.get("iter_history") or self.iter_history)
+        rec_times = list(seq_h.get("time_history") or getattr(self, 'time_history', []))
+        rec_divs = list(seq_h.get("div_history") or self.div_history)
+        rec_divs_mid = list(seq_h.get("div_mid_history") or self.div_mid_history)
+        rec_ebs = list(seq_h.get("ebs_history") or self.ebs_history)
+        rec_trans = list(seq_h.get("transparency_history") or getattr(self, 'transparency_history', []))
+        rec_trans3 = list(seq_h.get("transparency3_history") or getattr(self, 'transparency3_history', []))
+        rec_i_exit = list(seq_h.get("ion_current_exit_history") or getattr(self, 'ion_current_exit_history', []))
+        rec_i_avg = list(seq_h.get("ion_current_exit_avg_history") or getattr(self, 'ion_current_exit_avg_history', []))
+        rec_trans_ions = list(seq_h.get("transmitted_ions_history") or getattr(self, 'transmitted_ions_history', []))
+        rec_act_cells = list(seq_h.get("active_cells_history") or getattr(self, 'active_cells_history', []))
+        rec_low_ppc = list(seq_h.get("low_ppc_cells_history") or getattr(self, 'low_ppc_cells_history', []))
+        raw_t_hists = seq_h.get("T_histories") if seq_h.get("T_histories") else getattr(self, 'T_histories', {})
+        rec_t_hists = {int(k): list(v) for k, v in raw_t_hists.items()} if isinstance(raw_t_hists, dict) else {}
+
+        if not hasattr(self, '_sweep_tracking_buffers') or not isinstance(self._sweep_tracking_buffers, dict):
+            self._sweep_tracking_buffers = {}
+        if scenario_idx not in self._sweep_tracking_buffers and len(getattr(self, 'tracking_buffer', [])) > 0:
+            self._sweep_tracking_buffers[scenario_idx] = list(self.tracking_buffer)
+        rec_trk_buf = list(self._sweep_tracking_buffers.get(scenario_idx, []))
+
         e_tot = sim.energy_history_tot[-1] if hasattr(sim, 'energy_history_tot') and sim.energy_history_tot else 0.0
         q_net = sim.charge_history_q_net[-1] if hasattr(sim, 'charge_history_q_net') and sim.charge_history_q_net else 0.0
         fe = sim.energy_history_fe[-1] if hasattr(sim, 'energy_history_fe') and sim.energy_history_fe else 0.0
-        saddle_v = sim.min_pot if hasattr(sim, 'min_pot') else (self.ebs_history[-1] if self.ebs_history else 0.0)
+        saddle_v = sim.min_pot if hasattr(sim, 'min_pot') else (rec_ebs[-1] if rec_ebs else 0.0)
         div = 0.0
-        if self.div_history:
-            finite_div = [d for d in self.div_history if np.isfinite(d)]
-            div = finite_div[-1] if finite_div else (0.0 if np.isnan(self.div_history[-1]) else self.div_history[-1])
+        if rec_divs:
+            finite_div = [d for d in rec_divs if np.isfinite(d)]
+            div = finite_div[-1] if finite_div else (0.0 if np.isnan(rec_divs[-1]) else rec_divs[-1])
         elif hasattr(sim, 'current_div') and np.isfinite(sim.current_div):
             div = sim.current_div
 
         div_plane2 = 0.0
-        div_mid_hist = getattr(self, 'div_mid_history', None)
-        if div_mid_hist:
-            finite_div2 = [d for d in div_mid_hist if np.isfinite(d)]
-            div_plane2 = finite_div2[-1] if finite_div2 else (0.0 if np.isnan(div_mid_hist[-1]) else div_mid_hist[-1])
+        if rec_divs_mid:
+            finite_div2 = [d for d in rec_divs_mid if np.isfinite(d)]
+            div_plane2 = finite_div2[-1] if finite_div2 else (0.0 if np.isnan(rec_divs_mid[-1]) else rec_divs_mid[-1])
         elif hasattr(sim, 'current_div_mid') and np.isfinite(sim.current_div_mid):
             div_plane2 = sim.current_div_mid
 
-        i_exit = self.ion_current_exit_history[-1] if self.ion_current_exit_history else 0.0
-        trans = self.transparency_history[-1] if self.transparency_history else 0.0
+        i_exit = rec_i_exit[-1] if rec_i_exit else 0.0
+        trans = rec_trans[-1] if rec_trans else 0.0
 
         p_eff, p_max, perv_frac = self._compute_perveance_metrics(i_exit)
 
@@ -2501,11 +2820,20 @@ class SweepMixin:
             "e_cex_eV": getattr(self, '_last_e_cex_eV', np.empty(0)),
             "elec_xy": getattr(self, '_last_elec_xy', np.empty((0, 2))),
             "e_elec_eV": getattr(self, '_last_e_elec_eV', np.empty(0)),
-            "iter_history": list(self.iter_history),
-            "time_history": list(getattr(self, 'time_history', [])),
-            "div_history": list(self.div_history),
-            "div_mid_history": list(self.div_mid_history),
-            "ebs_history": list(self.ebs_history),
+            "iter_history": rec_iters,
+            "time_history": rec_times,
+            "div_history": rec_divs,
+            "div_mid_history": rec_divs_mid,
+            "ebs_history": rec_ebs,
+            "transparency_history": rec_trans,
+            "transparency3_history": rec_trans3,
+            "ion_current_exit_history": rec_i_exit,
+            "ion_current_exit_avg_history": rec_i_avg,
+            "transmitted_ions_history": rec_trans_ions,
+            "active_cells_history": rec_act_cells,
+            "low_ppc_cells_history": rec_low_ppc,
+            "T_histories": rec_t_hists,
+            "tracking_buffer": rec_trk_buf,
             "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
             "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
             "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
@@ -2531,8 +2859,6 @@ class SweepMixin:
             "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
             "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
             "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
-            "ion_current_exit_history": list(getattr(self, 'ion_current_exit_history', [])),
-            "transmitted_ions_history": list(getattr(self, 'transmitted_ions_history', [])),
             "V": getattr(sim, 'V', None).copy() if getattr(sim, 'V', None) is not None else None,
             "result_row": result_row,
         }
@@ -2654,6 +2980,11 @@ class SweepMixin:
                     return
 
             next_val = values[self.sweep_current_idx]
+            if hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario is not None:
+                if self.combo_sweep_scenario.currentIndex() == self.sweep_current_idx - 1:
+                    self.combo_sweep_scenario.blockSignals(True)
+                    self.combo_sweep_scenario.setCurrentIndex(self.sweep_current_idx)
+                    self.combo_sweep_scenario.blockSignals(False)
             self._apply_sweep_value(cfg["param_id"], next_val)
             if hasattr(self, 'sim'):
                 self.sim.truncate_downstream_plume = (getattr(self, '_scenario_advisory_decisions', {}).get(next_scen_num) == "truncate")
@@ -2674,6 +3005,7 @@ class SweepMixin:
             if hasattr(self, 'btn_toggle'):
                 self.btn_toggle.setText("PAUSE BEAM" if getattr(self, 'sim_isRunning', False) else "2. START BEAM")
             self._update_sweep_action_button_state()
+            self._update_sweep_scenario_combo_items()
         else:
             self.finish_sweep()
 
@@ -2954,6 +3286,8 @@ class SweepMixin:
         self.sweep_config = None
         self.sweep_results = []
         self._sweep_status_dict = {}
+        self._sweep_tracking_buffers = {}
+        self._seq_scenario_histories = {}
 
         # 4. Hide all sweep top-bar UI elements
         self._hide_sweep_top_bar_controls()

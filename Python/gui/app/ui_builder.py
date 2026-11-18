@@ -569,6 +569,8 @@ class UIBuilderMixin:
         export_row.addWidget(self.btn_export_params, 0)
 
         self.chk_track_ptcls = QCheckBox("Record Kinematics")
+        if hasattr(self, '_on_track_ptcls_toggled'):
+            self.chk_track_ptcls.toggled.connect(self._on_track_ptcls_toggled)
 
         export_trk_row = QHBoxLayout()
         export_trk_row.setSpacing(4)

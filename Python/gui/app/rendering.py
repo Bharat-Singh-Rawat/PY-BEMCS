@@ -305,10 +305,46 @@ class RenderingMixin:
             if getattr(self, 'steady_state_window', None) and self.steady_state_window.isVisible():
                 self.steady_state_window.update_plot(self.sim, self)
 
+        ptcl_data = None
         if self.chk_track_ptcls.isChecked():
             ptcl_data = self.sim.get_particle_kinematics()
-            if ptcl_data.size > 0:
-                self.tracking_buffer.append(ptcl_data)
+
+        is_in_sweep = hasattr(self, '_is_in_sweep_mode') and self._is_in_sweep_mode()
+        if is_in_sweep and hasattr(self, '_record_seq_scenario_step'):
+            self._record_seq_scenario_step(
+                snap=snap,
+                t_sim=t_sim,
+                min_pot=min_pot,
+                current_div=current_div,
+                current_div_mid=current_div_mid,
+                transparency=transparency,
+                trans_last_frame=trans_last_frame,
+                T_grids=T_grids,
+                ptcl_data=ptcl_data,
+            )
+            running_scen = getattr(self, 'sweep_current_idx', 0) + 1
+            if (
+                hasattr(self, 'combo_sweep_scenario')
+                and self.combo_sweep_scenario is not None
+                and self.combo_sweep_scenario.isVisible()
+                and self.combo_sweep_scenario.count() > 0
+                and self.combo_sweep_scenario.currentIndex() >= 0
+            ):
+                viewed_scen = self.combo_sweep_scenario.currentIndex() + 1
+                if viewed_scen != running_scen:
+                    if self.sim_isRunning:
+                        p = self.get_params()
+                        p['_last_gui_ms'] = self._last_gui_ms
+                        p['iedf_visible'] = bool(self.iedf_window and self.iedf_window.isVisible())
+                        self._sim_worker.update_params(p)
+                    if getattr(self, 'is_sweep_active', False):
+                        self.check_sweep_steady_state()
+                    if hasattr(self, '_update_sweep_scenario_combo_items'):
+                        self._update_sweep_scenario_combo_items()
+                    return
+
+        if ptcl_data is not None and ptcl_data.size > 0:
+            self.tracking_buffer.append(ptcl_data)
 
         # Safeguard against non-monotonic step indices across scenario transitions:
         # If iteration resets or jumps backwards, clear all histories immediately
