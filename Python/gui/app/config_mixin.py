@@ -939,4 +939,12 @@ class ConfigMixin:
         params['scatter_limit'] = getattr(self, 'scatter_limit', getattr(getattr(self, '_sim_worker', None), '_scatter_limit', 2000))
         up_settings = getattr(self, 'upstream_gap_settings', None)
         params['upstream_gap_settings'] = copy.deepcopy(up_settings) if isinstance(up_settings, dict) else None
+        if getattr(self, 'mat_props', None):
+            params['mat_props'] = copy.deepcopy(self.mat_props)
+        if getattr(self, 'mat_name', None):
+            params['mat_name'] = str(self.mat_name)
+        if getattr(self, 'beam_mass_amu', None) is not None:
+            params['beam_mass_amu'] = float(self.beam_mass_amu)
+        if getattr(self, 'beam_charge_state', None) is not None:
+            params['beam_charge_state'] = int(self.beam_charge_state)
         return params

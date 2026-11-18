@@ -256,6 +256,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     pause_file = payload.get("pause_file")
     active_view_file = payload.get("active_view_file")
     track_ptcls_file = payload.get("track_ptcls_file")
+    sim_mode_file = payload.get("sim_mode_file")
     trk_file = payload.get("trk_file")
     initial_track_ptcls = bool(payload.get("track_particles", False))
     status_dict = payload.get("status_dict")
@@ -266,6 +267,17 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         if track_ptcls_file is not None:
             return os.path.exists(track_ptcls_file)
         return initial_track_ptcls
+
+    def _sync_sim_mode(params_dict: dict) -> str:
+        if sim_mode_file is not None and os.path.exists(sim_mode_file):
+            try:
+                with open(sim_mode_file, "r", encoding="utf-8") as f:
+                    m = f.read().strip()
+                if m in ("Both", "Thermal", "Erosion", "Trajectories"):
+                    params_dict["sim_mode"] = m
+            except Exception:
+                pass
+        return str(params_dict.get("sim_mode", "Both"))
 
     from physics.active_clock import ActiveDurationTracker, get_active_clock
     scenario_timer = ActiveDurationTracker(max_gap=None)
@@ -279,6 +291,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         parameter_value,
         sweep_config=payload.get("sweep_config"),
     )
+    _sync_sim_mode(scenario_params)
 
     sim = DigitalTwinSimulator()
     sim.build_domain(scenario_params)
@@ -348,11 +361,18 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "active_cells_history": [],
         "low_ppc_cells_history": [],
         "T_histories": {i: [] for i in range(n_grids)},
+        "T_grids": [float(t) for t in getattr(sim, 'T_grids', [300.0] * n_grids)],
+        "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
+        "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+        "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
+        "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
+        "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
         "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
         "grids": scenario_params.get("grids", []),
+        "sim_mode": str(scenario_params.get("sim_mode", "Both")),
     }
     if status_dict is not None:
         status_dict[scenario_idx] = init_state
@@ -388,6 +408,12 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             paused_state["cex_xy"] = cex_xy
             paused_state["e_cex_eV"] = e_cex
             paused_state["elec_xy"] = elec_xy
+            paused_state["T_grids"] = [float(t) for t in getattr(sim, 'T_grids', [])]
+            paused_state["Tmap"] = sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None
+            paused_state["mask_grids"] = [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else []
+            paused_state["isBound"] = sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None
+            paused_state["X"] = sim.X.copy() if getattr(sim, 'X', None) is not None else None
+            paused_state["Y"] = sim.Y.copy() if getattr(sim, 'Y', None) is not None else None
             if status_dict is not None and trk_file is None:
                 paused_state["tracking_buffer"] = list(tracking_buffer)
             if status_dict is not None:
@@ -418,6 +444,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             if state_file:
                 write_scenario_state(state_file, resumed_state)
 
+        if scenario_iters % 10 == 0:
+            _sync_sim_mode(scenario_params)
         sim.step(scenario_params)
         scenario_timer.tick()
         if hasattr(sim, 'get_total_energy'):
@@ -529,6 +557,13 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "active_cells_history": list(active_cells_hist),
                 "low_ppc_cells_history": list(low_ppc_cells_hist),
                 "T_histories": {k: list(v) for k, v in T_hists.items()},
+                "T_grids": [float(t) for t in t_grids_c],
+                "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
+                "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+                "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
+                "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
+                "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+                "sim_mode": str(scenario_params.get("sim_mode", "Both")),
                 "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
                 "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
                 "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
@@ -655,6 +690,15 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         injection_area=getattr(sim, '_last_injection_area', None)
     )
 
+    t_grids_final_K = [float(t) for t in getattr(sim, 'T_grids', [])]
+    if not t_grids_final_K and T_hists:
+        t_grids_final_K = [float(T_hists[k][-1]) if T_hists.get(k) else 300.0 for k in sorted(T_hists.keys())]
+    t_grids_final_C = [float(t - 273.15) for t in t_grids_final_K]
+    grid_temps_dict = {}
+    for g_idx, (tk, tc) in enumerate(zip(t_grids_final_K, t_grids_final_C), start=1):
+        grid_temps_dict[f"grid_{g_idx}_temp_K"] = tk
+        grid_temps_dict[f"grid_{g_idx}_temp_C"] = tc
+
     res_row = {
         "scenario_idx": scenario_idx,
         "parameter_value": parameter_value,
@@ -678,6 +722,9 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "total_energy_J": float(e_tot),
         "total_charge_C": float(q_net),
         "field_energy_J": float(fe),
+        "T_grids_K": t_grids_final_K,
+        "T_grids_C": t_grids_final_C,
+        **grid_temps_dict,
     }
 
     done_state = {
@@ -713,6 +760,15 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "active_cells_history": list(active_cells_hist),
         "low_ppc_cells_history": list(low_ppc_cells_hist),
         "T_histories": {k: list(v) for k, v in T_hists.items()},
+        "T_grids": t_grids_final_K,
+        "T_grids_K": t_grids_final_K,
+        "T_grids_C": t_grids_final_C,
+        "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
+        "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+        "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
+        "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
+        "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+        "sim_mode": str(scenario_params.get("sim_mode", "Both")),
         "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
         "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
         "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),

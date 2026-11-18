@@ -177,6 +177,19 @@ class DomainMixin:
 
     def build_domain(self, params, preserve_state=False):
         self._stop_requested = False
+        if params.get("beam_mass_amu") is not None and float(params["beam_mass_amu"]) > 0:
+            self.m_ion = float(params["beam_mass_amu"]) * 1.6605e-27
+            self.m_XE = self.m_ion
+        if params.get("beam_charge_state") is not None and int(params["beam_charge_state"]) > 0:
+            self.Z_ion = int(params["beam_charge_state"])
+            self.q_ion = self.Z_ion * self.q
+        if params.get("m_e_ratio") is not None and float(params["m_e_ratio"]) > 0:
+            self.m_e = self.m_ion / float(params["m_e_ratio"])
+        if isinstance(params.get("mat_props"), dict) and params["mat_props"]:
+            self.set_material(props=params["mat_props"])
+        elif params.get("mat_name") and hasattr(self, "MATERIAL_PRESETS") and params["mat_name"] in self.MATERIAL_PRESETS:
+            self.set_material(name=params["mat_name"])
+
         grids   = params.get("grids", [])
         if grids:
             total_grid_thickness = sum(g['t'] + g['gap'] for g in grids)
@@ -453,6 +466,7 @@ class DomainMixin:
             self.cell_area_2d = np.tile(self.cell_area_1d, (self.ny, 1))
 
         self.X, self.Y = np.meshgrid(self.x_coords, self.y_coords)
+        self._recompute_cell_constants()
         self._update_taichi_mesh_constants()
 
         if not preserve_state:

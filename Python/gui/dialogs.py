@@ -2125,7 +2125,7 @@ class SweepResultsDialog(QDialog):
 
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(12)
+        self.table.setColumnCount(13)
         self.table.setHorizontalHeaderLabels([
             "Scenario",
             f"{param_label}",
@@ -2139,6 +2139,7 @@ class SweepResultsDialog(QDialog):
             "Perveance Fraction",
             "Transparency",
             "Total Energy (J)",
+            "Grid Temps (°C)",
         ])
         self.table.setRowCount(len(results))
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -2199,6 +2200,18 @@ class SweepResultsDialog(QDialog):
             self.table.setItem(row, 10, QTableWidgetItem(f"{trans:.3f}"))
             self.table.setItem(row, 11, QTableWidgetItem(f"{e_tot:.3e}"))
 
+            t_c_list, t_k_list = self._extract_row_grid_temps(res)
+            if t_c_list:
+                temp_str = " | ".join(f"G{i+1}: {tc:.1f}°C" for i, tc in enumerate(t_c_list))
+                temp_tip = " | ".join(f"G{i+1}: {tc:.2f} °C ({tk:.2f} K)" for i, (tc, tk) in enumerate(zip(t_c_list, t_k_list)))
+            else:
+                temp_str = "N/A"
+                temp_tip = ""
+            item_temp = QTableWidgetItem(temp_str)
+            if temp_tip:
+                item_temp.setToolTip(temp_tip)
+            self.table.setItem(row, 12, item_temp)
+
         layout.addWidget(self.table, 1)
 
         # Action Buttons
@@ -2217,6 +2230,43 @@ class SweepResultsDialog(QDialog):
         btn_row.addWidget(btn_close)
 
         layout.addLayout(btn_row)
+
+    @staticmethod
+    def _extract_row_grid_temps(res: dict):
+        """Return (t_c_list, t_k_list) for a scenario result row."""
+        t_c_raw = res.get("T_grids_C")
+        t_k_raw = res.get("T_grids_K") or res.get("T_grids")
+        if isinstance(t_k_raw, (list, tuple)) and len(t_k_raw) > 0:
+            t_k_list = [float(x) for x in t_k_raw]
+            if isinstance(t_c_raw, (list, tuple)) and len(t_c_raw) == len(t_k_list):
+                t_c_list = [float(x) for x in t_c_raw]
+            else:
+                t_c_list = [tk - 273.15 for tk in t_k_list]
+            return t_c_list, t_k_list
+        if isinstance(t_c_raw, (list, tuple)) and len(t_c_raw) > 0:
+            t_c_list = [float(x) for x in t_c_raw]
+            t_k_list = [tc + 273.15 for tc in t_c_list]
+            return t_c_list, t_k_list
+
+        t_c_list = []
+        t_k_list = []
+        g_idx = 1
+        while True:
+            kc = f"grid_{g_idx}_temp_C"
+            kk = f"grid_{g_idx}_temp_K"
+            if kc in res or kk in res:
+                if kk in res and res[kk] is not None:
+                    tk = float(res[kk])
+                    tc = float(res[kc]) if (kc in res and res[kc] is not None) else (tk - 273.15)
+                else:
+                    tc = float(res[kc])
+                    tk = tc + 273.15
+                t_c_list.append(tc)
+                t_k_list.append(tk)
+                g_idx += 1
+            else:
+                break
+        return t_c_list, t_k_list
 
     def _export_dialog(self):
         """Single export entry point allowing the user to select format (.csv, .txt, .json) in the file dialog."""
@@ -2282,6 +2332,17 @@ class SweepResultsDialog(QDialog):
             else:
                 writer.writerow(["# Status: All scenarios achieved steady state."])
 
+            max_n_grids = 0
+            for r in self.results:
+                tc_l, _ = self._extract_row_grid_temps(r)
+                if len(tc_l) > max_n_grids:
+                    max_n_grids = len(tc_l)
+
+            grid_temp_headers = ["grid_temps_C"]
+            for g_i in range(1, max_n_grids + 1):
+                grid_temp_headers.append(f"grid_{g_i}_temp_C")
+                grid_temp_headers.append(f"grid_{g_i}_temp_K")
+
             # Header row
             writer.writerow([
                 "scenario_idx",
@@ -2304,6 +2365,7 @@ class SweepResultsDialog(QDialog):
                 "total_energy_J",
                 "total_charge_C",
                 "field_energy_J",
+                *grid_temp_headers,
             ])
 
             param_id = self.sweep_config.get("param_id", "")
@@ -2334,6 +2396,17 @@ class SweepResultsDialog(QDialog):
                 p_max_str = f"{p_max:.4e}" if (isinstance(p_max, (int, float)) and np.isfinite(p_max)) else str(p_max)
                 p_frac_str = f"{p_frac:.4f}" if (isinstance(p_frac, (int, float)) and np.isfinite(p_frac)) else str(p_frac)
 
+                tc_l, tk_l = self._extract_row_grid_temps(r)
+                temp_summary_str = " | ".join(f"G{i+1}: {tc:.2f}C" for i, tc in enumerate(tc_l)) if tc_l else ""
+                grid_temp_vals = [temp_summary_str]
+                for g_i in range(max_n_grids):
+                    if g_i < len(tc_l):
+                        grid_temp_vals.append(f"{tc_l[g_i]:.2f}")
+                        grid_temp_vals.append(f"{tk_l[g_i]:.2f}")
+                    else:
+                        grid_temp_vals.append("")
+                        grid_temp_vals.append("")
+
                 writer.writerow([
                     r.get("scenario_idx", ""),
                     self.sweep_config.get("param_id", ""),
@@ -2355,6 +2428,7 @@ class SweepResultsDialog(QDialog):
                     r.get("total_energy_J", ""),
                     r.get("total_charge_C", ""),
                     r.get("field_energy_J", ""),
+                    *grid_temp_vals,
                 ])
 
         if notify:

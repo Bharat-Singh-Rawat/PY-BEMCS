@@ -82,6 +82,10 @@ class ParallelSweepWorker(QThread):
         self.track_ptcls_file = os.path.join(tempfile.gettempdir(), f"pybemcs_sweep_{worker_token}.track_ptcls")
         self.set_track_particles(bool(track_particles))
 
+        self.sim_mode_file = os.path.join(tempfile.gettempdir(), f"pybemcs_sweep_{worker_token}.sim_mode")
+        initial_sim_mode = self.base_params.get("sim_mode", "Both") if isinstance(self.base_params, dict) else "Both"
+        self.set_sim_mode(str(initial_sim_mode))
+
         # File-based state and pause tracking per scenario (fast, decoupled, zero-daemon)
         self.state_files = {}
         self.pause_files = {}
@@ -140,6 +144,12 @@ class ParallelSweepWorker(QThread):
                 "active_cells_history": [],
                 "low_ppc_cells_history": [],
                 "T_histories": {},
+                "T_grids": ex_row.get("T_grids_K", []) if is_already_done else [],
+                "T_grids_K": ex_row.get("T_grids_K", []) if is_already_done else [],
+                "T_grids_C": ex_row.get("T_grids_C", []) if is_already_done else [],
+                "Tmap": None,
+                "mask_grids": [],
+                "isBound": None,
                 "energy_history_t": [],
                 "energy_history_ke_i": [],
                 "energy_history_ke_e": [],
@@ -301,6 +311,22 @@ class ParallelSweepWorker(QThread):
                 except Exception:
                     pass
 
+    def set_sim_mode(self, mode: str):
+        """Synchronize simulation mode (Both, Thermal, Erosion, Trajectories) across worker processes."""
+        self.sim_mode = str(mode)
+        if isinstance(self.base_params, dict):
+            self.base_params["sim_mode"] = self.sim_mode
+        for p in getattr(self, '_all_payloads_ref', []):
+            if isinstance(p.get("base_params"), dict):
+                p["base_params"]["sim_mode"] = self.sim_mode
+        smf = getattr(self, 'sim_mode_file', None)
+        if smf:
+            try:
+                with open(smf, "w", encoding="utf-8") as f:
+                    f.write(self.sim_mode)
+            except Exception:
+                pass
+
     def get_scenario_tracking_buffer(self, scen_num: int) -> list:
         """Read and return recorded particle kinematics list for scen_num."""
         if not hasattr(self, 'final_tracking_buffers'):
@@ -379,6 +405,11 @@ class ParallelSweepWorker(QThread):
                 os.remove(self.track_ptcls_file)
             except Exception:
                 pass
+        if hasattr(self, 'sim_mode_file') and os.path.exists(self.sim_mode_file):
+            try:
+                os.remove(self.sim_mode_file)
+            except Exception:
+                pass
 
     def _kill_worker_processes(self):
         """Forcibly and immediately terminate all worker OS processes."""
@@ -453,6 +484,7 @@ class ParallelSweepWorker(QThread):
                 "state_file": self.state_files.get(scen_idx),
                 "trk_file": self.trk_files.get(scen_idx),
                 "track_ptcls_file": getattr(self, 'track_ptcls_file', None),
+                "sim_mode_file": getattr(self, 'sim_mode_file', None),
                 "track_particles": bool(getattr(self, 'track_particles_enabled', False)),
                 "active_view_file": self.active_view_file,
                 "scatter_limit": getattr(self, 'scatter_limit', 2000),
@@ -592,6 +624,11 @@ class ParallelSweepWorker(QThread):
                                 self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
                                 self.final_status_dict[s_idx]["div"] = row.get("divergence_deg", row.get("div", 0.0))
                                 self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
+                                if "T_grids_K" in row:
+                                    self.final_status_dict[s_idx]["T_grids"] = list(row["T_grids_K"])
+                                    self.final_status_dict[s_idx]["T_grids_K"] = list(row["T_grids_K"])
+                                if "T_grids_C" in row:
+                                    self.final_status_dict[s_idx]["T_grids_C"] = list(row["T_grids_C"])
                             self.get_scenario_tracking_buffer(s_idx)
                         val_str = f"{row['parameter_value']:.4g}"
                         c_time = row.get("computation_time_s", 0.0)

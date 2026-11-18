@@ -483,6 +483,8 @@ class UIBuilderMixin:
         control_layout.addWidget(QLabel("4. SIMULATION MODE"))
         self.combo_mode = QComboBox()
         self.combo_mode.addItems(["Both", "Thermal", "Erosion", "Trajectories"])
+        if hasattr(self, '_on_sim_mode_changed'):
+            self.combo_mode.currentTextChanged.connect(self._on_sim_mode_changed)
         control_layout.addWidget(self.combo_mode)
 
         control_layout.addWidget(QLabel("Coordinate System:"))

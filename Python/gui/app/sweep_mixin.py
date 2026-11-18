@@ -53,6 +53,22 @@ class SweepMixin:
             if hasattr(self.parallel_sweep_worker, 'set_track_particles'):
                 self.parallel_sweep_worker.set_track_particles(bool(checked))
 
+    def _on_sim_mode_changed(self, mode_text: str):
+        """Synchronize left-panel Simulation Mode selection across sweep base params, cache, and workers."""
+        mode = str(mode_text).strip() if mode_text else (self.combo_mode.currentText() if hasattr(self, 'combo_mode') else "Both")
+        if hasattr(self, '_sweep_base_params') and isinstance(self._sweep_base_params, dict):
+            self._sweep_base_params["sim_mode"] = mode
+        if hasattr(self, '_scenario_domain_cache') and isinstance(self._scenario_domain_cache, dict):
+            for d in self._scenario_domain_cache.values():
+                if isinstance(d, dict) and isinstance(d.get("params"), dict):
+                    d["params"]["sim_mode"] = mode
+        if getattr(self, 'sim_isRunning', False) and hasattr(self, '_sim_worker') and self._sim_worker is not None:
+            if hasattr(self, 'get_params'):
+                self._sim_worker.update_params(self.get_params())
+        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
+            if hasattr(self.parallel_sweep_worker, 'set_sim_mode'):
+                self.parallel_sweep_worker.set_sim_mode(mode)
+
     def _get_merged_sweep_status_dict(self) -> dict:
         """Return merged scenario status dictionary from cached state and parallel worker."""
         status_dict = {}
@@ -138,6 +154,14 @@ class SweepMixin:
         existing = self._sweep_status_dict.get(scen_idx, {})
         st_name = "running" if getattr(self, 'sim_isRunning', False) else ("paused" if getattr(self, '_sweep_paused_current', False) else existing.get("status", "running"))
         sim = getattr(self, 'sim', None)
+        t_grids_list = [float(t) for t in T_grids]
+        tmap_snap = snap.get('Tmap')
+        if tmap_snap is None and sim is not None and getattr(sim, 'Tmap', None) is not None:
+            tmap_snap = sim.Tmap.copy()
+        elif tmap_snap is not None:
+            tmap_snap = tmap_snap.copy()
+        mask_grids_snap = snap.get('mask_grids') if snap.get('mask_grids') is not None else getattr(sim, 'mask_grids', [])
+        is_bound_snap = snap.get('isBound') if snap.get('isBound') is not None else getattr(sim, 'isBound', None)
         self._sweep_status_dict[scen_idx] = {
             **existing,
             "status": st_name,
@@ -167,6 +191,14 @@ class SweepMixin:
             "active_cells_history": list(h["active_cells_history"]),
             "low_ppc_cells_history": list(h["low_ppc_cells_history"]),
             "T_histories": {k: list(v) for k, v in h["T_histories"].items()},
+            "T_grids": t_grids_list,
+            "T_grids_K": t_grids_list,
+            "T_grids_C": [float(t - 273.15) for t in t_grids_list],
+            "Tmap": tmap_snap,
+            "mask_grids": [m.copy() for m in mask_grids_snap] if mask_grids_snap else [],
+            "isBound": is_bound_snap.copy() if is_bound_snap is not None else None,
+            "X": snap.get('X').copy() if snap.get('X') is not None else (getattr(sim, 'X', None).copy() if getattr(sim, 'X', None) is not None else None),
+            "Y": snap.get('Y').copy() if snap.get('Y') is not None else (getattr(sim, 'Y', None).copy() if getattr(sim, 'Y', None) is not None else None),
             "Lx": float(snap.get('Lx', getattr(sim, 'Lx', 3.0))),
             "Ly": float(snap.get('Ly', getattr(sim, 'Ly', 3.0))),
             "nx": int(snap.get('nx', getattr(sim, 'nx', 0))),
@@ -1500,6 +1532,9 @@ class SweepMixin:
                 "nx": int(sim_temp.nx),
                 "ny": int(sim_temp.ny),
                 "isBound": sim_temp.isBound,
+                "Tmap": sim_temp.Tmap.copy() if getattr(sim_temp, 'Tmap', None) is not None else None,
+                "mask_grids": [m.copy() for m in getattr(sim_temp, 'mask_grids', [])] if getattr(sim_temp, 'mask_grids', None) else [],
+                "T_grids": [float(t) for t in getattr(sim_temp, 'T_grids', [])],
                 "x_coords": getattr(sim_temp, 'x_coords', None),
                 "y_coords": getattr(sim_temp, 'y_coords', None),
                 "zone_configs": getattr(sim_temp, 'zone_configs', None),
@@ -1529,7 +1564,7 @@ class SweepMixin:
         for k in ("Lx", "Ly"):
             if d_data.get(k) is not None:
                 setattr(self.sim, k, float(d_data[k]))
-        for k in ("V", "isBound", "x_coords", "y_coords", "zone_configs", "grid_x_starts", "grid_x_ends", "grids"):
+        for k in ("V", "isBound", "Tmap", "mask_grids", "T_grids", "x_coords", "y_coords", "zone_configs", "grid_x_starts", "grid_x_ends", "grids"):
             if d_data.get(k) is not None:
                 setattr(self.sim, k, d_data[k])
         if include_fields:
@@ -1712,6 +1747,18 @@ class SweepMixin:
             self.ax_live.set_ylim(0, float(ly))
 
         bound_xy = d_data.get("bound_xy")
+        live_is_bound = info.get("isBound")
+        live_X = info.get("X", d_data.get("X"))
+        live_Y = info.get("Y", d_data.get("Y"))
+        if (
+            live_is_bound is not None
+            and live_X is not None
+            and live_Y is not None
+            and getattr(live_is_bound, "shape", None) == getattr(live_X, "shape", None)
+        ):
+            gy_l, gx_l = np.where(live_is_bound)
+            bound_xy = np.column_stack((live_X[gy_l, gx_l], live_Y[gy_l, gx_l])).astype(np.float32)
+
         if bound_xy is not None and hasattr(self, 'scat_bound') and self.scat_bound is not None:
             self.scat_bound.set_offsets(bound_xy)
             self.scat_bound.set_zorder(2)
@@ -1890,6 +1937,99 @@ class SweepMixin:
         if hasattr(self, '_update_div_plane_line'):
             self._update_div_plane_line()
 
+        # 2.5 Update Grid Temperature Map (ax_temp) and Grid Temps label (lbl_temp)
+        Tmap = info.get("Tmap")
+        if Tmap is None and d_data:
+            Tmap = d_data.get("Tmap")
+        mask_grids = info.get("mask_grids")
+        if not mask_grids and d_data:
+            mask_grids = d_data.get("mask_grids", [])
+        is_bound_map = info.get("isBound")
+        if is_bound_map is None and d_data:
+            is_bound_map = d_data.get("isBound")
+        X_map = info.get("X") if info.get("X") is not None else (d_data.get("X") if d_data else None)
+        Y_map = info.get("Y") if info.get("Y") is not None else (d_data.get("Y") if d_data else None)
+
+        if (
+            hasattr(self, 'ax_temp')
+            and Tmap is not None
+            and X_map is not None
+            and Y_map is not None
+            and getattr(Tmap, 'shape', None) == getattr(X_map, 'shape', None)
+        ):
+            grid_mask = np.zeros(Tmap.shape, dtype=bool)
+            if mask_grids:
+                for mg in mask_grids:
+                    if getattr(mg, 'shape', None) == grid_mask.shape:
+                        grid_mask |= mg
+            elif is_bound_map is not None and getattr(is_bound_map, 'shape', None) == grid_mask.shape:
+                grid_mask |= is_bound_map
+                grid_mask[:, 0] = False
+
+            if np.any(grid_mask):
+                import math
+                from mpl_toolkits.axes_grid1 import make_axes_locatable
+                T_display_C = np.where(grid_mask, Tmap - 273.15, np.nan)
+
+                if (
+                    getattr(self, "tempmesh", None) is None
+                    or self.tempmesh.get_array().size != T_display_C.size
+                    or getattr(self, "_current_rendered_temp_scenario_idx", None) != scenario_idx
+                ):
+                    self.ax_temp.clear()
+                    self.ax_temp.set_title("Grid Temp Map (°C)")
+                    self.ax_temp.set_facecolor("black")
+
+                    self.tempmesh = self.ax_temp.pcolormesh(
+                        X_map, Y_map, T_display_C,
+                        cmap="inferno", shading="nearest"
+                    )
+
+                    if hasattr(self, 'cax_temp') and self.cax_temp in self.fig.axes:
+                        self.cax_temp.set_axes_locator(None)
+                        self.fig.delaxes(self.cax_temp)
+
+                    divider_t = make_axes_locatable(self.ax_temp)
+                    self.cax_temp = divider_t.append_axes("right", size="5%", pad=0.1)
+
+                    self.cbar_temp = self.fig.colorbar(self.tempmesh, cax=self.cax_temp)
+                    self.cbar_temp.set_label("Temperature (°C)")
+                    self.cbar_temp.formatter.set_useOffset(False)
+                    self.cbar_temp.formatter.set_scientific(False)
+                    self.cbar_temp.update_ticks()
+                    self._current_rendered_temp_scenario_idx = scenario_idx
+                    self._bg_live = None
+                else:
+                    self.tempmesh.set_array(T_display_C.ravel())
+
+                finite_vals = T_display_C[np.isfinite(T_display_C)]
+                if finite_vals.size > 0:
+                    vmin = float(np.min(finite_vals))
+                    vmax = float(np.max(finite_vals))
+                    vmin_plot = float(math.floor(vmin))
+                    vmax_plot = max(vmin_plot + 5.0, float(math.ceil(vmax)))
+                    self.tempmesh.set_clim(vmin_plot, vmax_plot)
+                    if hasattr(self, "cbar_temp") and self.cbar_temp is not None:
+                        self.cbar_temp.formatter.set_useOffset(False)
+                        self.cbar_temp.formatter.set_scientific(False)
+                        self.cbar_temp.update_ticks()
+
+                if lx is not None and ly is not None:
+                    self.ax_temp.set_xlim(0, float(lx))
+                    self.ax_temp.set_ylim(0, float(ly))
+
+        t_grids_scen = info.get("T_grids") or info.get("T_grids_K")
+        if not t_grids_scen and hasattr(self, 'T_histories') and self.T_histories:
+            t_grids_scen = [
+                float(self.T_histories[k][-1]) if self.T_histories.get(k) else 300.0
+                for k in sorted(self.T_histories.keys())
+            ]
+        if not t_grids_scen and d_data:
+            t_grids_scen = d_data.get("T_grids", [])
+        if t_grids_scen and hasattr(self, 'lbl_temp'):
+            t_str = " | ".join([f"G{i+1}: {float(T) - 273.15:.1f}°C" for i, T in enumerate(t_grids_scen)])
+            self.lbl_temp.setText("Grid Temps: " + t_str)
+
         # 3. Update status and metrics labels
         t_us = info.get("t_sim_us", 0.0)
         scenario_iter = info.get("iter", 0)
@@ -1926,9 +2066,16 @@ class SweepMixin:
             num_elec = len(elec_xy) if elec_xy is not None else 0
             self.lblPerfPtcls.setText(f"Display Ptcls (i/e): {num_pts:,} / {num_elec:,} | State: {status_tag}")
 
-        # Draw particles using blitting for animated scatter artists
+        # Draw particles using blitting for animated scatter artists, with periodic full redraws for ax_temp / telemetry
         if hasattr(self, 'canvas') and hasattr(self, 'ax_live'):
-            if getattr(self, '_bg_live', None) is None:
+            now_t = time.perf_counter()
+            if not hasattr(self, '_last_full_redraw_t'):
+                self._last_full_redraw_t = 0.0
+            full_redraw_due = (
+                getattr(self, '_bg_live', None) is None
+                or (now_t - self._last_full_redraw_t >= 0.33)
+            )
+            if full_redraw_due:
                 # Keep scatter artists animated so canvas.draw() renders a clean domain background without particles
                 for a in (getattr(self, 'scat_prim', None), getattr(self, 'scat_cex', None), getattr(self, 'scat_elec', None)):
                     if a is not None:
@@ -1938,6 +2085,7 @@ class SweepMixin:
                     self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
                 except Exception:
                     self._bg_live = None
+                self._last_full_redraw_t = now_t
 
             bg = getattr(self, '_bg_live', None)
             if bg is not None:
@@ -2484,6 +2632,8 @@ class SweepMixin:
         s_idx = result_row.get("scenario_idx")
         if s_idx is not None:
             prev_info = self._sweep_status_dict.get(s_idx, {})
+            t_grids_k = result_row.get("T_grids_K", prev_info.get("T_grids_K", prev_info.get("T_grids", [])))
+            t_grids_c = result_row.get("T_grids_C", [float(t - 273.15) for t in t_grids_k] if t_grids_k else prev_info.get("T_grids_C", []))
             self._sweep_status_dict[s_idx] = {
                 **prev_info,
                 "status": "done",
@@ -2496,6 +2646,9 @@ class SweepMixin:
                 "div_mid": result_row.get("divergence_2nd_plane_deg", result_row.get("div_mid", 0.0)),
                 "exit_ion_current_A": result_row.get("exit_ion_current_A", 0.0),
                 "transparency": result_row.get("transparency", 0.0),
+                "T_grids": list(t_grids_k) if t_grids_k else prev_info.get("T_grids", []),
+                "T_grids_K": list(t_grids_k) if t_grids_k else [],
+                "T_grids_C": list(t_grids_c) if t_grids_c else [],
             }
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
             self._sweep_status_dict.update(self.parallel_sweep_worker.get_status_dict())
@@ -2772,6 +2925,18 @@ class SweepMixin:
 
         p_eff, p_max, perv_frac = self._compute_perveance_metrics(i_exit)
 
+        t_grids_final_K = [float(t) for t in getattr(sim, 'T_grids', [])]
+        if not t_grids_final_K and rec_t_hists:
+            t_grids_final_K = [
+                float(rec_t_hists[k][-1]) if rec_t_hists.get(k) else 300.0
+                for k in sorted(rec_t_hists.keys())
+            ]
+        t_grids_final_C = [float(t - 273.15) for t in t_grids_final_K]
+        grid_temps_dict = {}
+        for g_idx, (tk, tc) in enumerate(zip(t_grids_final_K, t_grids_final_C), start=1):
+            grid_temps_dict[f"grid_{g_idx}_temp_K"] = tk
+            grid_temps_dict[f"grid_{g_idx}_temp_C"] = tc
+
         result_row = {
             "scenario_idx": scenario_idx,
             "parameter_value": parameter_value,
@@ -2795,6 +2960,9 @@ class SweepMixin:
             "total_energy_J": float(e_tot),
             "total_charge_C": float(q_net),
             "field_energy_J": float(fe),
+            "T_grids_K": t_grids_final_K,
+            "T_grids_C": t_grids_final_C,
+            **grid_temps_dict,
         }
         self.sweep_results.append(result_row)
         if not hasattr(self, '_sweep_status_dict'):
@@ -2833,6 +3001,14 @@ class SweepMixin:
             "active_cells_history": rec_act_cells,
             "low_ppc_cells_history": rec_low_ppc,
             "T_histories": rec_t_hists,
+            "T_grids": t_grids_final_K,
+            "T_grids_K": t_grids_final_K,
+            "T_grids_C": t_grids_final_C,
+            "Tmap": getattr(sim, 'Tmap', None).copy() if getattr(sim, 'Tmap', None) is not None else None,
+            "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+            "isBound": getattr(sim, 'isBound', None).copy() if getattr(sim, 'isBound', None) is not None else None,
+            "X": getattr(sim, 'X', None).copy() if getattr(sim, 'X', None) is not None else None,
+            "Y": getattr(sim, 'Y', None).copy() if getattr(sim, 'Y', None) is not None else None,
             "tracking_buffer": rec_trk_buf,
             "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
             "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
@@ -3215,6 +3391,9 @@ class SweepMixin:
                     "exit_ion_current_A": float(i_exit) if np.isfinite(i_exit) else 0.0,
                     "perveance_fraction": float(perv_frac) if np.isfinite(perv_frac) else 0.0,
                     "transparency": float(getattr(sim, 'transparency', 0.0)),
+                    "T_grids": [float(t) for t in getattr(sim, 'T_grids', [])],
+                    "T_grids_K": [float(t) for t in getattr(sim, 'T_grids', [])],
+                    "T_grids_C": [float(t - 273.15) for t in getattr(sim, 'T_grids', [])],
                 }
 
         all_results = []
@@ -3224,6 +3403,17 @@ class SweepMixin:
                 all_results.append(completed_map[scen_num])
             elif scen_num in status_dict:
                 info = status_dict[scen_num]
+                t_grids_k_info = info.get("T_grids_K") or info.get("T_grids") or []
+                if not t_grids_k_info and isinstance(info.get("T_histories"), dict) and info["T_histories"]:
+                    t_grids_k_info = [
+                        float(info["T_histories"][k][-1]) if info["T_histories"].get(k) else 300.0
+                        for k in sorted(info["T_histories"].keys())
+                    ]
+                t_grids_c_info = info.get("T_grids_C") or [float(t - 273.15) for t in t_grids_k_info]
+                grid_temps_info = {}
+                for g_idx, (tk, tc) in enumerate(zip(t_grids_k_info, t_grids_c_info), start=1):
+                    grid_temps_info[f"grid_{g_idx}_temp_K"] = tk
+                    grid_temps_info[f"grid_{g_idx}_temp_C"] = tc
                 row = {
                     "scenario_idx": scen_num,
                     "param_id": param_id,
@@ -3241,6 +3431,9 @@ class SweepMixin:
                     "transparency": float(info.get("transparency", 0.0)),
                     "total_energy_J": 0.0,
                     "net_charge_C": 0.0,
+                    "T_grids_K": list(t_grids_k_info),
+                    "T_grids_C": list(t_grids_c_info),
+                    **grid_temps_info,
                 }
                 all_results.append(row)
 

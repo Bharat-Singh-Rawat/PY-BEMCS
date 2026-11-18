@@ -107,7 +107,8 @@ class TestSweepDialogs(unittest.TestCase):
 
         dlg = SweepResultsDialog(cfg, mock_results)
         self.assertEqual(dlg.table.rowCount(), 2)
-        self.assertEqual(dlg.table.columnCount(), 12)
+        self.assertEqual(dlg.table.columnCount(), 13)
+        self.assertEqual(dlg.table.horizontalHeaderItem(12).text(), "Grid Temps (°C)")
 
         # Check table contents
         item_ss1 = dlg.table.item(0, 2)
@@ -482,7 +483,8 @@ class TestSweepDialogs(unittest.TestCase):
             },
         ]
         dlg = SweepResultsDialog(cfg, res)
-        self.assertEqual(dlg.table.columnCount(), 12)
+        self.assertEqual(dlg.table.columnCount(), 13)
+        self.assertEqual(dlg.table.horizontalHeaderItem(12).text(), "Grid Temps (°C)")
         self.assertEqual(dlg.table.horizontalHeaderItem(4).text(), "Computation Time")
         self.assertEqual(dlg.table.horizontalHeaderItem(6).text(), "Divergence Grid Exit (°)")
         self.assertEqual(dlg.table.horizontalHeaderItem(7).text(), "Divergence 2nd Plane (°)")
@@ -2860,6 +2862,150 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
             self.assertIsInstance(trk_buf, list)
             self.assertGreater(len(trk_buf), 0)
             self.assertEqual(trk_buf[0].shape[1], 8)
+
+    def test_sweep_thermal_mode_rendering_and_results_summary(self):
+        """Verify Thermal simulation mode works in sweep mode, renders ax_temp & lbl_temp per scenario, and populates SweepResultsDialog."""
+        import tempfile
+        from physics.headless_sweep import run_single_sweep_scenario_worker, read_scenario_state
+
+        cfg = {
+            "param_id": "Te_up",
+            "param_label": "Upstream Electron Temp Te_up (eV)",
+            "param_unit": "eV",
+            "values": [3.0, 5.0],
+            "window": 10,
+            "threshold": 1.0,
+            "max_iterations": 50,
+            "min_iterations": 10,
+            "parallel": False,
+            "n_cores": 2,
+        }
+        self.win.combo_mode.setCurrentText("Trajectories")
+        self.win.save_sweep_settings(cfg)
+        self.win.build_domain(force=True)
+
+        # Switch left-side menu to Thermal after arming sweep and building domain
+        self.win.combo_mode.setCurrentText("Thermal")
+        self.assertEqual(self.win._sweep_base_params.get("sim_mode"), "Thermal")
+        self.assertEqual(self.win.get_params().get("sim_mode"), "Thermal")
+
+        # Populate distinct thermal maps for Scenario 1 (310 K -> 36.85 C) and Scenario 2 (345 K -> 71.85 C)
+        d1 = self.win._get_scenario_domain_data(1)
+        d2 = self.win._get_scenario_domain_data(2)
+        self.assertIsNotNone(d1.get("Tmap"))
+        self.assertIsNotNone(d2.get("Tmap"))
+
+        tmap1 = np.full_like(d1["Tmap"], 310.0)
+        tmap2 = np.full_like(d2["Tmap"], 345.0)
+        n_grids = len(self.win.grid_widgets)
+        t_grids_1 = [310.0 + i * 2.0 for i in range(n_grids)]
+        t_grids_2 = [345.0 + i * 3.0 for i in range(n_grids)]
+
+        self.win._sweep_status_dict[1] = {
+            "status": "done",
+            "iter": 20,
+            "parameter_value": 3.0,
+            "t_sim_us": 0.01,
+            "div": 11.0,
+            "div_mid": 9.5,
+            "exit_ion_current_A": 0.02,
+            "transparency": 0.85,
+            "Tmap": tmap1,
+            "T_grids": t_grids_1,
+            "T_grids_K": t_grids_1,
+            "T_grids_C": [t - 273.15 for t in t_grids_1],
+            "mask_grids": d1["mask_grids"],
+            "isBound": d1["isBound"],
+            "X": d1["X"],
+            "Y": d1["Y"],
+            "Lx": d1["Lx"],
+            "Ly": d1["Ly"],
+            "iter_history": [10, 20],
+            "T_histories": {i: [305.0, t_grids_1[i]] for i in range(n_grids)},
+        }
+        self.win._sweep_status_dict[2] = {
+            "status": "running",
+            "iter": 15,
+            "parameter_value": 5.0,
+            "t_sim_us": 0.0075,
+            "div": 13.0,
+            "div_mid": 10.5,
+            "exit_ion_current_A": 0.03,
+            "transparency": 0.82,
+            "Tmap": tmap2,
+            "T_grids": t_grids_2,
+            "T_grids_K": t_grids_2,
+            "T_grids_C": [t - 273.15 for t in t_grids_2],
+            "mask_grids": d2["mask_grids"],
+            "isBound": d2["isBound"],
+            "X": d2["X"],
+            "Y": d2["Y"],
+            "Lx": d2["Lx"],
+            "Ly": d2["Ly"],
+            "iter_history": [5, 15],
+            "T_histories": {i: [320.0, t_grids_2[i]] for i in range(n_grids)},
+        }
+
+        # Select Scenario 2 -> verify ax_temp and lbl_temp reflect Scenario 2 temperatures
+        self.win.combo_sweep_scenario.setCurrentIndex(1)
+        self.assertIsNotNone(self.win.tempmesh)
+        arr2 = self.win.tempmesh.get_array()
+        finite2 = arr2[np.isfinite(arr2)]
+        self.assertGreater(finite2.size, 0)
+        self.assertAlmostEqual(float(np.mean(finite2)), 345.0 - 273.15, places=1)
+        self.assertIn(f"G1: {t_grids_2[0] - 273.15:.1f}°C", self.win.lbl_temp.text())
+
+        # Select Scenario 1 -> verify ax_temp and lbl_temp reflect Scenario 1 temperatures
+        self.win.combo_sweep_scenario.setCurrentIndex(0)
+        arr1 = self.win.tempmesh.get_array()
+        finite1 = arr1[np.isfinite(arr1)]
+        self.assertGreater(finite1.size, 0)
+        self.assertAlmostEqual(float(np.mean(finite1)), 310.0 - 273.15, places=1)
+        self.assertIn(f"G1: {t_grids_1[0] - 273.15:.1f}°C", self.win.lbl_temp.text())
+
+        # Verify headless worker in Thermal mode records Tmap, T_grids_K, T_grids_C in state and result row
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sf = os.path.join(tmpdir, "thermal_scen.bin")
+            smf = os.path.join(tmpdir, "sim_mode.txt")
+            with open(smf, "w", encoding="utf-8") as f:
+                f.write("Thermal")
+            payload = {
+                "scenario_idx": 1,
+                "param_id": "Te_up",
+                "parameter_value": 3.0,
+                "base_params": self.win.get_params(),
+                "steady_config": {"window": 5, "threshold": 1.0, "max_iterations": 3, "min_iterations": 2},
+                "state_file": sf,
+                "sim_mode_file": smf,
+                "scatter_limit": 200,
+            }
+            res_row = run_single_sweep_scenario_worker(payload)
+            self.assertIn("T_grids_K", res_row)
+            self.assertIn("T_grids_C", res_row)
+            self.assertEqual(len(res_row["T_grids_C"]), n_grids)
+            self.assertIn("grid_1_temp_C", res_row)
+            self.assertIn("grid_1_temp_K", res_row)
+
+            st = read_scenario_state(sf)
+            self.assertIsNotNone(st.get("Tmap"))
+            self.assertEqual(st.get("sim_mode"), "Thermal")
+
+            # Verify SweepResultsDialog displays Grid Temps (°C) and exports them to CSV
+            dlg = SweepResultsDialog(cfg, [res_row])
+            self.assertEqual(dlg.table.columnCount(), 13)
+            self.assertIn("G1:", dlg.table.item(0, 12).text())
+            self.assertIn("°C", dlg.table.item(0, 12).text())
+
+            csv_path = os.path.join(tmpdir, "sweep_thermal.csv")
+            dlg._write_tabular(csv_path, is_txt=False, notify=False)
+            with open(csv_path, "r", encoding="utf-8") as f:
+                csv_content = f.read()
+            self.assertIn("grid_temps_C", csv_content)
+            self.assertIn("grid_1_temp_C", csv_content)
+            self.assertIn("grid_1_temp_K", csv_content)
+            dlg.close()
+
+        self.win.exit_sweep(confirm_choice="no")
 
 
 if __name__ == "__main__":
