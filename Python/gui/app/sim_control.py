@@ -315,6 +315,22 @@ class SimControlMixin:
             self.div_scrollbar.setValue(0)
             self.div_scrollbar.blockSignals(False)
             self._div_live_mode = True
+        if hasattr(self, 'ebs_scrollbar'):
+            self.ebs_scrollbar.blockSignals(True)
+            self.ebs_scrollbar.setMaximum(0)
+            self.ebs_scrollbar.setValue(0)
+            self.ebs_scrollbar.blockSignals(False)
+            self._ebs_live_mode = True
+        if hasattr(self, 'btn_div_live'):
+            self.btn_div_live.blockSignals(True)
+            self.btn_div_live.setChecked(True)
+            self.btn_div_live.setText("📌 Live")
+            self.btn_div_live.blockSignals(False)
+        if hasattr(self, 'btn_ebs_live'):
+            self.btn_ebs_live.blockSignals(True)
+            self.btn_ebs_live.setChecked(True)
+            self.btn_ebs_live.setText("📌 Live")
+            self.btn_ebs_live.blockSignals(False)
 
         self.lbl_status.setText("Building Multi-Grid Domain...")
         QApplication.processEvents()

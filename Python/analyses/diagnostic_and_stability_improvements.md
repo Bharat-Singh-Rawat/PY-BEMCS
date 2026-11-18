@@ -117,3 +117,4 @@ The updates are covered by 7 unit and integration tests in `tests/test_stability
 | `test_rendering_mixin_ebs_ylim_empty_fallback` | `test_stability_and_diagnostics_fixes.py` | Validates $[-100, 100]\,\mathrm{V}$ baseline fallback when history is empty. | **PASSED** |
 | `test_parallel_sweep.py` (23 tests) | Regression Suite | Verifies multi-process sweep, top-bar scenario switching, non-blocking modal test guards. | **PASSED** |
 | `test_sweep_mode.py` (55 tests) | Regression Suite | Comprehensive sequential and parallel sweep integration. | **PASSED** |
+

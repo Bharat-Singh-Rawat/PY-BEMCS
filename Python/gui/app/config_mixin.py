@@ -14,6 +14,7 @@ from ..config_io import (
 )
 from ..bootstrap import _safe_start_dir
 from ..dialogs import GridMaterialDialog
+from .figure_layout import rebuild_groove_axes
 from physics_engine import compute_debye_upstream_gap
 
 
@@ -577,6 +578,10 @@ class ConfigMixin:
             self.lbl_material.setText(f"Grid Material: {self.mat_name}")
 
         self._grid_count_modified_since_build = False
+        if hasattr(self, "fig") and hasattr(self, "_main_grid"):
+            rebuild_groove_axes(self, len(getattr(self, "grid_widgets", [])))
+            if hasattr(self, "canvas"):
+                self.canvas.draw_idle()
         if had_sweep:
             self._sweep_domain_built = False
             if hasattr(self, "_scenario_domain_cache") and isinstance(self._scenario_domain_cache, dict):

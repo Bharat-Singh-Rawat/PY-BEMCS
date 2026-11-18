@@ -3,7 +3,7 @@ DigitalTwinApp main window composed from modular UI and logic mixins.
 """
 import os
 import sys
-from PyQt5.QtWidgets import QMainWindow, QMessageBox
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QApplication
 from PyQt5.QtCore import QTimer
 
 from physics_engine import DigitalTwinSimulator
@@ -43,7 +43,17 @@ class DigitalTwinApp(
 
     def __init__(self):
         super().__init__()
-        self.setGeometry(20, 30, 1500, 800)
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            target_w = min(1500, avail.width() - 40)
+            target_h = min(960, avail.height() - 60)
+            target_x = max(10, avail.x() + (avail.width() - target_w) // 2)
+            target_y = max(10, avail.y() + (avail.height() - target_h) // 2)
+            self.setGeometry(target_x, target_y, target_w, target_h)
+        else:
+            self.setGeometry(20, 30, 1500, 950)
+        self.setMinimumSize(1200, 800)
 
         self.current_config_path = _config_path()
         self.current_config_name = os.path.basename(self.current_config_path) if self.current_config_path else "config.json"
@@ -61,6 +71,7 @@ class DigitalTwinApp(
         self._div_curve_visible = {'grid': True, 'mid': True}
         self._div_legend_map = {}
         self._div_live_mode = True
+        self._ebs_live_mode = True
         self.div_method = "95%"
         self.div_percentile = 95.0
         self.div_plane_x = None

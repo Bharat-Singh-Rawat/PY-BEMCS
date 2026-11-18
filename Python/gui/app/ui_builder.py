@@ -17,7 +17,7 @@ from PyQt5.QtCore import Qt
 from ..widgets import ScientificSpinBox
 from ..bootstrap import _safe_start_dir
 from ..config_io import _config_path, load_json_config
-from .figure_layout import setup_figure_layout
+from .figure_layout import setup_figure_layout, rebuild_groove_axes
 
 
 class UIBuilderMixin:
@@ -231,6 +231,10 @@ class UIBuilderMixin:
         if hasattr(self, "_scenario_domain_cache") and isinstance(self._scenario_domain_cache, dict):
             self._scenario_domain_cache.clear()
         self._current_rendered_scenario_grid_idx = None
+        if hasattr(self, "fig") and hasattr(self, "_main_grid"):
+            rebuild_groove_axes(self, len(getattr(self, "grid_widgets", [])))
+            if hasattr(self, "canvas"):
+                self.canvas.draw_idle()
         if hasattr(self, "on_grid_count_changed"):
             self.on_grid_count_changed()
 
@@ -352,17 +356,33 @@ class UIBuilderMixin:
         root_layout.addWidget(top_bar, 0)
 
         content_splitter = QSplitter(Qt.Horizontal)
-        content_splitter.setHandleWidth(0)
+        content_splitter.setHandleWidth(4)
         content_splitter.setChildrenCollapsible(False)
+        content_splitter.setStyleSheet("""
+            QSplitter::handle:horizontal {
+                background-color: #dee2e6;
+                width: 4px;
+            }
+            QSplitter::handle:horizontal:hover {
+                background-color: #0d6efd;
+            }
+            QSplitter::handle:horizontal:pressed {
+                background-color: #0b5ed7;
+            }
+        """)
 
         # SCROLLABLE CONTROL PANEL
         scroll_area = QScrollArea()
-        scroll_area.setFixedWidth(330)
+        scroll_area.setMinimumWidth(100)
+        scroll_area.setMaximumWidth(700)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.control_scroll_area = scroll_area
 
         control_panel  = QWidget()
+        control_panel.setMinimumWidth(290)
         control_layout = QVBoxLayout(control_panel)
 
         self.combo_rf_grid = QComboBox()
@@ -634,10 +654,37 @@ class UIBuilderMixin:
         scroll_area.setWidget(control_panel)
         content_splitter.addWidget(scroll_area)
 
-        self.fig = plt.figure(figsize=(12, 8))
+        self.fig = plt.figure(figsize=(12, 9))
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content_splitter.addWidget(self.canvas)
+
+        # Floating scrollbar overlaid on canvas, positioned below ax_ebs only
+        self.ebs_scrollbar = QScrollBar(Qt.Horizontal, self.canvas)
+        self.ebs_scrollbar.setMinimum(0)
+        self.ebs_scrollbar.setMaximum(0)
+        self.ebs_scrollbar.setValue(0)
+        self.ebs_scrollbar.setSingleStep(1)
+        self.ebs_scrollbar.setPageStep(50)
+        self.ebs_scrollbar.setFixedHeight(12)
+        self.ebs_scrollbar.setToolTip("Scroll through potential history")
+        self.ebs_scrollbar.valueChanged.connect(self._on_ebs_scroll)
+        self.ebs_scrollbar.hide()
+
+        # Floating Live toggle button next to the ebs scrollbar
+        self.btn_ebs_live = QPushButton("📌 Live", self.canvas)
+        self.btn_ebs_live.setCheckable(True)
+        self.btn_ebs_live.setChecked(True)
+        self.btn_ebs_live.setFixedSize(48, 12)
+        self.btn_ebs_live.setToolTip("Follow the latest data live (uncheck to inspect history)")
+        self.btn_ebs_live.setStyleSheet(
+            "QPushButton { font-size: 8px; padding: 0px 2px; border: 1px solid #adb5bd; border-radius: 2px; "
+            "background-color: #d4edda; color: #155724; font-weight: bold; }"
+            "QPushButton:checked { background-color: #d4edda; color: #155724; }"
+            "QPushButton:!checked { background-color: #f8d7da; color: #721c24; }"
+        )
+        self.btn_ebs_live.toggled.connect(self._on_ebs_live_toggled)
+        self.btn_ebs_live.hide()
 
         # Floating scrollbar overlaid on canvas, positioned below ax_div only
         self.div_scrollbar = QScrollBar(Qt.Horizontal, self.canvas)
@@ -668,6 +715,9 @@ class UIBuilderMixin:
 
         content_splitter.setStretchFactor(0, 0)
         content_splitter.setStretchFactor(1, 1)
+        content_splitter.setSizes([340, 1160])
+        content_splitter.splitterMoved.connect(lambda pos, idx: self._on_splitter_moved())
+        self.content_splitter = content_splitter
 
         root_layout.addWidget(content_splitter, 1)
 
@@ -676,6 +726,11 @@ class UIBuilderMixin:
         self._update_div_legend()
         self.setup_divergence_menu()
         self.setup_xaxis_menu()
+
+    def _on_splitter_moved(self):
+        """Called when the splitter handle between control panel and canvas is dragged."""
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
 
     def setup_divergence_menu(self):
         """Build the downstream arrow dropdown button and cascading tent menus for divergence options."""
@@ -790,10 +845,14 @@ class UIBuilderMixin:
         # Reposition button + scrollbar on canvas draw and resize
         self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_menu_btn())
         self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_scrollbar())
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_ebs_scrollbar())
+        self.canvas.mpl_connect('draw_event', self._on_canvas_draw)
         self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_menu_btn())
         self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_scrollbar())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_ebs_scrollbar())
         self._reposition_div_menu_btn()
         self._reposition_div_scrollbar()
+        self._reposition_ebs_scrollbar()
 
     def setup_xaxis_menu(self):
         """Build the downstream arrow dropdown buttons and independent tent menus to switch x-axis units per graph."""

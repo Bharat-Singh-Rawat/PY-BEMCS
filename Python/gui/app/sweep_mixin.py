@@ -1899,7 +1899,9 @@ class SweepMixin:
                 if valid_divs:
                     self.ax_div.set_ylim(0, max(45, max(valid_divs) * 1.1))
 
-            if hasattr(self, '_update_ebs_xlim'):
+            if hasattr(self, '_update_ebs_scroll_range'):
+                self._update_ebs_scroll_range(cur_iter)
+            elif hasattr(self, '_update_ebs_xlim'):
                 self._update_ebs_xlim(cur_iter)
             elif hasattr(self, 'ax_ebs'):
                 self.ax_ebs.set_xlim(max(0, cur_iter - 400), max(100, cur_iter))
@@ -2081,10 +2083,11 @@ class SweepMixin:
                     if a is not None:
                         a.set_animated(True)
                 self.canvas.draw()
-                try:
-                    self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
-                except Exception:
-                    self._bg_live = None
+                if getattr(self, '_bg_live', None) is None:
+                    try:
+                        self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
+                    except Exception:
+                        self._bg_live = None
                 self._last_full_redraw_t = now_t
 
             bg = getattr(self, '_bg_live', None)

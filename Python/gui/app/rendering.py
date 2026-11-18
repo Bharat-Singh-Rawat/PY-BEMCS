@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyQt5.QtCore import QTimer
+from .figure_layout import rebuild_groove_axes
 
 
 class RenderingMixin:
@@ -138,10 +139,16 @@ class RenderingMixin:
         self.ax_div.set_ylim(0, 45)
         self._update_div_plot_visibility()
 
-        self.line_groove.set_data([], [])
-        self.ax_groove.set_xlim(0, max(1.0, float(getattr(self.sim, 'Ly', 1.0))))
-        self.ax_groove.set_ylim(1.0, 0.0)
-        self.ax_groove.set_title("Accel Grid Erosion Profile — Ready")
+        n_grids = len(getattr(self.sim, 'mask_grids', [])) or len(getattr(self, 'grid_widgets', [])) or 1
+        if len(getattr(self, 'ax_grooves', [])) != n_grids and hasattr(self, '_main_grid'):
+            rebuild_groove_axes(self, n_grids)
+        title_fs = 8.5 if n_grids > 2 else 10
+        ly_lim = max(1.0, float(getattr(self.sim, 'Ly', 1.0)))
+        for i, (ax_g, line_g) in enumerate(zip(getattr(self, 'ax_grooves', []), getattr(self, 'line_grooves', []))):
+            line_g.set_data([], [])
+            ax_g.set_xlim(0, ly_lim)
+            ax_g.set_ylim(1.0, 0.0)
+            ax_g.set_title(f"Grid {i + 1} Erosion Profile — Ready", fontsize=title_fs, pad=3)
 
         self.ax_dmg.clear()
         self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
@@ -159,6 +166,8 @@ class RenderingMixin:
 
         self._reposition_div_menu_btn()
         self._reposition_xaxis_menu_btns()
+        self._reposition_div_scrollbar()
+        self._reposition_ebs_scrollbar()
         if redraw:
             self.canvas.draw_idle()
 
@@ -400,28 +409,35 @@ class RenderingMixin:
         if hasattr(self, 'line_div_mid'):
             self.line_div_mid.set_data(x_data_div, self.div_mid_history)
 
-        self._update_ebs_xlim(snap['iteration'])
+        self._update_ebs_scroll_range(snap['iteration'])
         self._update_div_scroll_range(snap['iteration'])
 
         self._update_ebs_ylim()
 
         self._update_div_plot_visibility()
 
-        groove_idx = 1 if len(snap['mask_grids']) > 1 else 0
         groove_face = "downstream"
-        y_mm, depth_um = self.sim.get_groove_profile(
-            groove_idx,
-            thresh=self.inputs["Thresh"].value(),
-            face=groove_face
-        )
-        if y_mm.size > 0:
-            self.line_groove.set_data(y_mm, depth_um)
-            self.ax_groove.set_xlim(0, float(y_mm.max()))
-            dmax = float(depth_um.max()) if depth_um.size > 0 else 0.0
-            self.ax_groove.set_ylim(max(dmax * 1.1, 1.0), 0.0)
-            self.ax_groove.set_title(
-                f"Accel Grid Erosion Profile — {groove_face} face (Grid {groove_idx + 1})"
+        n_grooves = len(getattr(self, 'ax_grooves', []))
+        title_fs = 8.5 if n_grooves > 2 else 10
+        for groove_idx in range(len(snap['mask_grids'])):
+            if groove_idx >= n_grooves:
+                break
+            y_mm, depth_um = self.sim.get_groove_profile(
+                groove_idx,
+                thresh=self.inputs["Thresh"].value(),
+                face=groove_face
             )
+            if y_mm.size > 0:
+                self.line_grooves[groove_idx].set_data(y_mm, depth_um)
+                ax_g = self.ax_grooves[groove_idx]
+                ax_g.set_xlim(0, float(y_mm.max()))
+                dmax = float(depth_um.max()) if depth_um.size > 0 else 0.0
+                ax_g.set_ylim(max(dmax * 1.1, 1.0), 0.0)
+                ax_g.set_title(
+                    f"Grid {groove_idx + 1} Erosion Profile — {groove_face} face",
+                    fontsize=title_fs,
+                    pad=3,
+                )
 
         Tmap = snap['Tmap']
         mask_grids = snap['mask_grids']
@@ -520,10 +536,11 @@ class RenderingMixin:
 
         if full_redraw_due:
             self.canvas.draw()
-            try:
-                self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
-            except Exception:
-                self._bg_live = None
+            if getattr(self, '_bg_live', None) is None:
+                try:
+                    self._bg_live = self.canvas.copy_from_bbox(self.ax_live.bbox)
+                except Exception:
+                    self._bg_live = None
             self._last_full_redraw_t = now
 
         # High-performance blit of moving particle scatter on top of cached domain background
@@ -556,6 +573,28 @@ class RenderingMixin:
         if getattr(self, 'sweep_mode_armed', False) or getattr(self, 'is_sweep_active', False):
             if hasattr(self, '_update_sweep_scenario_combo_items'):
                 self._update_sweep_scenario_combo_items()
+
+    def _on_canvas_draw(self, event=None):
+        """Post-draw hook: capture background and draw animated particle scatter artists so ax_live is never empty."""
+        if not hasattr(self, 'ax_live') or not hasattr(self, 'canvas'):
+            return
+
+        try:
+            bbox = self.ax_live.bbox
+            if bbox.width > 0 and bbox.height > 0:
+                self._bg_live = self.canvas.copy_from_bbox(bbox)
+        except Exception:
+            self._bg_live = None
+
+        try:
+            if getattr(self, 'scat_prim', None) is not None:
+                self.ax_live.draw_artist(self.scat_prim)
+            if getattr(self, 'scat_cex', None) is not None:
+                self.ax_live.draw_artist(self.scat_cex)
+            if getattr(self, 'scat_elec', None) is not None:
+                self.ax_live.draw_artist(self.scat_elec)
+        except Exception:
+            pass
 
     def _update_div_legend(self):
         """Build/update interactive clickable legend with [x] / [ ] checkmarks for ax_div."""
@@ -806,6 +845,10 @@ class RenderingMixin:
 
     def _update_ebs_xlim(self, current_iter: int):
         """Update x-limits for ax_ebs matching current x-axis unit."""
+        if hasattr(self, '_update_ebs_scroll_range'):
+            self._update_ebs_scroll_range(current_iter)
+            return
+
         if not hasattr(self, 'ax_ebs'):
             return
 
@@ -827,7 +870,17 @@ class RenderingMixin:
         if not valid_ebs:
             self.ax_ebs.set_ylim(-100, 100)
             return
-        visible = valid_ebs[-400:] if len(valid_ebs) > 400 else valid_ebs
+
+        live_mode = getattr(self, '_ebs_live_mode', True)
+        if live_mode or not hasattr(self, 'ebs_scrollbar'):
+            visible = valid_ebs[-400:] if len(valid_ebs) > 400 else valid_ebs
+        else:
+            val = self.ebs_scrollbar.value()
+            idx_end = min(len(valid_ebs), val + getattr(self, '_EBS_WINDOW', 400))
+            visible = valid_ebs[val:idx_end] if val < len(valid_ebs) else valid_ebs[-400:]
+
+        if not visible:
+            visible = valid_ebs
         min_v = float(min(visible))
         max_v = float(max(visible))
         if max_v <= min_v:
@@ -924,6 +977,8 @@ class RenderingMixin:
             self._reposition_xaxis_menu_btns()
         if hasattr(self, '_reposition_div_scrollbar'):
             self._reposition_div_scrollbar()
+        if hasattr(self, '_reposition_ebs_scrollbar'):
+            self._reposition_ebs_scrollbar()
 
         if hasattr(self, 'canvas'):
             self.canvas.draw_idle()
@@ -1158,3 +1213,164 @@ class RenderingMixin:
                     self._update_div_scroll_range(cur_iter)
             else:
                 self.btn_div_live.setText("▶ Live")
+
+    # ------------------------------------------------------------------
+    # Midline / saddle-point potential history scrollbar helpers
+    # ------------------------------------------------------------------
+
+    def _reposition_ebs_scrollbar(self):
+        """Position the floating scrollbar and Live button below the 'Iteration' / 'Time [µs]' xlabel of ax_ebs."""
+        if not hasattr(self, 'ebs_scrollbar') or not hasattr(self, 'ax_ebs'):
+            return
+
+        try:
+            renderer = self.canvas.get_renderer()
+            ax_bbox = self.ax_ebs.get_window_extent(renderer)
+
+            canvas_h = self.canvas.height()
+            canvas_w = self.canvas.width()
+
+            x_left  = int(ax_bbox.x0)
+            x_right = int(ax_bbox.x1)
+
+            y_bottom_disp = None
+            try:
+                xlabel_bbox = self.ax_ebs.xaxis.label.get_window_extent(renderer)
+                if xlabel_bbox is not None and xlabel_bbox.height > 0:
+                    y_bottom_disp = xlabel_bbox.y0
+            except Exception:
+                pass
+
+            if y_bottom_disp is None:
+                try:
+                    tight_bbox = self.ax_ebs.get_tightbbox(renderer)
+                    if tight_bbox is not None:
+                        y_bottom_disp = tight_bbox.y0
+                except Exception:
+                    pass
+
+            if y_bottom_disp is None:
+                y_bottom_disp = ax_bbox.y0 - 25
+
+            y_bottom_qt = int(canvas_h - y_bottom_disp)
+
+            btn_ebs_x = getattr(self, 'btn_ebs_x_menu', None)
+            if btn_ebs_x is not None and btn_ebs_x.isVisible():
+                btn_bottom_qt = btn_ebs_x.y() + btn_ebs_x.height()
+                if btn_bottom_qt > y_bottom_qt:
+                    y_bottom_qt = btn_bottom_qt
+
+            bar_h   = self.ebs_scrollbar.height()
+            btn_w   = self.btn_ebs_live.width()
+            gap     = 3
+
+            total_w = x_right - x_left
+            scroll_w = max(20, total_w - btn_w - gap)
+
+            y_pos = y_bottom_qt + gap
+
+            y_pos  = max(0, min(y_pos, canvas_h - bar_h))
+            x_left = max(0, min(x_left, canvas_w - total_w))
+
+            self.ebs_scrollbar.setGeometry(x_left, y_pos, scroll_w, bar_h)
+            self.btn_ebs_live.setGeometry(x_left + scroll_w + gap, y_pos, btn_w, bar_h)
+
+            self.ebs_scrollbar.show()
+            self.btn_ebs_live.show()
+            self.ebs_scrollbar.raise_()
+            self.btn_ebs_live.raise_()
+        except Exception:
+            pass
+
+    _EBS_WINDOW = 400
+
+    def _update_ebs_scroll_range(self, current_iter: int):
+        """Update ebs scrollbar range and, if in live mode, auto-follow the latest data."""
+        if not hasattr(self, 'ebs_scrollbar'):
+            return
+
+        n = len(self.iter_history)
+        window = self._EBS_WINDOW
+
+        max_scroll = max(0, n - window)
+
+        self.ebs_scrollbar.blockSignals(True)
+        self.ebs_scrollbar.setMaximum(max_scroll)
+        self.ebs_scrollbar.setPageStep(max(1, window // 4))
+
+        live_mode = getattr(self, '_ebs_live_mode', True)
+        if live_mode:
+            self.ebs_scrollbar.setValue(max_scroll)
+            if getattr(self, 'ebs_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds':
+                dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+                window_us = window * dt_us
+                cur_t_us = current_iter * dt_us
+                x_end = max(100 * dt_us, cur_t_us)
+                x_start = max(0.0, x_end - window_us)
+                self.ax_ebs.set_xlim(x_start, x_end)
+            else:
+                x_end = max(100, current_iter)
+                x_start = max(0, x_end - window)
+                self.ax_ebs.set_xlim(x_start, x_end)
+
+        self.ebs_scrollbar.blockSignals(False)
+
+    def _on_ebs_scroll(self, value: int):
+        """Called when the user drags the saddle-point potential history scrollbar."""
+        if not hasattr(self, 'iter_history') or len(self.iter_history) == 0:
+            return
+
+        live_mode = getattr(self, '_ebs_live_mode', True)
+        max_val = self.ebs_scrollbar.maximum()
+
+        if value < max_val:
+            self._ebs_live_mode = False
+            if hasattr(self, 'btn_ebs_live'):
+                self.btn_ebs_live.blockSignals(True)
+                self.btn_ebs_live.setChecked(False)
+                self.btn_ebs_live.setText("▶ Live")
+                self.btn_ebs_live.blockSignals(False)
+        else:
+            self._ebs_live_mode = True
+            if hasattr(self, 'btn_ebs_live'):
+                self.btn_ebs_live.blockSignals(True)
+                self.btn_ebs_live.setChecked(True)
+                self.btn_ebs_live.setText("📌 Live")
+                self.btn_ebs_live.blockSignals(False)
+
+        window = self._EBS_WINDOW
+        x_data = self._get_plot_x_data('ebs')
+
+        if len(x_data) == 0:
+            return
+
+        idx_start = value
+        idx_end = min(len(x_data) - 1, idx_start + window)
+
+        x_start = x_data[idx_start] if idx_start < len(x_data) else 0
+        x_end = x_data[idx_end] if idx_end < len(x_data) else x_data[-1]
+        if x_end <= x_start:
+            if getattr(self, 'ebs_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds':
+                dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+                x_end = x_start + window * dt_us
+            else:
+                x_end = x_start + window
+
+        self.ax_ebs.set_xlim(x_start, x_end)
+        if hasattr(self, '_update_ebs_ylim'):
+            self._update_ebs_ylim()
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+    def _on_ebs_live_toggled(self, checked: bool):
+        """Called when the user clicks the Live/History toggle button for ax_ebs."""
+        self._ebs_live_mode = checked
+        if hasattr(self, 'btn_ebs_live'):
+            if checked:
+                self.btn_ebs_live.setText("📌 Live")
+                if hasattr(self, 'ebs_scrollbar'):
+                    self.ebs_scrollbar.setValue(self.ebs_scrollbar.maximum())
+                    cur_iter = self.iter_history[-1] if hasattr(self, 'iter_history') and len(self.iter_history) > 0 else 0
+                    self._update_ebs_scroll_range(cur_iter)
+            else:
+                self.btn_ebs_live.setText("▶ Live")
