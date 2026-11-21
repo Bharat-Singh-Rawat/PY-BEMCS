@@ -63,7 +63,7 @@ class SimControlMixin:
         minutes = (total_tenths % 36000) // 600
         seconds = (total_tenths % 600) // 10
         tenths = total_tenths % 10
-        self.lbl_sim_timer.setText(f"⏱ Simulation Duration: {hours:02d}:{minutes:02d}:{seconds:02d}.{tenths:01d}")
+        self.lbl_sim_timer.setText(f"⏱ {hours:02d}:{minutes:02d}:{seconds:02d}.{tenths:01d}")
 
         is_sweep = (
             getattr(self, 'is_sweep_active', False)

@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QCheckBox, QMessageBox, QFileDialog, QComboBox,
     QScrollArea, QGroupBox, QAction, QMenuBar, QSplitter,
     QFrame, QSizePolicy, QToolButton, QMenu, QActionGroup,
-    QScrollBar
+    QScrollBar, QLayout
 )
 from PyQt5.QtCore import Qt
 
@@ -274,16 +274,18 @@ class UIBuilderMixin:
         )
         top_bar_layout.addWidget(self.lbl_sim_status_badge)
 
-        self.lbl_sim_timer = QLabel("⏱ Simulation Duration: 00:00:00.0")
+        self.lbl_sim_timer = QLabel("⏱ 00:00:00.0")
+        self.lbl_sim_timer.setToolTip("Active Simulation Duration (excludes idle/paused time)")
         self.lbl_sim_timer.setStyleSheet(
             "font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; font-weight: bold; "
-            "color: #0f172a; padding: 3px 10px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;"
+            "color: #0f172a; padding: 3px 8px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;"
         )
         top_bar_layout.addWidget(self.lbl_sim_timer)
 
-        self.btn_reset_timer = QPushButton("Reset Timer")
+        self.btn_reset_timer = QPushButton("Reset")
+        self.btn_reset_timer.setFixedWidth(55)
         self.btn_reset_timer.setToolTip("Reset the simulation duration timer to 00:00:00.0")
-        self.btn_reset_timer.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        self.btn_reset_timer.setStyleSheet("padding: 2px 6px; font-size: 11px;")
         self.btn_reset_timer.clicked.connect(self.reset_simulation_timer)
         top_bar_layout.addWidget(self.btn_reset_timer)
 
@@ -295,15 +297,26 @@ class UIBuilderMixin:
         )
         top_bar_layout.addWidget(self.lbl_sweep_badge)
 
+        # Dedicated container for sweep controls to strictly preserve layout ordering
+        # and prevent combobox from ever overlapping or going under action buttons
+        self.sweep_control_group = QWidget(top_bar)
+        self.sweep_control_group.setObjectName("sweepControlGroup")
+        self.sweep_control_group.setVisible(False)
+        self.sweep_control_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        sweep_group_layout = QHBoxLayout(self.sweep_control_group)
+        sweep_group_layout.setContentsMargins(0, 0, 0, 0)
+        sweep_group_layout.setSpacing(6)
+        sweep_group_layout.setSizeConstraint(QLayout.SetFixedSize)
+
         arrow_icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "down_arrow.svg")).replace("\\", "/")
-        self.combo_sweep_scenario = QComboBox()
+        self.combo_sweep_scenario = QComboBox(self.sweep_control_group)
         self.combo_sweep_scenario.setVisible(False)
-        self.combo_sweep_scenario.setFixedWidth(310)
+        self.combo_sweep_scenario.setFixedWidth(280)
         self.combo_sweep_scenario.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.combo_sweep_scenario.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.combo_sweep_scenario.setMinimumContentsLength(20)
         if self.combo_sweep_scenario.view():
-            self.combo_sweep_scenario.view().setMinimumWidth(420)
+            self.combo_sweep_scenario.view().setMinimumWidth(400)
         self.combo_sweep_scenario.setToolTip("Select an ongoing or completed sweep scenario to inspect its live state")
         self.combo_sweep_scenario.setStyleSheet(
             f"QComboBox {{ background-color: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; "
@@ -315,11 +328,11 @@ class UIBuilderMixin:
             f"QComboBox::down-arrow {{ image: url('{arrow_icon_path}'); width: 10px; height: 10px; }}"
         )
         self.combo_sweep_scenario.currentIndexChanged.connect(self._on_sweep_scenario_selected)
-        top_bar_layout.addWidget(self.combo_sweep_scenario)
+        sweep_group_layout.addWidget(self.combo_sweep_scenario)
 
         # btn_stop_sweep is kept for backward programmatic compatibility, but not added to top_bar_layout
         # as top-bar control is unified into the dynamic action button (Start Sweep / Pause Sweep / Resume Sweep).
-        self.btn_stop_sweep = QPushButton("Stop Sweep", top_bar)
+        self.btn_stop_sweep = QPushButton("Stop Sweep", self.sweep_control_group)
         self.btn_stop_sweep.setVisible(False)
         self.btn_stop_sweep.setStyleSheet(
             "background-color: #fee2e2; color: #b91c1c; font-weight: bold; "
@@ -327,9 +340,9 @@ class UIBuilderMixin:
         )
         self.btn_stop_sweep.clicked.connect(self.stop_sweep)
 
-        self.btn_resume_sweep = QPushButton("Start Sweep")
+        self.btn_resume_sweep = QPushButton("Start Sweep", self.sweep_control_group)
         self.btn_resume_sweep.setVisible(False)
-        self.btn_resume_sweep.setFixedWidth(105)
+        self.btn_resume_sweep.setFixedWidth(95)
         self.btn_resume_sweep.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_resume_sweep.setToolTip("Start parametric sweep simulation across all scenarios")
         self.btn_resume_sweep.setStyleSheet(
@@ -338,11 +351,11 @@ class UIBuilderMixin:
         )
         self.btn_resume_sweep.clicked.connect(self.on_sweep_action_clicked)
         self.btn_start_sweep = self.btn_resume_sweep
-        top_bar_layout.addWidget(self.btn_resume_sweep)
+        sweep_group_layout.addWidget(self.btn_resume_sweep)
 
-        self.btn_exit_sweep = QPushButton("Exit sweep")
+        self.btn_exit_sweep = QPushButton("Exit sweep", self.sweep_control_group)
         self.btn_exit_sweep.setVisible(False)
-        self.btn_exit_sweep.setFixedWidth(85)
+        self.btn_exit_sweep.setFixedWidth(75)
         self.btn_exit_sweep.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_exit_sweep.setToolTip("Exit sweep mode and return to normal single simulation")
         self.btn_exit_sweep.setStyleSheet(
@@ -350,7 +363,9 @@ class UIBuilderMixin:
             "border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
         self.btn_exit_sweep.clicked.connect(lambda: self.exit_sweep())
-        top_bar_layout.addWidget(self.btn_exit_sweep)
+        sweep_group_layout.addWidget(self.btn_exit_sweep)
+
+        top_bar_layout.addWidget(self.sweep_control_group)
 
         top_bar_layout.addStretch()
 

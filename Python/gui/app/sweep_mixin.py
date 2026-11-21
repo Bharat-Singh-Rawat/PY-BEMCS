@@ -415,6 +415,7 @@ class SweepMixin:
     def _hide_sweep_top_bar_controls(self):
         for attr in (
             "lbl_sweep_badge",
+            "sweep_control_group",
             "combo_sweep_scenario",
             "btn_stop_sweep",
             "btn_resume_sweep",
@@ -610,13 +611,15 @@ class SweepMixin:
                 self.combo_sweep_scenario.addItem(f"Scenario {idx + 1}: {param_id} = {val_str}{unit_str}  [⏳ Queued]")
             self.combo_sweep_scenario.setCurrentIndex(0)
             self.combo_sweep_scenario.blockSignals(False)
+            if hasattr(self, 'sweep_control_group'):
+                self.sweep_control_group.setVisible(True)
             self.combo_sweep_scenario.setVisible(True)
 
         # Update Top Bar Badge & Buttons
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setVisible(True)
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode armed [1/{total_scenarios} | {first_val_str} {param_unit}]"
+                f"⚡ Sweep mode armed [1/{total_scenarios}]"
             )
             self.lbl_sweep_badge.setStyleSheet(
                 "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
@@ -845,7 +848,7 @@ class SweepMixin:
             if hasattr(self, 'lbl_sweep_badge'):
                 self.lbl_sweep_badge.setVisible(True)
                 self.lbl_sweep_badge.setText(
-                    f"⚡ Parallel Sweep [{scen_num}/{total_scenarios} | {val_str} {param_unit}]"
+                    f"⚡ Parallel Sweep [{scen_num}/{total_scenarios}]"
                 )
                 self.lbl_sweep_badge.setStyleSheet(
                     "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
@@ -953,7 +956,7 @@ class SweepMixin:
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setVisible(True)
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {val_str} {param_unit}]"
+                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios}]"
             )
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(False)
@@ -1060,6 +1063,8 @@ class SweepMixin:
                 self.combo_sweep_scenario.addItem(f"Scenario {scen_num}: {config.get('param_id', 'param')} = {val_str}{unit_str}  {tag}")
             self.combo_sweep_scenario.setCurrentIndex(0)
             self.combo_sweep_scenario.blockSignals(False)
+            if hasattr(self, 'sweep_control_group'):
+                self.sweep_control_group.setVisible(True)
             self.combo_sweep_scenario.setVisible(True)
 
         if hasattr(self, 'btn_resume_sweep'):
@@ -1091,7 +1096,7 @@ class SweepMixin:
         if hasattr(self, 'lbl_sweep_badge'):
             self.lbl_sweep_badge.setVisible(True)
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode active [1/{total_scenarios} | {first_val_str} {config['param_unit']}]"
+                f"⚡ Sweep mode active [1/{total_scenarios}]"
             )
         if hasattr(self, 'btn_stop_sweep'):
             self.btn_stop_sweep.setVisible(False)
@@ -1186,6 +1191,8 @@ class SweepMixin:
             sel_idx = max(0, min(sel_idx, self.combo_sweep_scenario.count() - 1))
             self.combo_sweep_scenario.setCurrentIndex(sel_idx)
             self.combo_sweep_scenario.blockSignals(False)
+            if hasattr(self, 'sweep_control_group'):
+                self.sweep_control_group.setVisible(True)
             self.combo_sweep_scenario.setVisible(True)
 
         if hasattr(self, 'btn_stop_sweep'):
@@ -2199,7 +2206,7 @@ class SweepMixin:
             )
 
         if hasattr(self, 'lbl_top_sim_time'):
-            self.lbl_top_sim_time.setText(f"Scenario {scenario_idx} | Plasma: {t_us:.2f} µs | Iter: {scenario_iter:,}{comp_str}")
+            self.lbl_top_sim_time.setText(f"Plasma: {t_us:.2f} µs | Iter: {scenario_iter:,}{comp_str}")
 
         if hasattr(self, 'lblPerfPtcls'):
             num_pts = (len(prim_xy) if prim_xy is not None else 0) + (len(cex_xy) if cex_xy is not None else 0)
