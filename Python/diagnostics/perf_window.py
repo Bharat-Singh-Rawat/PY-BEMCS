@@ -50,8 +50,8 @@ class PerformanceMonitorWindow(QWidget):
 
         # Controls row (no common top legend bar as per design specifications)
         ctrl = QHBoxLayout()
-        btn_export = QPushButton("Export Performance Log (.csv)")
-        btn_export.clicked.connect(self._export_csv)
+        btn_export = QPushButton("Export Performance Log (.csv / .txt)")
+        btn_export.clicked.connect(self._export_data)
         ctrl.addWidget(btn_export)
 
         btn_clear = QPushButton("Clear History")
@@ -110,6 +110,8 @@ class PerformanceMonitorWindow(QWidget):
             'p3_target': True,
             'p4_dt': True,
             'p4_rss': True,
+            'p4_warn': True,
+            'p4_ram_warn': True,
             'p5_max_err': True,
             'p5_rms_err': True,
             'p5_tol': True,
@@ -193,7 +195,7 @@ class PerformanceMonitorWindow(QWidget):
                 mon.history.clear()
         self._refresh()
 
-    def _export_csv(self):
+    def _export_data(self):
         sim = self._last_sim
         if sim is None and self.parent_app and hasattr(self.parent_app, 'sim'):
             sim = self.parent_app.sim
@@ -205,10 +207,34 @@ class PerformanceMonitorWindow(QWidget):
             return
 
         suggested = os.path.join(os.path.expanduser("~"), time.strftime("pybemcs_perf_%Y%m%d%H%M%S.csv"))
-        file_name, _ = QFileDialog.getSaveFileName(self, "Export Performance CSV", suggested, "CSV Files (*.csv)")
-        if file_name:
+        file_name, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Performance Log",
+            suggested,
+            "CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)"
+        )
+        if not file_name:
+            return
+
+        if "(*.txt)" in selected_filter and file_name.lower().endswith(".csv"):
+            file_name = file_name[:-4] + ".txt"
+        elif not os.path.splitext(file_name)[1]:
+            if "(*.txt)" in selected_filter:
+                file_name += ".txt"
+            else:
+                file_name += ".csv"
+
+        is_txt = file_name.lower().endswith(".txt")
+        if is_txt and hasattr(mon, 'export_txt'):
+            mon.export_txt(file_name)
+        elif hasattr(mon, 'export_data'):
+            mon.export_data(file_name)
+        else:
             mon.export_csv(file_name)
-            QMessageBox.information(self, "Export Successful", f"Performance log saved to:\n{file_name}")
+
+        QMessageBox.information(self, "Export Successful", f"Performance log saved to:\n{file_name}")
+
+    _export_csv = _export_data
 
     def _get_threshold(self):
         sim = self._last_sim if self._last_sim is not None else getattr(self.parent_app, 'sim', None)
@@ -476,11 +502,23 @@ class PerformanceMonitorWindow(QWidget):
         has_any_4 = False
         has_rss = np.any(rss_mb > 0)
 
+        warn_time = getattr(mon, 'warn_step_time_ms', 1000.0)
+        warn_time_lbl = int(warn_time) if warn_time == int(warn_time) else warn_time
+
         if self.curve_visibility.get('p4_dt', True):
             ax4.plot(x_axis, dt_ms, color='#8c564b', lw=1.4, zorder=3)
             has_any_4 = True
         if has_rss and self.curve_visibility.get('p4_rss', True):
             ax4.plot(x_axis, rss_mb, color='#17becf', lw=1.3, linestyle='--', zorder=3)
+            has_any_4 = True
+        if self.curve_visibility.get('p4_warn', True):
+            ax4.axhline(warn_time, color='red', linestyle=':', alpha=0.7, lw=1.2, zorder=2)
+            has_any_4 = True
+
+        warn_mem = getattr(mon, 'warn_memory_mb', 2000.0)
+        has_ram_warn = has_rss and (warn_mem < np.max(rss_mb) * 1.3)
+        if has_ram_warn and self.curve_visibility.get('p4_ram_warn', True):
+            ax4.axhline(warn_mem, color='#e74c3c', linestyle='--', alpha=0.7, lw=1.2, zorder=2)
             has_any_4 = True
 
         if not has_any_4:
@@ -500,6 +538,10 @@ class PerformanceMonitorWindow(QWidget):
         ]
         if has_rss:
             p4_quantities.append(('p4_rss', "RAM RSS [MB]", '#17becf', '--', 1.3))
+        p4_quantities.append(('p4_warn', f"Warn Limit ({warn_time_lbl} ms)", 'red', ':', 1.2))
+        if has_ram_warn:
+            warn_mem_lbl = int(warn_mem) if warn_mem == int(warn_mem) else warn_mem
+            p4_quantities.append(('p4_ram_warn', f"RAM Limit ({warn_mem_lbl} MB)", '#e74c3c', '--', 1.2))
         self._build_interactive_legend(ax4, p4_quantities, loc='upper right')
 
         # Plot 5: Poisson Equation Solver Error vs Iteration

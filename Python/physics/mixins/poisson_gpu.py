@@ -165,7 +165,6 @@ class PoissonGPUMixin:
 
         if status in ['diverged', 'stagnated'] or (status == 'max_iters' and last_diff > tol_V):
             reason = status if status in ['diverged', 'stagnated'] else 'unconverged max_iters'
-            print(f"[Poisson Warning] GPU Picard {reason} at iter {iters_done} (diff={last_diff:.3f}V). Triggering Newton-Raphson fallback...")
             self.V = cp.asnumpy(V_best_gpu)
             V_NR, iters_NR, diff_NR, status_NR = self._solve_poisson_newton_gpu(coeff, V_plasma, Te_up, n0, tol_V=tol_V, max_iters=15)
             self.V = V_NR

@@ -250,46 +250,8 @@ class PerformanceMonitor:
     def _check_warnings(self, d: StepDiagnostics):
         it = d.iteration
 
-        if (d.num_ions > self.warn_particles or d.num_electrons > self.warn_particles):
-            if it - self._last_particle_warn_iter >= self._warn_throttle_steps:
-                print(
-                    f"[PERF WARNING] Iter {it}: "
-                    f"ions={d.num_ions:,}, electrons={d.num_electrons:,} "
-                    f"(threshold: {self.warn_particles:,})"
-                )
-                self._last_particle_warn_iter = it
-
-        if d.memory_rss_mb > self.warn_memory_mb:
-            if it - self._last_memory_warn_iter >= self._warn_throttle_steps:
-                print(
-                    f"[PERF WARNING] Iter {it}: "
-                    f"RSS = {d.memory_rss_mb:.0f} MB "
-                    f"(threshold: {self.warn_memory_mb:.0f} MB)"
-                )
-                self._last_memory_warn_iter = it
-
-        if d.wall_time_ms > self.warn_step_time_ms:
-            print(
-                f"[PERF WARNING] Iter {it}: "
-                f"step took {d.wall_time_ms:.0f} ms "
-                f"(threshold: {self.warn_step_time_ms:.0f} ms)"
-            )
-
-        if d.poisson_status == 'diverged':
-            print(
-                f"[PERF WARNING] Iter {it}: "
-                f"Poisson solver DIVERGED (error grew to {d.poisson_delta_V:.2f} V). Terminated early."
-            )
-        elif d.poisson_status == 'stagnated':
-            print(
-                f"[PERF WARNING] Iter {it}: "
-                f"Poisson solver STAGNATED (stuck at delta_V = {d.poisson_delta_V:.2f} V after {d.poisson_iters} iters)."
-            )
-        elif d.poisson_delta_V > 1.0:
-            print(
-                f"[PERF WARNING] Iter {it}: "
-                f"Poisson under-converged (delta_V = {d.poisson_delta_V:.2f} V after {d.poisson_iters} iters)"
-            )
+        # Thresholds and solver events are visualized directly in the Performance Monitor window
+        # (Execution Time & RAM Usage thresholds, Particle count limit, Poisson convergence events).
 
         if d.array_realloc_count > 0 and (
             not self.history or
@@ -312,12 +274,35 @@ class PerformanceMonitor:
             return
 
         field_names = [f.name for f in fields(StepDiagnostics)]
-        with open(path, 'w', newline='') as f:
+        with open(path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(field_names)
             for d in self.history:
                 writer.writerow([getattr(d, name) for name in field_names])
         print(f"[PERF] Exported {len(self.history)} steps to {path}")
+
+    def export_txt(self, path: str, delimiter: str = "\t"):
+        """Export the full diagnostics history to a text (.txt) file."""
+        if not self.history:
+            print("[PERF] No data to export.")
+            return
+
+        field_names = [f.name for f in fields(StepDiagnostics)]
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f, delimiter=delimiter)
+            writer.writerow(field_names)
+            for d in self.history:
+                writer.writerow([getattr(d, name) for name in field_names])
+        print(f"[PERF] Exported {len(self.history)} steps to {path}")
+
+    def export_data(self, path: str, delimiter: Optional[str] = None):
+        """Export the full diagnostics history to a CSV or text file based on file extension."""
+        if delimiter is None:
+            delimiter = "\t" if path.lower().endswith(".txt") else ","
+        if delimiter == ",":
+            self.export_csv(path)
+        else:
+            self.export_txt(path, delimiter=delimiter)
 
     def get_summary_dict(self) -> dict:
         """Return a summary of the latest diagnostics as a dictionary."""
