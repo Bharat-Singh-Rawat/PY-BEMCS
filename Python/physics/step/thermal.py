@@ -85,11 +85,18 @@ def step_thermal(sim, ctx: StepContext):
         needs_remesh = False
         for i, mask in enumerate(sim.mask_grids):
             if np.any(mask):
-                sim.T_grids[i] = np.mean(sim.Tmap[mask])
+                sim.T_grids[i] = float(np.mean(sim.Tmap[mask]))
+
+        # Advance subgrid thermal models for diagnostics if active
+        subgrid_mgr = getattr(sim, 'subgrid_manager', None)
+        if subgrid_mgr is not None and getattr(subgrid_mgr, 'thermal_enabled', False) and subgrid_mgr.thermal_models:
+            for i, therm in enumerate(subgrid_mgr.thermal_models):
+                if i < len(sim.T_grids):
+                    therm.solve_step(sim.dt, thermal_accel=getattr(sim, 'thermal_accel', 1e7))
 
         geometry = getattr(sim, 'geometry', 'half_hole')
         for i, grid in enumerate(grids):
-            dT = sim.T_grids[i] - 300.0
+            dT = max(0.0, sim.T_grids[i] - 300.0)
             if geometry == 'two_holes':
                 pitch_val = params.get("pitch_mm", params.get("discharge_chamber", {}).get("pitch_mm", 3.0) if isinstance(params.get("discharge_chamber"), dict) else 3.0)
                 L_cant_mm = max(0.2, pitch_val - 2.0 * grid['r'])
@@ -105,6 +112,10 @@ def step_thermal(sim, ctx: StepContext):
                 new_defl = delta_m * 1e3
             else:
                 new_defl = 0.0
+
+            # Physical safety clamp: Cantilever deflection cannot exceed 50% of inter-grid gap
+            max_defl = 0.5 * float(grid.get('gap', 1.0))
+            new_defl = float(np.clip(new_defl, -max_defl, max_defl))
 
             if abs(new_defl - sim.grid_deflections[i]) > 0.005:
                 sim.grid_deflections[i] = new_defl

@@ -163,7 +163,7 @@ def compute_charge_budget(sim):
     )
 
 
-def compute_rolling_variation(history, window=50, mode="rel_change", eps=1e-12):
+def compute_rolling_variation(history, window=100, mode="rel_change", eps=1e-12):
     """
     Compute percentage variation of a time series across a rolling window of iterations.
 
@@ -172,7 +172,7 @@ def compute_rolling_variation(history, window=50, mode="rel_change", eps=1e-12):
     history : array-like
         1D sequence of physical values across iterations.
     window : int, optional
-        Window size in iterations (default 50).
+        Window size in iterations (default 100).
     mode : {'rel_change', 'p2p_spread', 'abs_change'}, optional
         - 'rel_change': (Q[k] - Q[k-W]) / (|Q[k-W]| + eps) * 100 [%]
         - 'abs_change': |Q[k] - Q[k-W]| / (|Q[k-W]| + eps) * 100 [%]

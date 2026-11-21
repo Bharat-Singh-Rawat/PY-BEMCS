@@ -57,16 +57,16 @@ class TestSteadyStateWindow(unittest.TestCase):
 
     def setUp(self):
         self.sim = DigitalTwinSimulator()
-        self.sim.iteration = 100
-        # Populate mock history of 100 steps
-        self.sim.energy_history_tot = [1.0e-3 * (1.0 + 0.001 * np.sin(k * 0.1)) for k in range(100)]
-        self.sim.charge_history_q_net = [1.0e-9 * (1.0 + 0.002 * np.cos(k * 0.1)) for k in range(100)]
-        self.sim.energy_history_fe = [5.0e-4 * (1.0 + 0.001 * np.sin(k * 0.05)) for k in range(100)]
-        self.sim.potential_history = [-800.0 + 0.1 * np.sin(k * 0.2) for k in range(100)]
+        self.sim.iteration = 150
+        # Populate mock history of 150 steps
+        self.sim.energy_history_tot = [1.0e-3 * (1.0 + 0.001 * np.sin(k * 0.1)) for k in range(150)]
+        self.sim.charge_history_q_net = [1.0e-9 * (1.0 + 0.002 * np.cos(k * 0.1)) for k in range(150)]
+        self.sim.energy_history_fe = [5.0e-4 * (1.0 + 0.001 * np.sin(k * 0.05)) for k in range(150)]
+        self.sim.potential_history = [-800.0 + 0.1 * np.sin(k * 0.2) for k in range(150)]
 
     def test_window_initialization(self):
         dlg = SteadyStateWindow()
-        self.assertEqual(dlg.spin_window.value(), 50)
+        self.assertEqual(dlg.spin_window.value(), 100)
         self.assertEqual(dlg.spin_thresh.value(), 1.0)
         self.assertIn("energy_tot", dlg.chk_quantities)
         self.assertIn("charge_net", dlg.chk_quantities)

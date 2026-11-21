@@ -273,7 +273,9 @@ class DomainMixin:
             self.Lx = grid_Lx
 
         # Optional downstream plume truncation to avoid excessive vacuum mesh cells
-        if grids and params.get('truncate_downstream_plume', False):
+        do_truncate = bool(params.get('truncate_downstream_plume', False) or getattr(self, 'truncate_downstream_plume', False))
+        self.truncate_downstream_plume = do_truncate
+        if grids and do_truncate:
             r_accel_bound = grids[-1]['r']
             max_plume = float(params.get('max_plume_length_mm', 2.5 * r_accel_bound))
             trunc_Lx = round(x_last_exit + max_plume, 3)
@@ -494,6 +496,7 @@ class DomainMixin:
                 self.isBound  = np.zeros((self.ny, self.nx), dtype=bool)
                 self.V_fixed  = np.zeros((self.ny, self.nx), dtype=np.float64)
                 self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float64)
+                self.eroded_depth = np.zeros((self.ny, self.nx), dtype=np.float64)
                 self.Ex       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
                 self.Ey       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
                 self.Bx       = np.zeros((self.ny, self.nx), dtype=_NP_FP)
@@ -502,6 +505,11 @@ class DomainMixin:
                 self.Tmap     = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
                 self.T_map    = self.Tmap
                 self.T_map_new = np.full((self.ny, self.nx), 300.0, dtype=_NP_FP)
+                self.accum_ppc_map   = np.zeros((self.ny, self.nx), dtype=np.float64)
+                self.accum_cex_ppc_map = np.zeros((self.ny, self.nx), dtype=np.float64)
+                self.current_ppc_map = np.zeros((self.ny, self.nx), dtype=int)
+                self.current_cex_ppc_map = np.zeros((self.ny, self.nx), dtype=int)
+                self.current_prim_ppc_map = np.zeros((self.ny, self.nx), dtype=int)
             self._domain_built = True
 
         inj_time = params.get("inj_time", 0.0)
@@ -722,6 +730,26 @@ class DomainMixin:
 
             current_x = gend + grid["gap"]
 
+        from ..structural_surface import SubgridManager
+        mat_props = {
+            'k': getattr(self, 'mat_k', 138.0),
+            'rho': getattr(self, 'mat_rho', 10280.0),
+            'cp': getattr(self, 'mat_cp', 250.0),
+            'emissivity': getattr(self, 'emissivity', 0.8),
+            'alpha': getattr(self, 'alpha_thermal', 4.8e-6),
+        }
+        if not preserve_state or getattr(self, 'subgrid_manager', None) is None:
+            self.subgrid_manager = SubgridManager(
+                grids=grids,
+                upstream_gap_mm=self.upstream_gap_mm,
+                Ly=self.Ly,
+                geometry=geometry,
+                hole_centers=hole_centers,
+                mat_props=mat_props,
+            )
+        else:
+            self.subgrid_manager.update_deflections(self.grid_deflections)
+
         self.Vdc = np.copy(self.V_fixed)
 
         v_plasma_bound = (grids[0]["V"] + params.get("V_plasma_offset", 20.0)
@@ -817,4 +845,177 @@ class DomainMixin:
 
         self.build_domain(cfg, preserve_state=True)
         print(f"[Plume Reshape] Downstream plume truncated from {old_Lx:.3f} mm to {self.Lx:.3f} mm. Mesh now has {self.nx * self.ny:,} cells.")
+        return True
+
+    def execute_stability_remesh(self, params=None, remesh_cfg=None):
+        """
+        Execute an adaptive post-stability remeshing milestone:
+        1. Dynamically detects the plasma sheath / meniscus edge location x_meniscus.
+        2. Coarsens deep presheath and far plume to reduce Poisson solve overhead.
+        3. Refines the active sheath / meniscus region to sub-Debye resolution to accurately
+           capture curved Bohm sonic surface and eliminate artificial divergence narrowing.
+        4. Preserves particle coordinates and continuous subgrid surface states.
+        5. Bilinearly interpolates potential and thermal maps onto the adapted grid.
+        6. Re-deposits particle charge and performs 5-iteration Poisson relaxation.
+        """
+        if getattr(self, '_has_stability_remeshed', False):
+            return False
+
+        old_x = self.x_coords.copy()
+        old_y = self.y_coords.copy()
+        old_V = self.V.copy() if hasattr(self, 'V') and self.V is not None else None
+        old_Tmap = self.Tmap.copy() if getattr(self, 'Tmap', None) is not None else None
+        old_damage = self.damage_map.copy() if getattr(self, 'damage_map', None) is not None else None
+        old_eroded = self.eroded_depth.copy() if getattr(self, 'eroded_depth', None) is not None else None
+        old_iter = self.iteration
+
+        num_p = self.num_p
+        old_p_x = self.p_x[:num_p].copy()
+        old_p_y = self.p_y[:num_p].copy()
+        old_p_vx = self.p_vx[:num_p].copy()
+        old_p_vy = self.p_vy[:num_p].copy()
+        old_p_vz = self.p_vz[:num_p].copy()
+        old_isCEX = self.p_isCEX[:num_p].copy() if hasattr(self, 'p_isCEX') and self.p_isCEX is not None else None
+
+        from ..mesh_utils import estimate_stability_optimized_mesh_zones
+        cfg = dict(getattr(self, '_last_params', {}))
+        if params:
+            cfg.update(params)
+
+        remesh_settings = remesh_cfg or cfg.get("adaptive_remesh_settings", {})
+        grids = cfg.get("grids", [])
+
+        new_zones = estimate_stability_optimized_mesh_zones(
+            sim=self,
+            grids=grids,
+            upstream_gap_mm=self.upstream_gap_mm,
+            Lx=self.Lx,
+            dx0=self.dx,
+            remesh_cfg=remesh_settings
+        )
+
+        cfg["zone_configs"] = new_zones
+        cfg["use_json_mesh_zones"] = False
+
+        # Rebuild domain geometry and matrices on the newly partitioned mesh
+        self.build_domain(cfg, preserve_state=True)
+
+        # Restore particle state
+        self.num_p = num_p
+        self.p_x[:num_p] = old_p_x
+        self.p_y[:num_p] = old_p_y
+        self.p_vx[:num_p] = old_p_vx
+        self.p_vy[:num_p] = old_p_vy
+        self.p_vz[:num_p] = old_p_vz
+        if old_isCEX is not None and hasattr(self, 'p_isCEX'):
+            self.p_isCEX[:num_p] = old_isCEX
+        self.iteration = old_iter
+
+        # Interpolate 2D Eulerian scalar fields
+        from scipy.interpolate import RegularGridInterpolator
+        pts_new = (self.Y, self.X)
+
+        if old_V is not None:
+            interp_V = RegularGridInterpolator((old_y, old_x), old_V, bounds_error=False, fill_value=None)
+            self.V = interp_V(pts_new)
+            self.V[self.isBound] = self.V_fixed[self.isBound]
+
+        if old_Tmap is not None:
+            interp_T = RegularGridInterpolator((old_y, old_x), old_Tmap, bounds_error=False, fill_value=300.0)
+            self.Tmap = interp_T(pts_new).astype(_NP_FP)
+            self.T_map = self.Tmap
+            self.T_map_new = self.Tmap.copy()
+
+        if old_damage is not None:
+            interp_dmg = RegularGridInterpolator((old_y, old_x), old_damage, bounds_error=False, fill_value=0.0)
+            self.damage_map = interp_dmg(pts_new)
+
+        if old_eroded is not None:
+            interp_ero = RegularGridInterpolator((old_y, old_x), old_eroded, bounds_error=False, fill_value=0.0)
+            self.eroded_depth = interp_ero(pts_new)
+
+        # Re-deposit charge on the adapted grid
+        self.rho.fill(0.0)
+        from ..step.field_solve import USE_TAICHI, accumulate_rho_taichi, accumulate_rho_cpu
+        charge_per_particle = float(self.q_ion * self.macro_weight)
+        if getattr(self, 'zone_b_ti', None) is None or getattr(self, 'cvol_r_ti', None) is None:
+            self._update_taichi_mesh_constants()
+        is_axisym = 1 if getattr(self, 'is_axisymmetric', False) else 0
+
+        if self.num_p > 0:
+            if USE_TAICHI and hasattr(self, 'zone_b_ti') and self.zone_b_ti is not None:
+                accumulate_rho_taichi(
+                    self.p_x[:self.num_p],
+                    self.p_y[:self.num_p],
+                    self.rho,
+                    self.cvol_r_ti,
+                    self.cvol_x_ti,
+                    self.num_p,
+                    self._dy_f32,
+                    self.nx,
+                    self.ny,
+                    np.float32(charge_per_particle),
+                    self.zone_b_ti, self.zone_dx_ti, self.zone_off_ti, self.num_zones,
+                    is_axisym
+                )
+            else:
+                accumulate_rho_cpu(
+                    self.p_x[:self.num_p],
+                    self.p_y[:self.num_p],
+                    self.rho,
+                    self.num_p,
+                    self.dy,
+                    self.nx,
+                    self.ny,
+                    charge_per_particle,
+                    self.zone_boundaries,
+                    self.zone_dx,
+                    self.zone_offsets,
+                    self.cell_vol_1d,
+                    cvol_r=self.cvol_r_1d,
+                    cvol_x=self.cvol_x_1d,
+                    is_axisymmetric=bool(is_axisym)
+                )
+
+        if getattr(self, 'num_e', 0) > 0:
+            if USE_TAICHI and hasattr(self, 'zone_b_ti') and self.zone_b_ti is not None:
+                accumulate_rho_taichi(
+                    self.e_x[:self.num_e],
+                    self.e_y[:self.num_e],
+                    self.rho,
+                    self.cvol_r_ti,
+                    self.cvol_x_ti,
+                    self.num_e,
+                    self._dy_f32,
+                    self.nx,
+                    self.ny,
+                    np.float32(-charge_per_particle),
+                    self.zone_b_ti, self.zone_dx_ti, self.zone_off_ti, self.num_zones,
+                    is_axisym
+                )
+            else:
+                accumulate_rho_cpu(
+                    self.e_x[:self.num_e],
+                    self.e_y[:self.num_e],
+                    self.rho,
+                    self.num_e,
+                    self.dy,
+                    self.nx,
+                    self.ny,
+                    -charge_per_particle,
+                    self.zone_boundaries,
+                    self.zone_dx,
+                    self.zone_offsets,
+                    self.cell_vol_1d,
+                    cvol_r=self.cvol_r_1d,
+                    cvol_x=self.cvol_x_1d,
+                    is_axisymmetric=bool(is_axisym)
+                )
+
+        # Execute Picard relaxation steps to smoothly reconcile fields on the new mesh
+        self.recalc_poisson(iterations=5, params=cfg)
+
+        self._has_stability_remeshed = True
+        self._stability_remesh_iter = self.iteration
+        print(f"[Adaptive Remesh] Reshaped mesh at iter {self.iteration}: ({len(old_y)}x{len(old_x)}) -> ({self.ny}x{self.nx}).")
         return True

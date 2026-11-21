@@ -3,7 +3,7 @@ Steady State Diagnostics Monitor Window for PY-BEMCS.
 
 Monitors the approach to steady-state conditions by plotting percentage variations
 of key physical quantities (Total Energy, Total Space Charge, Electric Field Energy,
-Saddle-point Potential, Ion Current, Divergence) over a rolling window (default: 50 iterations).
+Saddle-point Potential, Ion Current, Divergence) over a rolling window (default: 100 iterations).
 """
 
 import numpy as np
@@ -35,7 +35,7 @@ class SteadyStateWindow(QDialog):
     Pop-up window analyzing whether the simulation has reached stationary (steady-state) conditions.
 
     Plots the relative or peak-to-peak percentage variation of key observables across
-    a configurable window of iterations (default: 50 iterations).
+    a configurable window of iterations (default: 100 iterations).
     """
 
     MODES = [
@@ -57,7 +57,7 @@ class SteadyStateWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_app = parent
-        self.setWindowTitle("Steady State Diagnostics — 50-Iteration Variation")
+        self.setWindowTitle("Steady State Diagnostics — 100-Iteration Variation")
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         self.resize(1020, 720)
         self.setMinimumSize(850, 560)
@@ -89,7 +89,7 @@ class SteadyStateWindow(QDialog):
         ctrl_layout.addWidget(QLabel("Window (iters):"))
         self.spin_window = QSpinBox()
         self.spin_window.setRange(5, 1000)
-        self.spin_window.setValue(50)
+        self.spin_window.setValue(100)
         self.spin_window.setSingleStep(10)
         self.spin_window.valueChanged.connect(self._on_window_changed)
         ctrl_layout.addWidget(self.spin_window)

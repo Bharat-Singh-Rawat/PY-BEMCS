@@ -321,6 +321,14 @@ class DiagnosticsMixin:
         if not np.any(mask):
             return np.array([]), np.array([])
 
+        if not hasattr(self, 'eroded_depth') or self.eroded_depth.shape != (self.ny, self.nx):
+            self.eroded_depth = np.zeros((self.ny, self.nx), dtype=np.float64)
+            if getattr(self, 'subgrid_manager', None) is not None:
+                self.subgrid_manager.sync_to_domain(self)
+
+        if not hasattr(self, 'damage_map') or self.damage_map.shape != (self.ny, self.nx):
+            self.damage_map = np.zeros((self.ny, self.nx), dtype=np.float64)
+
         depth = self.eroded_depth
         if accumulate_subcell and thresh and thresh > 0:
             depth = depth + (self.damage_map / thresh) * self.dy
@@ -342,6 +350,19 @@ class DiagnosticsMixin:
             per_y[has_any] = depth[np.where(has_any)[0], last_idx[has_any]]
         else:
             raise ValueError(f"face must be 'upstream','downstream', or 'any' (got {face!r})")
+
+        subgrid_mgr = getattr(self, 'subgrid_manager', None)
+        if subgrid_mgr is not None and getattr(subgrid_mgr, 'profiles', None) and grid_idx < len(subgrid_mgr.profiles):
+            y_sub, d_sub_um = subgrid_mgr.get_groove_profile(grid_idx, face=face)
+            if len(y_sub) > 0 and np.any(d_sub_um > 0):
+                per_y_interp = np.interp(y_sub, y_mm, per_y * 1000.0, left=0.0, right=0.0)
+                if np.any(per_y > 0):
+                    max_raw = float(np.max(per_y * 1000.0))
+                    max_interp = float(np.max(per_y_interp))
+                    if max_interp > 0 and max_raw > max_interp:
+                        per_y_interp *= (max_raw / max_interp)
+                combined = np.maximum(per_y_interp, d_sub_um)
+                return y_sub, combined
 
         return y_mm, per_y * 1000.0
 

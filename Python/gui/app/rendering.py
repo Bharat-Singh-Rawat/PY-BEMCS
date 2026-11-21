@@ -489,6 +489,26 @@ class RenderingMixin:
             self.ax_temp.set_xlim(0, snap['Lx'])
             self.ax_temp.set_ylim(0, snap['Ly'])
 
+        if hasattr(self, 'ax_live') and 'Lx' in snap and 'Ly' in snap:
+            cur_xlim = self.ax_live.get_xlim()
+            cur_ylim = self.ax_live.get_ylim()
+            if abs(cur_xlim[1] - snap['Lx']) > 0.01 or abs(cur_ylim[1] - snap['Ly']) > 0.01:
+                self.ax_live.set_xlim(0, snap['Lx'])
+                self.ax_live.set_ylim(0, snap['Ly'])
+                if hasattr(self, 'sim') and self.sim is not None:
+                    self.sim.Lx = snap['Lx']
+                    self.sim.Ly = snap['Ly']
+                    if 'X' in snap and 'Y' in snap:
+                        self.sim.X = snap['X']
+                        self.sim.Y = snap['Y']
+                        self.sim.nx = snap['X'].shape[1]
+                        self.sim.ny = snap['X'].shape[0]
+                    if 'V' in snap and snap['V'] is not None:
+                        self.sim.V = snap['V']
+                    if 'isBound' in snap and snap['isBound'] is not None:
+                        self.sim.isBound = snap['isBound']
+                self.draw_static_domain(redraw=False)
+
         damage_map = snap['damage_map']
         if damage_map is not None and damage_map.shape == snap['X'].shape:
             if getattr(self, "dmg_mesh", None) is None or self.dmg_mesh.get_array().size != damage_map.size:

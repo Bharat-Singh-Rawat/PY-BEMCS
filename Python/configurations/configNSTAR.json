@@ -10,7 +10,14 @@
     "V_plasma_offset": 26.0,
     "m_e_ratio": 1000.0,
     "enforce_efield_mesh_limit": true,
-    "max_efield_jump": 0.1
+    "max_efield_jump": 0.1,
+    "adaptive_remesh_settings": {
+      "enabled": false,
+      "min_iterations": 500,
+      "coarsen_presheath_bulk": 1.5,
+      "refine_meniscus_zone": 0.8,
+      "coarsen_far_plume": 4.0
+    }
   },
   "mesh_zones": {
     "presheath_factor": 1.0,

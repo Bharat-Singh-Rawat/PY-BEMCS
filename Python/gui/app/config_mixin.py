@@ -41,6 +41,14 @@ class ConfigMixin:
             r"\deltax/debye_length": 0.8,
             "dt_ns": 0.50,
             "dt": 5e-10,
+            "adaptive_remesh_enabled": False,
+            "adaptive_remesh_settings": {
+                "enabled": False,
+                "min_iterations": 500,
+                "coarsen_presheath_bulk": 1.5,
+                "refine_meniscus_zone": 0.8,
+                "coarsen_far_plume": 4.0,
+            },
         }
 
         self.inputs["n0_plasma"].setValue(1e17)
@@ -396,6 +404,7 @@ class ConfigMixin:
         adv = config.get("advanced_settings", {})
         val_dx_debye = adv.get(r"\deltax/debye_length", adv.get("dx_over_debye", adv.get("deltax_debye_length", 0.8)))
         val_dt_ns = adv.get("dt_ns", adv.get("dt", 5e-10) * 1e9 if "dt" in adv else 0.50)
+        remesh_cfg = adv.get("adaptive_remesh_settings", {})
         self.adv_params = {
             "V_plasma_offset": adv.get("V_plasma_offset", 20.0),
             "m_e_ratio": adv.get("m_e_ratio", 1000.0),
@@ -407,6 +416,14 @@ class ConfigMixin:
             r"\deltax/debye_length": float(val_dx_debye),
             "dt_ns": float(val_dt_ns),
             "dt": float(val_dt_ns) * 1e-9,
+            "adaptive_remesh_enabled": bool(remesh_cfg.get("enabled", adv.get("adaptive_remesh_enabled", False))),
+            "adaptive_remesh_settings": {
+                "enabled": bool(remesh_cfg.get("enabled", adv.get("adaptive_remesh_enabled", False))),
+                "min_iterations": int(remesh_cfg.get("min_iterations", adv.get("remesh_min_iters", 500))),
+                "coarsen_presheath_bulk": float(remesh_cfg.get("coarsen_presheath_bulk", remesh_cfg.get("coarsen_presheath", 1.5))),
+                "refine_meniscus_zone": float(remesh_cfg.get("refine_meniscus_zone", remesh_cfg.get("refine_meniscus", 0.8))),
+                "coarsen_far_plume": float(remesh_cfg.get("coarsen_far_plume", remesh_cfg.get("coarsen_plume", 4.0))),
+            },
         }
 
         self.mesh_zones = config.get("mesh_zones", {
@@ -659,6 +676,10 @@ class ConfigMixin:
             adv_cfg["dx_over_debye"] = float(adv_params["dx_over_debye"])
         if "dt_ns" in adv_params:
             adv_cfg["dt_ns"] = float(adv_params["dt_ns"])
+        if "adaptive_remesh_settings" in adv_params:
+            adv_cfg["adaptive_remesh_settings"] = dict(adv_params["adaptive_remesh_settings"])
+        elif "adaptive_remesh_enabled" in adv_params:
+            adv_cfg["adaptive_remesh_enabled"] = bool(adv_params["adaptive_remesh_enabled"])
 
         if getattr(self, "_user_overrode_Lx", False) or "Lx" in adv_cfg:
             adv_cfg["Lx"] = float(adv_params.get("Lx", 20.0))
@@ -873,6 +894,11 @@ class ConfigMixin:
         if "dt" in self.adv_params and self.adv_params["dt"] > 0:
             self.sim.dt = float(self.adv_params["dt"])
 
+        remesh_cfg = self.adv_params.get("adaptive_remesh_settings", {})
+        self.sim.adaptive_remesh_enabled = bool(remesh_cfg.get("enabled", self.adv_params.get("adaptive_remesh_enabled", False)))
+        self.sim.remesh_min_iters = int(remesh_cfg.get("min_iterations", self.adv_params.get("remesh_min_iters", 500)))
+        self.sim.adaptive_remesh_settings = dict(remesh_cfg)
+
         self.sim.set_material(props=self.mat_props)
 
         self.sim.user_cs = {}
@@ -910,6 +936,9 @@ class ConfigMixin:
                 "cham": gw["cham"].value(),
             })
         params["grids"] = grids
+        params["truncate_downstream_plume"] = bool(
+            getattr(self, 'truncate_downstream_plume', getattr(getattr(self, 'sim', None), 'truncate_downstream_plume', False))
+        )
 
         inj_time_µs = self.inputs.get("inj_time_µs", None)
         if inj_time_µs is not None:

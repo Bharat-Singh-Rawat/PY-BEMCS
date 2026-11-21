@@ -265,7 +265,7 @@ class UIBuilderMixin:
         """)
         top_bar_layout = QHBoxLayout(top_bar)
         top_bar_layout.setContentsMargins(14, 5, 14, 5)
-        top_bar_layout.setSpacing(12)
+        top_bar_layout.setSpacing(8)
 
         self.lbl_sim_status_badge = QLabel("IDLE")
         self.lbl_sim_status_badge.setStyleSheet(
@@ -298,11 +298,12 @@ class UIBuilderMixin:
         arrow_icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "down_arrow.svg")).replace("\\", "/")
         self.combo_sweep_scenario = QComboBox()
         self.combo_sweep_scenario.setVisible(False)
-        self.combo_sweep_scenario.setFixedWidth(340)
+        self.combo_sweep_scenario.setFixedWidth(310)
         self.combo_sweep_scenario.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.combo_sweep_scenario.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.combo_sweep_scenario.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_sweep_scenario.setMinimumContentsLength(20)
         if self.combo_sweep_scenario.view():
-            self.combo_sweep_scenario.view().setMinimumWidth(380)
+            self.combo_sweep_scenario.view().setMinimumWidth(420)
         self.combo_sweep_scenario.setToolTip("Select an ongoing or completed sweep scenario to inspect its live state")
         self.combo_sweep_scenario.setStyleSheet(
             f"QComboBox {{ background-color: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; "
@@ -328,6 +329,8 @@ class UIBuilderMixin:
 
         self.btn_resume_sweep = QPushButton("Start Sweep")
         self.btn_resume_sweep.setVisible(False)
+        self.btn_resume_sweep.setFixedWidth(105)
+        self.btn_resume_sweep.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_resume_sweep.setToolTip("Start parametric sweep simulation across all scenarios")
         self.btn_resume_sweep.setStyleSheet(
             "background-color: #f0fdf4; color: #15803d; font-weight: bold; "
@@ -339,6 +342,8 @@ class UIBuilderMixin:
 
         self.btn_exit_sweep = QPushButton("Exit sweep")
         self.btn_exit_sweep.setVisible(False)
+        self.btn_exit_sweep.setFixedWidth(85)
+        self.btn_exit_sweep.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_exit_sweep.setToolTip("Exit sweep mode and return to normal single simulation")
         self.btn_exit_sweep.setStyleSheet(
             "background-color: #f1f5f9; color: #334155; font-weight: bold; "

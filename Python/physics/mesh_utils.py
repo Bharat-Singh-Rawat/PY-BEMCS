@@ -397,3 +397,151 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
 
     return zones
 
+
+def estimate_stability_optimized_mesh_zones(
+    sim,
+    grids: list,
+    upstream_gap_mm: float,
+    Lx: float,
+    dx0: float,
+    remesh_cfg: dict = None,
+    max_rel_jump: float = 0.10,
+) -> list:
+    """
+    Generate an optimized non-uniform axial mesh partitioned dynamically around the
+    plasma sheath/meniscus boundary detected at runtime from potential field V(x, 0).
+
+    Zones created:
+      1. Presheath Deep: [0, x_meniscus - 2*lambda_D], coarsened (factor ~ 1.5 - 2.0x)
+         because electric field is near-zero and plasma is quiescent.
+      2. Presheath Meniscus: [x_meniscus - 2*lambda_D, upstream_gap], refined (factor ~ 0.7 - 0.8x)
+         to accurately resolve the 2D curved Bohm sonic surface and sheath curvature.
+      3. Grid Barrels & Acceleration Gaps: strictly bounded to keep cell-to-cell delta E <= 10%
+         and CFL compliant.
+      4. Plume:
+         - Near Plume: factor 2.0
+         - Far Plume: coarsened by factor 3.0 - 6.0x where plasma density is dilute.
+    """
+    if remesh_cfg is None:
+        remesh_cfg = {}
+
+    coarsen_presheath = float(remesh_cfg.get("coarsen_presheath_bulk", remesh_cfg.get("coarsen_presheath", 1.5)))
+    refine_meniscus = float(remesh_cfg.get("refine_meniscus_zone", remesh_cfg.get("refine_meniscus", 0.8)))
+    coarsen_plume = float(remesh_cfg.get("coarsen_far_plume", remesh_cfg.get("coarsen_plume", 4.0)))
+
+    if not grids:
+        return [
+            {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Optics',    'x_start': min(Lx / 3.0, Lx), 'x_end': min(2.0 * Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': coarsen_plume},
+        ]
+
+    up_gap = min(float(upstream_gap_mm), Lx)
+
+    # 1. Detect Meniscus Location x_meniscus along the centerline y=0
+    x_meniscus = None
+    if hasattr(sim, 'V') and sim.V is not None and hasattr(sim, 'x_coords') and len(sim.x_coords) > 0:
+        try:
+            V_center = sim.V[0, :]
+            V_plasma = float(V_center[0])
+            Te_up = float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0)))
+            V_sheath = V_plasma - 0.5 * Te_up
+
+            mask_up = (sim.x_coords >= 0.0) & (sim.x_coords <= up_gap)
+            idx_up = np.where(mask_up)[0]
+            if len(idx_up) > 0:
+                below_sheath = idx_up[V_center[idx_up] <= V_sheath]
+                if len(below_sheath) > 0:
+                    x_meniscus = float(sim.x_coords[below_sheath[0]])
+        except Exception:
+            x_meniscus = None
+
+    lambda_D_mm = float(getattr(sim, 'debye_length_mm', 0.05))
+    if x_meniscus is None:
+        x_meniscus = max(0.15 * up_gap, min(0.75 * up_gap, up_gap - 2.0 * lambda_D_mm))
+    else:
+        x_meniscus = max(0.15 * up_gap, min(0.90 * up_gap, x_meniscus))
+
+    x_split = max(0.10 * up_gap, round(x_meniscus - 2.0 * lambda_D_mm, 5))
+    if x_split >= up_gap - 1e-4:
+        x_split = round(0.5 * up_gap, 5)
+
+    zones = []
+    x_curr = 0.0
+
+    # 1A. Deep Presheath
+    if x_split > 1e-5:
+        zones.append({
+            'name': 'Presheath_Deep',
+            'x_start': round(x_curr, 5),
+            'x_end': round(x_split, 5),
+            'factor': max(1.0, min(3.0, coarsen_presheath))
+        })
+        x_curr = x_split
+
+    # 1B. Active Meniscus & Sheath
+    if up_gap - x_curr > 1e-5:
+        zones.append({
+            'name': 'Presheath_Meniscus',
+            'x_start': round(x_curr, 5),
+            'x_end': round(up_gap, 5),
+            'factor': max(0.4, min(1.0, refine_meniscus))
+        })
+        x_curr = up_gap
+
+    # 2. Grid Barrels and Inter-Grid Gaps
+    num_grids = len(grids)
+    for i, g in enumerate(grids):
+        t_grid = float(g.get('t', 0.5))
+        gap = float(g.get('gap', 1.0))
+
+        # Grid barrel
+        if x_curr < Lx:
+            x_next = min(x_curr + t_grid, Lx)
+            if x_next - x_curr > 1e-5:
+                f_t = min(1.5, max(0.8, round((t_grid / 15.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Grid_{i+1}_barrel',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_t
+                })
+                x_curr = x_next
+
+        # Internal inter-grid gap
+        if i < num_grids - 1 and x_curr < Lx:
+            x_next = min(x_curr + gap, Lx)
+            if x_next - x_curr > 1e-5:
+                f_gap = min(1.0, max(0.5, round((gap / 20.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Gap_{i+1}_{i+2}',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_gap
+                })
+                x_curr = x_next
+
+    # 3. Plume Zones
+    plume_remaining = Lx - x_curr
+    if plume_remaining > 1e-5:
+        near_plume_len = min(1.0, 0.3 * plume_remaining)
+        if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
+            x_next = round(x_curr + near_plume_len, 5)
+            zones.append({
+                'name': 'Near_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': x_next,
+                'factor': 2.0
+            })
+            x_curr = x_next
+
+        if Lx - x_curr > 1e-5:
+            zones.append({
+                'name': 'Far_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': round(Lx, 5),
+                'factor': max(2.0, min(8.0, coarsen_plume))
+            })
+
+    return zones
+

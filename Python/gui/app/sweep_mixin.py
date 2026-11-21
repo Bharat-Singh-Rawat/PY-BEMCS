@@ -81,6 +81,42 @@ class SweepMixin:
                     status_dict[k] = v
                 elif k not in status_dict:
                     status_dict[k] = v
+
+        # Supplement with completed results from self.sweep_results if any status entry is missing/empty
+        for res_row in getattr(self, 'sweep_results', []):
+            if not isinstance(res_row, dict):
+                continue
+            s_idx = res_row.get("scenario_idx")
+            if s_idx is None:
+                continue
+            if s_idx not in status_dict or not status_dict[s_idx]:
+                status_dict[s_idx] = {}
+            st = status_dict[s_idx]
+            if not st.get("status") or st["status"] in ("queued", "unknown"):
+                st["status"] = "done"
+            if not st.get("iter"):
+                st["iter"] = res_row.get("steady_iterations", res_row.get("iter", 0))
+            if st.get("div") is None or st.get("div") == 0.0:
+                st["div"] = res_row.get("divergence_deg", res_row.get("div", 0.0))
+            if st.get("div_mid") is None or st.get("div_mid") == 0.0:
+                st["div_mid"] = res_row.get("divergence_2nd_plane_deg", res_row.get("div_mid", 0.0))
+            if not st.get("exit_ion_current_A"):
+                st["exit_ion_current_A"] = res_row.get("exit_ion_current_A", 0.0)
+            if not st.get("transparency"):
+                st["transparency"] = res_row.get("transparency", 0.0)
+            if not st.get("perveance_effective"):
+                st["perveance_effective"] = res_row.get("perveance_effective", res_row.get("Peffective", 0.0))
+            if not st.get("t_sim_us"):
+                st["t_sim_us"] = res_row.get("t_sim_us", 0.0)
+            if not st.get("computation_time_s"):
+                st["computation_time_s"] = res_row.get("computation_time_s", 0.0)
+            if not st.get("T_grids_K") and "T_grids_K" in res_row:
+                st["T_grids_K"] = list(res_row["T_grids_K"])
+                st["T_grids"] = list(res_row["T_grids_K"])
+            if not st.get("T_grids_C") and "T_grids_C" in res_row:
+                st["T_grids_C"] = list(res_row["T_grids_C"])
+            if "steady_state_reached" in res_row and "steady_state_reached" not in st:
+                st["steady_state_reached"] = res_row["steady_state_reached"]
         return status_dict
 
     def _record_seq_scenario_step(
@@ -199,6 +235,13 @@ class SweepMixin:
             "isBound": is_bound_snap.copy() if is_bound_snap is not None else None,
             "X": snap.get('X').copy() if snap.get('X') is not None else (getattr(sim, 'X', None).copy() if getattr(sim, 'X', None) is not None else None),
             "Y": snap.get('Y').copy() if snap.get('Y') is not None else (getattr(sim, 'Y', None).copy() if getattr(sim, 'Y', None) is not None else None),
+            "V": snap.get('V').copy() if snap.get('V') is not None else (getattr(sim, 'V', None).copy() if getattr(sim, 'V', None) is not None else None),
+            "damage_map": getattr(sim, 'damage_map', None).copy() if getattr(sim, 'damage_map', None) is not None else None,
+            "eroded_depth": getattr(sim, 'eroded_depth', None).copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+            "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+            "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
+            "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
+            "ion_current_history": list(getattr(sim, 'ion_current_history', [])),
             "Lx": float(snap.get('Lx', getattr(sim, 'Lx', 3.0))),
             "Ly": float(snap.get('Ly', getattr(sim, 'Ly', 3.0))),
             "nx": int(snap.get('nx', getattr(sim, 'nx', 0))),
@@ -1062,8 +1105,10 @@ class SweepMixin:
 
         # Apply initial scenario value
         self._apply_sweep_value(config["param_id"], first_val)
-        if hasattr(self, 'sim'):
-            self.sim.truncate_downstream_plume = (self._scenario_advisory_decisions.get(1) == "truncate")
+        is_trunc = (self._scenario_advisory_decisions.get(1) == "truncate")
+        self.truncate_downstream_plume = is_trunc
+        if hasattr(self, 'sim') and self.sim is not None:
+            self.sim.truncate_downstream_plume = is_trunc
         self.build_domain(force=True)
 
         self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
@@ -1246,6 +1291,8 @@ class SweepMixin:
                 truncate_plume = (choice == "truncate")
                 for s_num in targets:
                     self._scenario_advisory_decisions[s_num] = choice
+                    if hasattr(self, '_scenario_domain_cache') and isinstance(self._scenario_domain_cache, dict):
+                        self._scenario_domain_cache.pop(s_num, None)
 
                     # Release in parallel sweep worker
                     if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
@@ -1480,8 +1527,8 @@ class SweepMixin:
         if not hasattr(self, '_scenario_domain_cache'):
             self._scenario_domain_cache = {}
 
-        if scenario_idx in self._scenario_domain_cache:
-            return self._scenario_domain_cache[scenario_idx]
+        status_dict = self._get_merged_sweep_status_dict() if hasattr(self, '_get_merged_sweep_status_dict') else {}
+        info = dict(status_dict.get(scenario_idx, {})) if status_dict else {}
 
         cfg = getattr(self, 'sweep_config', {})
         if not cfg:
@@ -1499,9 +1546,21 @@ class SweepMixin:
         elif base_params is None:
             base_params = {}
 
+        is_trunc = (
+            getattr(self, '_scenario_advisory_decisions', {}).get(scenario_idx) == "truncate"
+            or bool(info.get("truncate_downstream_plume", False))
+            or bool(cfg.get("truncate_downstream_plume", False))
+            or (info.get("Lx") is not None and abs(info.get("Lx") - float(base_params.get("Lx", 5.26))) > 0.5)
+        )
+
+        if scenario_idx in self._scenario_domain_cache:
+            cached = self._scenario_domain_cache[scenario_idx]
+            if cached.get("truncate_downstream_plume", False) == is_trunc:
+                return cached
+
         from physics.headless_sweep import apply_sweep_param_to_dict
         scenario_params = apply_sweep_param_to_dict(base_params, param_id, val, sweep_config=cfg)
-        if getattr(self, '_scenario_advisory_decisions', {}).get(scenario_idx) == "truncate":
+        if is_trunc:
             scenario_params["truncate_downstream_plume"] = True
 
         try:
@@ -1518,6 +1577,7 @@ class SweepMixin:
                 bound_xy = np.column_stack((gx * sim_temp.dx, gy * sim_temp.dy)).astype(np.float32)
 
             data = {
+                "truncate_downstream_plume": is_trunc,
                 "bound_xy": bound_xy,
                 "X": sim_temp.X,
                 "Y": sim_temp.Y,
@@ -1567,6 +1627,8 @@ class SweepMixin:
         for k in ("V", "isBound", "Tmap", "mask_grids", "T_grids", "x_coords", "y_coords", "zone_configs", "grid_x_starts", "grid_x_ends", "grids"):
             if d_data.get(k) is not None:
                 setattr(self.sim, k, d_data[k])
+        if "truncate_downstream_plume" in d_data:
+            self.sim.truncate_downstream_plume = bool(d_data["truncate_downstream_plume"])
         if include_fields:
             if d_data.get("Vdc") is not None:
                 self.sim.Vdc = d_data["Vdc"]
@@ -1725,26 +1787,25 @@ class SweepMixin:
 
     def _render_sweep_scenario_snapshot(self, scenario_idx):
         """Render the chosen sweep scenario's particle data and physical observables on the canvas."""
-        status_dict = {}
-        if hasattr(self, '_sweep_status_dict') and self._sweep_status_dict:
-            status_dict.update(self._sweep_status_dict)
-        if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-            worker_dict = self.parallel_sweep_worker.get_status_dict()
-            for k, v in worker_dict.items():
-                if v and (v.get("iter", 0) > 0 or v.get("status") in ("running", "paused", "done")):
-                    status_dict[k] = v
-                elif k not in status_dict:
-                    status_dict[k] = v
-
-        info = status_dict.get(scenario_idx, {})
+        status_dict = self._get_merged_sweep_status_dict()
+        info = dict(status_dict.get(scenario_idx, {}))
 
         # 0. Sync live axes limits, grid electrode boundaries, and potential contour
         d_data = self._get_scenario_domain_data(scenario_idx)
-        lx = d_data.get("Lx", info.get("Lx"))
-        ly = d_data.get("Ly", info.get("Ly"))
-        if lx is not None and ly is not None and hasattr(self, 'ax_live'):
-            self.ax_live.set_xlim(0, float(lx))
-            self.ax_live.set_ylim(0, float(ly))
+        lx = info.get("Lx") if info.get("Lx") is not None else d_data.get("Lx")
+        ly = info.get("Ly") if info.get("Ly") is not None else d_data.get("Ly")
+        if lx is not None and ly is not None:
+            lx_f = float(lx)
+            ly_f = float(ly)
+            if hasattr(self, 'ax_live'):
+                self.ax_live.set_xlim(0, lx_f)
+                self.ax_live.set_ylim(0, ly_f)
+            if hasattr(self, 'ax_temp'):
+                self.ax_temp.set_xlim(0, lx_f)
+                self.ax_temp.set_ylim(0, ly_f)
+            if hasattr(self, 'ax_dmg'):
+                self.ax_dmg.set_xlim(0, lx_f)
+                self.ax_dmg.set_ylim(0, ly_f)
 
         bound_xy = d_data.get("bound_xy")
         live_is_bound = info.get("isBound")
@@ -1766,10 +1827,32 @@ class SweepMixin:
             self.scat_bound = self.ax_live.scatter(bound_xy[:, 0], bound_xy[:, 1], s=4, c="k", alpha=0.8, zorder=2)
 
         if getattr(self, '_current_rendered_scenario_grid_idx', None) != scenario_idx:
-            X = d_data.get("X")
-            Y = d_data.get("Y")
-            V = d_data.get("V")
-            if X is not None and Y is not None and V is not None and hasattr(self, 'ax_live'):
+            X = info.get("X")
+            Y = info.get("Y")
+            V = info.get("V")
+
+            if (X is None or Y is None) and d_data:
+                if d_data.get("X") is not None and d_data.get("Y") is not None:
+                    if lx is not None and abs(d_data["X"].max() - float(lx)) < 0.05:
+                        X = d_data["X"]
+                        Y = d_data["Y"]
+
+            if (X is None or Y is None) and lx is not None and ly is not None:
+                target_nx = int(info.get("nx", d_data.get("nx", (V.shape[1] if V is not None else 100))))
+                target_ny = int(info.get("ny", d_data.get("ny", (V.shape[0] if V is not None else 50))))
+                x_pts = info.get("x_coords") if (info.get("x_coords") is not None and len(info["x_coords"]) == target_nx) else (
+                    d_data.get("x_coords") if (d_data.get("x_coords") is not None and len(d_data["x_coords"]) == target_nx and abs(d_data["x_coords"][-1] - float(lx)) < 0.05) else np.linspace(0, float(lx), target_nx)
+                )
+                y_pts = info.get("y_coords") if (info.get("y_coords") is not None and len(info["y_coords"]) == target_ny) else (
+                    d_data.get("y_coords") if (d_data.get("y_coords") is not None and len(d_data["y_coords"]) == target_ny) else np.linspace(0, float(ly), target_ny)
+                )
+                X, Y = np.meshgrid(x_pts, y_pts)
+
+            if V is None or (X is not None and getattr(V, 'shape', None) != X.shape):
+                if d_data.get("V") is not None and (X is not None and d_data["V"].shape == X.shape):
+                    V = d_data["V"]
+
+            if X is not None and Y is not None and V is not None and V.shape == X.shape and hasattr(self, 'ax_live'):
                 if hasattr(self, 'contour_live') and self.contour_live is not None:
                     try:
                         self.contour_live.remove()
@@ -1934,10 +2017,65 @@ class SweepMixin:
                 self.ax_ebs.set_ylim(-100, 100)
 
         if d_data and not getattr(self, 'sim_isRunning', False):
-            self._sync_sim_domain_from_scenario_data(d_data)
+            self._sync_sim_domain_from_scenario_data(d_data, include_fields=True)
+            if info.get("Lx") is not None:
+                self.sim.Lx = float(info["Lx"])
+            if info.get("Ly") is not None:
+                self.sim.Ly = float(info["Ly"])
+            if info.get("nx") is not None:
+                self.sim.nx = int(info["nx"])
+            if info.get("ny") is not None:
+                self.sim.ny = int(info["ny"])
+            if info.get("V") is not None:
+                self.sim.V = info["V"]
+            if info.get("Tmap") is not None:
+                self.sim.Tmap = info["Tmap"]
 
         if hasattr(self, '_update_div_plane_line'):
             self._update_div_plane_line()
+
+        # 2.2 Update Erosion Groove Profiles (ax_grooves, line_grooves)
+        if hasattr(self, 'line_grooves') and self.line_grooves and hasattr(self, 'sim') and self.sim is not None:
+            if info.get("damage_map") is not None:
+                self.sim.damage_map = info["damage_map"].copy()
+            elif d_data and d_data.get("damage_map") is not None:
+                self.sim.damage_map = d_data["damage_map"].copy()
+            elif hasattr(self.sim, 'ny') and hasattr(self.sim, 'nx') and self.sim.ny > 0 and self.sim.nx > 0:
+                self.sim.damage_map = np.zeros((self.sim.ny, self.sim.nx), dtype=np.float32)
+
+            if info.get("eroded_depth") is not None:
+                self.sim.eroded_depth = info["eroded_depth"].copy()
+            elif hasattr(self.sim, 'damage_map') and self.sim.damage_map is not None:
+                self.sim.eroded_depth = np.zeros_like(self.sim.damage_map, dtype=np.float32)
+
+            groove_face = "downstream"
+            thresh_val = self.inputs["Thresh"].value() if (hasattr(self, 'inputs') and "Thresh" in self.inputs) else 0.05
+            n_grooves = len(self.line_grooves)
+            title_fs = 8.5 if n_grooves > 2 else 10
+            mask_grids_g = info.get("mask_grids") or getattr(self.sim, 'mask_grids', [])
+            for groove_idx in range(len(mask_grids_g)):
+                if groove_idx >= n_grooves:
+                    break
+                try:
+                    y_mm, depth_um = self.sim.get_groove_profile(
+                        groove_idx,
+                        thresh=thresh_val,
+                        face=groove_face
+                    )
+                    if hasattr(y_mm, 'size') and y_mm.size > 0:
+                        self.line_grooves[groove_idx].set_data(y_mm, depth_um)
+                        if hasattr(self, 'ax_grooves') and groove_idx < len(self.ax_grooves):
+                            ax_g = self.ax_grooves[groove_idx]
+                            ax_g.set_xlim(0, float(y_mm.max()))
+                            dmax = float(depth_um.max()) if depth_um.size > 0 else 0.0
+                            ax_g.set_ylim(max(dmax * 1.1, 1.0), 0.0)
+                            ax_g.set_title(
+                                f"Grid {groove_idx + 1} Erosion Profile — {groove_face} face",
+                                fontsize=title_fs,
+                                pad=3,
+                            )
+                except Exception:
+                    pass
 
         # 2.5 Update Grid Temperature Map (ax_temp) and Grid Temps label (lbl_temp)
         Tmap = info.get("Tmap")
@@ -2034,13 +2172,13 @@ class SweepMixin:
 
         # 3. Update status and metrics labels
         t_us = info.get("t_sim_us", 0.0)
-        scenario_iter = info.get("iter", 0)
-        div = info.get("div", 0.0)
-        div_mid = info.get("div_mid", 0.0)
+        scenario_iter = info.get("iter", info.get("steady_iterations", 0))
+        div = info.get("div", info.get("divergence_deg", 0.0))
+        div_mid = info.get("div_mid", info.get("divergence_2nd_plane_deg", 0.0))
         i_exit = info.get("exit_ion_current_A", 0.0)
         trans = info.get("transparency", 0.0)
         status_tag = info.get("status", "unknown").upper()
-        p_eff = info.get("perveance_effective", 0.0)
+        p_eff = info.get("perveance_effective", info.get("Peffective", 0.0))
 
         comp_s = info.get("computation_time_s")
         comp_str = f" | Wall Time: {format_comp_duration(comp_s)}" if (comp_s is not None and np.isfinite(comp_s) and comp_s > 0) else ""
@@ -2105,6 +2243,8 @@ class SweepMixin:
                     self._bg_live = None
                     self.canvas.draw_idle()
             else:
+                self.canvas.draw_idle()
+            if not getattr(self, 'sim_isRunning', False):
                 self.canvas.draw_idle()
         elif hasattr(self, 'canvas'):
             self.canvas.draw_idle()
@@ -2583,16 +2723,28 @@ class SweepMixin:
             self.sim.potential_history = list(info.get("ebs_history", []))
             self.sim.iteration = int(info.get("iter", 0))
 
+            # Sync ion current history to self.sim so steady_state_window reads the SELECTED scenario's current!
+            # Prefer smoothed cumulative running average (ion_current_exit_avg_history) matching the physics stationarity evaluator
+            ion_curr_h = list(
+                info.get("ion_current_exit_avg_history")
+                or info.get("ion_current_history")
+                or info.get("ion_current_exit_history")
+                or []
+            )
+            self.sim.ion_current_history = ion_curr_h
+            self.sim.exit_ion_current_history = ion_curr_h
+
             # Sync histories to app (self)
             self.ebs_history = list(info.get("ebs_history", []))
             self.div_history = list(info.get("div_history", []))
-            self.ion_current_exit_history = list(info.get("ion_current_exit_history", []))
+            self.ion_current_exit_history = list(ion_curr_h)
+            self.ion_current_exit_avg_history = list(ion_curr_h)
             self.transmitted_ions_history = list(info.get("transmitted_ions_history", []))
 
             param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
             param_val = info.get("parameter_value", "")
             param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
-            w = self.steady_state_window.spin_window.value() if hasattr(self.steady_state_window, 'spin_window') else 50
+            w = self.steady_state_window.spin_window.value() if hasattr(self.steady_state_window, 'spin_window') else 100
             self.steady_state_window.setWindowTitle(f"Steady State Diagnostics ({w}-iter) — Scenario {scenario_idx}{param_str}")
             self.steady_state_window.update_plot(self.sim, self)
         except Exception as exc:
@@ -2798,7 +2950,7 @@ class SweepMixin:
 
         min_iters = cfg.get("min_iterations", 500)
         max_iters = cfg.get("max_iterations", 5000)
-        window = cfg.get("window", 50)
+        window = cfg.get("window", 100)
         thresh = cfg.get("threshold", 1.0)
 
         # Track first grid entry iteration relative to scenario start
@@ -2824,9 +2976,9 @@ class SweepMixin:
                 if (cfg.get("param_id") in ("n0_plasma", "n0") or abs(cur_val) >= 1e4 or (0 < abs(cur_val) <= 1e-3))
                 else f"{cur_val:.3g}"
             )
-            entry_info = f", {iters_since_entry}/{min_iters} post-entry" if entry_iter is not None else ", waiting for grid entry"
+            entry_info = f" ({iters_since_entry}/{min_iters} post-entry)" if (entry_iter is not None and iters_since_entry < min_iters) else ""
             self.lbl_sweep_badge.setText(
-                f"⚡ Sweep mode active [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {cfg['param_unit']} ({scenario_iters:,} iters{entry_info})]"
+                f"⚡ Sweep [{cur_idx + 1}/{total_scenarios} | {cur_val_str} {cfg['param_unit']}{entry_info}]"
             )
 
         # Check steady-state condition across core physical observables
@@ -3012,6 +3164,10 @@ class SweepMixin:
             "isBound": getattr(sim, 'isBound', None).copy() if getattr(sim, 'isBound', None) is not None else None,
             "X": getattr(sim, 'X', None).copy() if getattr(sim, 'X', None) is not None else None,
             "Y": getattr(sim, 'Y', None).copy() if getattr(sim, 'Y', None) is not None else None,
+            "V": getattr(sim, 'V', None).copy() if getattr(sim, 'V', None) is not None else None,
+            "damage_map": getattr(sim, 'damage_map', None).copy() if getattr(sim, 'damage_map', None) is not None else None,
+            "eroded_depth": getattr(sim, 'eroded_depth', None).copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+            "ion_current_history": list(getattr(sim, 'ion_current_history', [])),
             "tracking_buffer": rec_trk_buf,
             "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
             "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
@@ -3165,8 +3321,10 @@ class SweepMixin:
                     self.combo_sweep_scenario.setCurrentIndex(self.sweep_current_idx)
                     self.combo_sweep_scenario.blockSignals(False)
             self._apply_sweep_value(cfg["param_id"], next_val)
-            if hasattr(self, 'sim'):
-                self.sim.truncate_downstream_plume = (getattr(self, '_scenario_advisory_decisions', {}).get(next_scen_num) == "truncate")
+            is_trunc = (getattr(self, '_scenario_advisory_decisions', {}).get(next_scen_num) == "truncate")
+            self.truncate_downstream_plume = is_trunc
+            if hasattr(self, 'sim') and self.sim is not None:
+                self.sim.truncate_downstream_plume = is_trunc
             was_running = getattr(self, 'sim_isRunning', False)
             self.build_domain(force=True)
             self.sweep_scenario_start_iter = getattr(self.sim, 'iteration', 0)
@@ -3536,7 +3694,7 @@ class SweepMixin:
                 self.field_window.update_plot(self.sim)
 
         if getattr(self, 'steady_state_window', None):
-            w = self.steady_state_window.spin_window.value() if hasattr(self.steady_state_window, 'spin_window') else 50
+            w = self.steady_state_window.spin_window.value() if hasattr(self.steady_state_window, 'spin_window') else 100
             self.steady_state_window.setWindowTitle(f"Steady State Diagnostics — {w}-Iteration Variation")
             if self.steady_state_window.isVisible() and hasattr(self, 'sim'):
                 self.steady_state_window.update_plot(self.sim, self)

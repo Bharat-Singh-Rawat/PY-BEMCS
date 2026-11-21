@@ -243,6 +243,14 @@ class DigitalTwinSimulator(
         self.last_n_sub_ion       = 1
         self.last_n_sub_e         = 1
 
+        self.adaptive_remesh_enabled = False
+        self._has_stability_remeshed = False
+        self._stability_remesh_iter  = None
+        self.remesh_min_iters        = 500
+        self.remesh_window           = 100
+        self.remesh_threshold        = 1.0
+        self.adaptive_remesh_settings= {}
+
     def step(self, params):
         if self.laplacian_lu is None or getattr(self, '_stop_requested', False):
             return False, np.nan, np.nan, self.T_grids, 0.0
@@ -295,4 +303,39 @@ class DigitalTwinSimulator(
             return False, np.nan, np.nan, self.T_grids, 0.0
         step_cex(self, ctx)
 
-        return step_end_accounting(self, ctx)
+        res = step_end_accounting(self, ctx)
+        remesh_flag = getattr(self, 'adaptive_remesh_enabled', False) or params.get("adaptive_remesh_enabled", False) or params.get("adaptive_remesh_settings", {}).get("enabled", False)
+        if remesh_flag and not getattr(self, '_has_stability_remeshed', False):
+            self._check_and_execute_stability_remesh(params)
+        return res
+
+    def _check_and_execute_stability_remesh(self, params):
+        remesh_cfg = getattr(self, 'adaptive_remesh_settings', {}) or params.get("adaptive_remesh_settings", {})
+        min_iters = int(remesh_cfg.get("min_iterations", getattr(self, 'remesh_min_iters', 500)))
+        if self.iteration < min_iters or (self.iteration % 5 != 0):
+            return False
+
+        window = getattr(self, 'remesh_window', 100)
+        thresh = getattr(self, 'remesh_threshold', 1.0)
+
+        histories = []
+        if hasattr(self, 'energy_history_tot') and len(self.energy_history_tot) >= window:
+            histories.append(self.energy_history_tot)
+        if hasattr(self, 'charge_history_q_net') and len(self.charge_history_q_net) >= window:
+            histories.append(self.charge_history_q_net)
+        if hasattr(self, 'potential_history') and len(self.potential_history) >= window:
+            histories.append(self.potential_history)
+        if hasattr(self, 'ion_current_history') and len(self.ion_current_history) >= window:
+            histories.append(self.ion_current_history)
+
+        if not histories:
+            return False
+
+        from diagnostics.metrics import compute_rolling_variation
+        for h in histories:
+            _, var = compute_rolling_variation(h, window=window, mode="rel_change")
+            if len(var) == 0 or abs(var[-1]) > thresh:
+                return False
+
+        remesh_cfg = getattr(self, 'adaptive_remesh_settings', {}) or params.get("adaptive_remesh_settings", {})
+        return self.execute_stability_remesh(params=params, remesh_cfg=remesh_cfg)

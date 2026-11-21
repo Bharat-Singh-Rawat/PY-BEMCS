@@ -299,6 +299,18 @@ def step_ion_interactions(sim, ctx: StepContext):
 
             is_erosion_hit = hit_grid_mask & (p_x > 0.25)
             if sim_mode in ("Erosion", "Both") and np.any(is_erosion_hit):
+                subgrid_mgr = getattr(sim, 'subgrid_manager', None)
+                if subgrid_mgr is not None:
+                    subgrid_mgr.record_erosion_hits(
+                        p_x[is_erosion_hit],
+                        p_y[is_erosion_hit],
+                        p_vx[is_erosion_hit],
+                        p_vy[is_erosion_hit],
+                        p_vz[is_erosion_hit],
+                        sim,
+                        params
+                    )
+
                 E_eV = (
                     0.5 * sim.m_ion * (
                         p_vx[is_erosion_hit] ** 2 +
@@ -500,6 +512,18 @@ def step_ion_interactions(sim, ctx: StepContext):
 
     is_erosion_hit = hit_grid & (p_x > 0.25)
     if sim_mode in ("Erosion", "Both") and np.any(is_erosion_hit):
+        subgrid_mgr = getattr(sim, 'subgrid_manager', None)
+        if subgrid_mgr is not None:
+            subgrid_mgr.record_erosion_hits(
+                p_x[is_erosion_hit],
+                p_y[is_erosion_hit],
+                p_vx[is_erosion_hit],
+                p_vy[is_erosion_hit],
+                p_vz[is_erosion_hit],
+                sim,
+                params
+            )
+
         E_eV = (
             0.5 * sim.m_ion * (
                 p_vx[is_erosion_hit] ** 2 +

@@ -38,7 +38,7 @@ class TestSweepDialogs(unittest.TestCase):
         cfg = dlg.get_config()
         self.assertEqual(cfg["max_iterations"], 5000)
         self.assertEqual(cfg["min_iterations"], 500)
-        self.assertEqual(cfg["window"], 50)
+        self.assertEqual(cfg["window"], 100)
         self.assertEqual(cfg["threshold"], 1.0)
         dlg.close()
 

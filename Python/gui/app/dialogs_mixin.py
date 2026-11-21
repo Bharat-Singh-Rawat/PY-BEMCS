@@ -331,6 +331,11 @@ class DialogsMixin:
         """Open Steady State variation diagnostics window."""
         if getattr(self, 'steady_state_window', None) is None:
             self.steady_state_window = SteadyStateWindow(self)
+        if hasattr(self, 'sweep_config') and isinstance(self.sweep_config, dict):
+            if "window" in self.sweep_config and hasattr(self.steady_state_window, 'spin_window'):
+                self.steady_state_window.spin_window.setValue(int(self.sweep_config["window"]))
+            if "threshold" in self.sweep_config and hasattr(self.steady_state_window, 'spin_thresh'):
+                self.steady_state_window.spin_thresh.setValue(float(self.sweep_config["threshold"]))
         self.steady_state_window.show()
         self.steady_state_window.raise_()
         self.steady_state_window.activateWindow()

@@ -298,7 +298,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     if hasattr(sim, 'enable_perf_monitor'):
         sim.enable_perf_monitor(log_every=50)
 
-    window = int(steady_config.get("window", 50))
+    window = int(steady_config.get("window", 100))
     thresh = float(steady_config.get("threshold", 1.0))
     max_iters = int(steady_config.get("max_iterations", 5000))
     min_iters = int(steady_config.get("min_iterations", 500))
@@ -370,6 +370,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
+        "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
         "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
         "grids": scenario_params.get("grids", []),
         "sim_mode": str(scenario_params.get("sim_mode", "Both")),
@@ -580,6 +581,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
                 "Lx": float(getattr(sim, 'Lx', 3.0)),
                 "Ly": float(getattr(sim, 'Ly', 3.0)),
+                "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
                 "nx": int(getattr(sim, 'nx', 0)),
                 "ny": int(getattr(sim, 'ny', 0)),
                 "dx": float(getattr(sim, 'dx', 0.05)),
@@ -597,6 +599,9 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
                 "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
                 "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
+                "damage_map": sim.damage_map.copy() if getattr(sim, 'damage_map', None) is not None else None,
+                "eroded_depth": sim.eroded_depth.copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+                "ion_current_history": list(ion_current_avg_hist if ion_current_avg_hist else ion_current_hist),
             }
             if status_dict is not None and trk_file is None:
                 run_state["tracking_buffer"] = list(tracking_buffer)
@@ -785,6 +790,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
+        "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
         "nx": int(getattr(sim, 'nx', 0)),
         "ny": int(getattr(sim, 'ny', 0)),
         "dx": float(getattr(sim, 'dx', 0.05)),
@@ -802,6 +808,9 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
         "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
+        "damage_map": sim.damage_map.copy() if getattr(sim, 'damage_map', None) is not None else None,
+        "eroded_depth": sim.eroded_depth.copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+        "ion_current_history": list(ion_current_avg_hist if ion_current_avg_hist else ion_current_hist),
         "result_row": res_row,
     }
     if status_dict is not None and trk_file is None:

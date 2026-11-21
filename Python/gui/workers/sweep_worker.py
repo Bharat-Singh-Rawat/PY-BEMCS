@@ -458,7 +458,7 @@ class ParallelSweepWorker(QThread):
 
         param_id = self.sweep_config.get("param_id", "")
         steady_cfg = {
-            "window": self.sweep_config.get("window", 50),
+            "window": self.sweep_config.get("window", 100),
             "threshold": self.sweep_config.get("threshold", 1.0),
             "max_iterations": self.sweep_config.get("max_iterations", 5000),
             "min_iterations": self.sweep_config.get("min_iterations", 500),
@@ -623,7 +623,11 @@ class ParallelSweepWorker(QThread):
                                 self.final_status_dict[s_idx]["steady_iterations"] = row.get("steady_iterations", 0)
                                 self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
                                 self.final_status_dict[s_idx]["div"] = row.get("divergence_deg", row.get("div", 0.0))
+                                self.final_status_dict[s_idx]["div_mid"] = row.get("divergence_2nd_plane_deg", row.get("div_mid", 0.0))
                                 self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
+                                self.final_status_dict[s_idx]["transparency"] = row.get("transparency", 0.0)
+                                self.final_status_dict[s_idx]["perveance_effective"] = row.get("perveance_effective", row.get("Peffective", 0.0))
+                                self.final_status_dict[s_idx]["t_sim_us"] = row.get("t_sim_us", 0.0)
                                 if "T_grids_K" in row:
                                     self.final_status_dict[s_idx]["T_grids"] = list(row["T_grids_K"])
                                     self.final_status_dict[s_idx]["T_grids_K"] = list(row["T_grids_K"])
