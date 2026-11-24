@@ -43,7 +43,8 @@ class RenderingMixin:
             self.cax_live.set_axes_locator(None)
             self.fig.delaxes(self.cax_live)
         divider = make_axes_locatable(self.ax_live)
-        self.cax_live = divider.append_axes("right", size="3%", pad=0.1)
+        self.cax_live = divider.append_axes("right", size="2.5%", pad=0.08)
+        self.cax_live.tick_params(labelsize=7, pad=2)
 
         self.cbar_energy = self.fig.colorbar(self.scat_prim, cax=self.cax_live)
         self.cbar_energy.ax.set_title("[eV]", fontsize=8, pad=3)
@@ -61,7 +62,9 @@ class RenderingMixin:
             TdisplayC = np.where(grid_mask, self.sim.Tmap - 273.15, np.nan)
 
             self.ax_temp.clear()
-            self.ax_temp.set_title("Grid Temp Map (°C)")
+            self.ax_temp.set_title("Grid Temp Map (°C)", fontsize=9, pad=3)
+            self.ax_temp.set_ylabel("r [mm]", fontsize=8, labelpad=2)
+            self.ax_temp.tick_params(axis="y", labelsize=7, pad=2)
             self.ax_temp.set_facecolor("black")
 
             finite_vals = TdisplayC[np.isfinite(TdisplayC)]
@@ -451,7 +454,9 @@ class RenderingMixin:
 
             if getattr(self, "tempmesh", None) is None or self.tempmesh.get_array().size != T_display_C.size:
                 self.ax_temp.clear()
-                self.ax_temp.set_title("Grid Temp Map (°C)")
+                self.ax_temp.set_title("Grid Temp Map (°C)", fontsize=9, pad=3)
+                self.ax_temp.set_ylabel("r [mm]", fontsize=8, labelpad=2)
+                self.ax_temp.tick_params(axis="y", labelsize=7, pad=2)
                 self.ax_temp.set_facecolor("black")
 
                 self.tempmesh = self.ax_temp.pcolormesh(

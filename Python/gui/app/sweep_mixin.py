@@ -117,6 +117,11 @@ class SweepMixin:
                 st["T_grids_C"] = list(res_row["T_grids_C"])
             if "steady_state_reached" in res_row and "steady_state_reached" not in st:
                 st["steady_state_reached"] = res_row["steady_state_reached"]
+            if "saddle_potential_V" not in st and "saddle_potential_V" in res_row:
+                st["saddle_potential_V"] = res_row["saddle_potential_V"]
+            for hk in ("iter_history", "time_history", "div_history", "div_mid_history", "ebs_history", "transparency_history", "ion_current_exit_history", "ion_current_exit_avg_history", "transmitted_ions_history", "active_cells_history", "low_ppc_cells_history", "T_histories"):
+                if not st.get(hk) and res_row.get(hk):
+                    st[hk] = list(res_row[hk]) if isinstance(res_row[hk], list) else dict(res_row[hk])
         return status_dict
 
     def _record_seq_scenario_step(
@@ -311,7 +316,7 @@ class SweepMixin:
             iters = [info.get("iter", 0)]
             divs = [info.get("div", 0.0)]
             divs_mid = [info.get("div_mid", 0.0)]
-            ebs = [info.get("saddle_potential_V", 0.0)]
+            ebs = [info.get("saddle_potential_V", info.get("min_pot", 0.0))]
 
         n_grids = len(info.get("grids", []) or getattr(self, 'grid_widgets', []))
 
@@ -1969,11 +1974,15 @@ class SweepMixin:
         if iters and len(iters) > 0:
             x_data_div = self._get_plot_x_data('div') if hasattr(self, '_get_plot_x_data') else self.iter_history
             x_data_ebs = self._get_plot_x_data('ebs') if hasattr(self, '_get_plot_x_data') else self.iter_history
+            marker_style = 'o' if len(iters) == 1 else 'None'
             if hasattr(self, 'line_div'):
+                self.line_div.set_marker(marker_style)
                 self.line_div.set_data(x_data_div, self.div_history)
             if hasattr(self, 'line_div_mid'):
+                self.line_div_mid.set_marker(marker_style)
                 self.line_div_mid.set_data(x_data_div, self.div_mid_history)
             if hasattr(self, 'line_ebs'):
+                self.line_ebs.set_marker(marker_style)
                 self.line_ebs.set_data(x_data_ebs, self.ebs_history)
 
             cur_iter = iters[-1]
@@ -2124,7 +2133,9 @@ class SweepMixin:
                     or getattr(self, "_current_rendered_temp_scenario_idx", None) != scenario_idx
                 ):
                     self.ax_temp.clear()
-                    self.ax_temp.set_title("Grid Temp Map (°C)")
+                    self.ax_temp.set_title("Grid Temp Map (°C)", fontsize=9, pad=3)
+                    self.ax_temp.set_ylabel("r [mm]", fontsize=8, labelpad=2)
+                    self.ax_temp.tick_params(axis="y", labelsize=7, pad=2)
                     self.ax_temp.set_facecolor("black")
 
                     self.tempmesh = self.ax_temp.pcolormesh(
@@ -2806,14 +2817,36 @@ class SweepMixin:
                 "computation_time_s": result_row.get("computation_time_s", 0.0),
                 "div": result_row.get("divergence_deg", result_row.get("div", 0.0)),
                 "div_mid": result_row.get("divergence_2nd_plane_deg", result_row.get("div_mid", 0.0)),
+                "saddle_potential_V": result_row.get("saddle_potential_V", prev_info.get("saddle_potential_V", 0.0)),
                 "exit_ion_current_A": result_row.get("exit_ion_current_A", 0.0),
                 "transparency": result_row.get("transparency", 0.0),
+                "iter_history": list(result_row.get("iter_history") or prev_info.get("iter_history", [])),
+                "time_history": list(result_row.get("time_history") or prev_info.get("time_history", [])),
+                "div_history": list(result_row.get("div_history") or prev_info.get("div_history", [])),
+                "div_mid_history": list(result_row.get("div_mid_history") or prev_info.get("div_mid_history", [])),
+                "ebs_history": list(result_row.get("ebs_history") or prev_info.get("ebs_history", [])),
+                "transparency_history": list(result_row.get("transparency_history") or prev_info.get("transparency_history", [])),
+                "ion_current_exit_history": list(result_row.get("ion_current_exit_history") or prev_info.get("ion_current_exit_history", [])),
+                "ion_current_exit_avg_history": list(result_row.get("ion_current_exit_avg_history") or prev_info.get("ion_current_exit_avg_history", [])),
+                "transmitted_ions_history": list(result_row.get("transmitted_ions_history") or prev_info.get("transmitted_ions_history", [])),
+                "active_cells_history": list(result_row.get("active_cells_history") or prev_info.get("active_cells_history", [])),
+                "low_ppc_cells_history": list(result_row.get("low_ppc_cells_history") or prev_info.get("low_ppc_cells_history", [])),
+                "T_histories": dict(result_row.get("T_histories") or prev_info.get("T_histories", {})),
                 "T_grids": list(t_grids_k) if t_grids_k else prev_info.get("T_grids", []),
                 "T_grids_K": list(t_grids_k) if t_grids_k else [],
                 "T_grids_C": list(t_grids_c) if t_grids_c else [],
             }
         if hasattr(self, 'parallel_sweep_worker') and self.parallel_sweep_worker is not None:
-            self._sweep_status_dict.update(self.parallel_sweep_worker.get_status_dict())
+            w_status = self.parallel_sweep_worker.get_status_dict()
+            for k_scen, v_dict in w_status.items():
+                if k_scen not in self._sweep_status_dict:
+                    self._sweep_status_dict[k_scen] = v_dict
+                else:
+                    cur = self._sweep_status_dict[k_scen]
+                    for vk, vv in v_dict.items():
+                        if "history" in vk and not vv and cur.get(vk):
+                            continue
+                        cur[vk] = vv
             if s_idx is not None and hasattr(self.parallel_sweep_worker, 'get_scenario_tracking_buffer'):
                 tb = self.parallel_sweep_worker.get_scenario_tracking_buffer(s_idx)
                 if tb:

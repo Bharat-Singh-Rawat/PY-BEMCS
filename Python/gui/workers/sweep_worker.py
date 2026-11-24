@@ -116,34 +116,49 @@ class ParallelSweepWorker(QThread):
             is_already_done = (self.remaining_indices is not None and scen_num not in self.remaining_indices)
             is_held = scen_num in self.held_scenarios
             ex_row = existing_map.get(scen_num, {})
+
+            # Recover pre-existing histories for already completed scenarios if available
+            ex_hist = {}
+            if is_already_done:
+                if isinstance(ex_row, dict) and len(ex_row.get("iter_history") or []) > 0:
+                    ex_hist = ex_row
+                elif os.path.exists(sf):
+                    try:
+                        old_st = read_scenario_state(sf)
+                        if isinstance(old_st, dict) and len(old_st.get("iter_history") or []) > 0:
+                            ex_hist = old_st
+                    except Exception:
+                        pass
+
             init_st = {
                 "status": "done" if is_already_done else ("action_required" if is_held else "queued"),
                 "held": is_held,
-                "iter": ex_row.get("steady_iterations", 0) if is_already_done else 0,
+                "iter": ex_row.get("steady_iterations", ex_hist.get("iter", 0)) if is_already_done else 0,
                 "max_iters": max_iters,
                 "parameter_value": float(val),
                 "steady_state_reached": ex_row.get("steady_state_reached", True) if is_already_done else False,
-                "computation_time_s": ex_row.get("computation_time_s", 0.0) if is_already_done else 0.0,
-                "t_sim_us": ex_row.get("t_sim_us", 0.0) if is_already_done else 0.0,
-                "div": ex_row.get("div", 0.0) if is_already_done else 0.0,
-                "div_mid": ex_row.get("div_mid", 0.0) if is_already_done else 0.0,
-                "exit_ion_current_A": ex_row.get("exit_ion_current_A", 0.0) if is_already_done else 0.0,
-                "transparency": ex_row.get("transparency", 0.0) if is_already_done else 0.0,
-                "prim_xy": np.empty((0, 2), dtype=np.float32),
-                "e_prim_eV": np.empty(0, dtype=np.float32),
-                "cex_xy": np.empty((0, 2), dtype=np.float32),
-                "e_cex_eV": np.empty(0, dtype=np.float32),
-                "elec_xy": np.empty((0, 2), dtype=np.float32),
-                "iter_history": [],
-                "time_history": [],
-                "div_history": [],
-                "div_mid_history": [],
-                "ebs_history": [],
-                "transparency_history": [],
-                "ion_current_exit_avg_history": [],
-                "active_cells_history": [],
-                "low_ppc_cells_history": [],
-                "T_histories": {},
+                "computation_time_s": ex_row.get("computation_time_s", ex_hist.get("computation_time_s", 0.0)) if is_already_done else 0.0,
+                "t_sim_us": ex_row.get("t_sim_us", ex_hist.get("t_sim_us", 0.0)) if is_already_done else 0.0,
+                "div": ex_row.get("divergence_deg", ex_row.get("div", ex_hist.get("div", 0.0))) if is_already_done else 0.0,
+                "div_mid": ex_row.get("divergence_2nd_plane_deg", ex_row.get("div_mid", ex_hist.get("div_mid", 0.0))) if is_already_done else 0.0,
+                "saddle_potential_V": ex_row.get("saddle_potential_V", ex_row.get("ebs", ex_hist.get("saddle_potential_V", 0.0))) if is_already_done else 0.0,
+                "exit_ion_current_A": ex_row.get("exit_ion_current_A", ex_hist.get("exit_ion_current_A", 0.0)) if is_already_done else 0.0,
+                "transparency": ex_row.get("transparency", ex_hist.get("transparency", 0.0)) if is_already_done else 0.0,
+                "prim_xy": ex_hist.get("prim_xy", np.empty((0, 2), dtype=np.float32)),
+                "e_prim_eV": ex_hist.get("e_prim_eV", np.empty(0, dtype=np.float32)),
+                "cex_xy": ex_hist.get("cex_xy", np.empty((0, 2), dtype=np.float32)),
+                "e_cex_eV": ex_hist.get("e_cex_eV", np.empty(0, dtype=np.float32)),
+                "elec_xy": ex_hist.get("elec_xy", np.empty((0, 2), dtype=np.float32)),
+                "iter_history": list(ex_hist.get("iter_history", [])),
+                "time_history": list(ex_hist.get("time_history", [])),
+                "div_history": list(ex_hist.get("div_history", [])),
+                "div_mid_history": list(ex_hist.get("div_mid_history", [])),
+                "ebs_history": list(ex_hist.get("ebs_history", [])),
+                "transparency_history": list(ex_hist.get("transparency_history", [])),
+                "ion_current_exit_avg_history": list(ex_hist.get("ion_current_exit_avg_history", [])),
+                "active_cells_history": list(ex_hist.get("active_cells_history", [])),
+                "low_ppc_cells_history": list(ex_hist.get("low_ppc_cells_history", [])),
+                "T_histories": dict(ex_hist.get("T_histories", {})),
                 "T_grids": ex_row.get("T_grids_K", []) if is_already_done else [],
                 "T_grids_K": ex_row.get("T_grids_K", []) if is_already_done else [],
                 "T_grids_C": ex_row.get("T_grids_C", []) if is_already_done else [],
@@ -624,6 +639,7 @@ class ParallelSweepWorker(QThread):
                                 self.final_status_dict[s_idx]["computation_time_s"] = row.get("computation_time_s", 0.0)
                                 self.final_status_dict[s_idx]["div"] = row.get("divergence_deg", row.get("div", 0.0))
                                 self.final_status_dict[s_idx]["div_mid"] = row.get("divergence_2nd_plane_deg", row.get("div_mid", 0.0))
+                                self.final_status_dict[s_idx]["saddle_potential_V"] = row.get("saddle_potential_V", 0.0)
                                 self.final_status_dict[s_idx]["exit_ion_current_A"] = row.get("exit_ion_current_A", 0.0)
                                 self.final_status_dict[s_idx]["transparency"] = row.get("transparency", 0.0)
                                 self.final_status_dict[s_idx]["perveance_effective"] = row.get("perveance_effective", row.get("Peffective", 0.0))
@@ -633,6 +649,19 @@ class ParallelSweepWorker(QThread):
                                     self.final_status_dict[s_idx]["T_grids_K"] = list(row["T_grids_K"])
                                 if "T_grids_C" in row:
                                     self.final_status_dict[s_idx]["T_grids_C"] = list(row["T_grids_C"])
+
+                                # Synchronize history lists between row and final_status_dict
+                                hist_keys = (
+                                    "iter_history", "time_history", "div_history", "div_mid_history",
+                                    "ebs_history", "transparency_history", "ion_current_exit_history",
+                                    "ion_current_exit_avg_history", "transmitted_ions_history",
+                                    "active_cells_history", "low_ppc_cells_history", "T_histories"
+                                )
+                                for hk in hist_keys:
+                                    if hk in self.final_status_dict[s_idx] and hk not in row:
+                                        row[hk] = self.final_status_dict[s_idx][hk]
+                                    elif hk in row and (hk not in self.final_status_dict[s_idx] or not self.final_status_dict[s_idx][hk]):
+                                        self.final_status_dict[s_idx][hk] = row[hk]
                             self.get_scenario_tracking_buffer(s_idx)
                         val_str = f"{row['parameter_value']:.4g}"
                         c_time = row.get("computation_time_s", 0.0)

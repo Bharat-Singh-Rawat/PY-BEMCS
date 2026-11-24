@@ -729,6 +729,18 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "field_energy_J": float(fe),
         "T_grids_K": t_grids_final_K,
         "T_grids_C": t_grids_final_C,
+        "iter_history": list(iter_hist),
+        "time_history": list(time_hist),
+        "div_history": list(div_hist),
+        "div_mid_history": list(div_mid_hist),
+        "ebs_history": list(ebs_hist),
+        "transparency_history": list(trans_hist),
+        "ion_current_exit_history": list(ion_current_hist),
+        "ion_current_exit_avg_history": list(ion_current_avg_hist),
+        "transmitted_ions_history": list(trans_ions_hist),
+        "active_cells_history": list(active_cells_hist),
+        "low_ppc_cells_history": list(low_ppc_cells_hist),
+        "T_histories": {k: list(v) for k, v in T_hists.items()},
         **grid_temps_dict,
     }
 
