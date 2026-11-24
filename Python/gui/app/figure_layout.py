@@ -59,7 +59,7 @@ def rebuild_groove_axes(app, n_grids):
     app.ax_groove = ax_grooves[0]
     app.line_groove = line_grooves[0]
 
-    app.fig.tight_layout(rect=(0, 0, 0.97, 1), h_pad=1.5, w_pad=1.2)
+    app.fig.tight_layout(rect=(0, 0, 0.97, 1), h_pad=1.5, w_pad=0.8)
 
     if hasattr(app, "_reposition_div_menu_btn"):
         app._reposition_div_menu_btn()
@@ -73,16 +73,22 @@ def rebuild_groove_axes(app, n_grids):
 
 def setup_figure_layout(app):
     """Initialise and configure the 3x3 GridSpec layout on app.fig."""
-    grid = plt.GridSpec(3, 3, height_ratios=[1.2, 1, 0.9], wspace=0.32, hspace=0.35)
+    grid = plt.GridSpec(3, 3, height_ratios=[1.2, 1, 0.9])
     app._main_grid = grid
 
-    # Row 0: wide beam extraction plot + narrow temperature map
-    app.ax_live = app.fig.add_subplot(grid[0, 0:2])
+    # Row 0: wide beam extraction plot + narrow temperature map (isolated subgrid so only row 0 is adjusted without expanding space across other graphs)
+    subgrid_row0 = GridSpecFromSubplotSpec(
+        1, 2,
+        subplot_spec=grid[0, :],
+        width_ratios=[2.0, 0.92],
+        wspace=0.24,
+    )
+    app.ax_live = app.fig.add_subplot(subgrid_row0[0, 0])
     app.ax_live.set_title("Ion Beam Extraction & Particle Tracking", fontsize=10)
     app.ax_live.set_xlabel("Axial Position [mm]")
     app.ax_live.set_ylabel("Radial Position [mm]")
 
-    app.ax_temp = app.fig.add_subplot(grid[0, 2])
+    app.ax_temp = app.fig.add_subplot(subgrid_row0[0, 1])
     app.ax_temp.set_title("Grid Temperature", fontsize=10)
     app.ax_temp.set_xlabel("Axial Position [mm]", fontsize=8)
     app.ax_temp.set_ylabel("r [mm]", fontsize=8, labelpad=2)
