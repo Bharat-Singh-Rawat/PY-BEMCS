@@ -41,6 +41,8 @@ src/
     ├── MainWindow.h/cpp        # Main window, menu bar, status bar
     ├── ControlPanel.h/cpp      # Parameter controls, diagnostics panel
     ├── SimulationView3D.h/cpp  # VTK 3D renderer
+    ├── ErosionMapWidget.h/cpp  # Live 2D accelerator grid erosion depth heatmap
+    ├── GifWriter.h             # Animated GIF recording and frame encoding
     ├── MeshingDialog.h/cpp     # Mesh configuration dialog
     └── GeometryImportDialog.h/cpp  # STEP import dialog
 ```

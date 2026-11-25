@@ -1,0 +1,990 @@
+"""
+UI Builder mixin for DigitalTwinApp.
+Builds the top status bar, menu bar, scrollable control panel, and matplotlib canvas.
+"""
+import os
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox,
+    QPushButton, QCheckBox, QMessageBox, QFileDialog, QComboBox,
+    QScrollArea, QGroupBox, QAction, QMenuBar, QSplitter,
+    QFrame, QSizePolicy, QToolButton, QMenu, QActionGroup,
+    QScrollBar, QLayout
+)
+from PyQt5.QtCore import Qt
+
+from ..widgets import ScientificSpinBox
+from ..bootstrap import _safe_start_dir
+from ..config_io import _config_path, load_json_config
+from .figure_layout import setup_figure_layout, rebuild_groove_axes
+
+
+class UIBuilderMixin:
+    """Mixin providing layout construction and widget setup for DigitalTwinApp."""
+
+    def setup_menu_bar(self):
+        menubar = self.menuBar()
+        if menubar is None:
+            menubar = QMenuBar(self)
+            self.setMenuBar(menubar)
+        assert menubar is not None
+
+        settings_menu = menubar.addMenu("Settings")
+        adv_action = QAction("Advanced Parameters...", self)
+        adv_action.triggered.connect(self.open_advanced_settings)
+        settings_menu.addAction(adv_action)
+
+        gui_action = QAction("GUI Settings...", self)
+        gui_action.triggered.connect(self.open_gui_settings)
+        settings_menu.addAction(gui_action)
+
+        sweep_action = QAction("⚡ Sweep...", self)
+        sweep_action.setToolTip("Configure and start an automated parametric sweep across scenarios")
+        sweep_action.triggered.connect(self.open_sweep_dialog)
+        settings_menu.addAction(sweep_action)
+
+        settings_menu.addSeparator()
+
+        open_action = QAction("Open Config JSON...", self)
+        open_action.triggered.connect(self.open_config_json)
+        settings_menu.addAction(open_action)
+
+        self.reload_action = QAction(f"Reload {self.current_config_name}", self)
+        self.reload_action.triggered.connect(self.reload_config)
+        settings_menu.addAction(self.reload_action)
+
+        self.save_action = QAction("Save", self)
+        self.save_action.setShortcut("Ctrl+S")
+        self.save_action.triggered.connect(self.save_config)
+        settings_menu.addAction(self.save_action)
+
+        self.save_as_action = QAction("Save as", self)
+        self.save_as_action.setShortcut("Ctrl+Shift+S")
+        self.save_as_action.triggered.connect(self.save_as_config)
+        settings_menu.addAction(self.save_as_action)
+
+        settings_menu.addSeparator()
+        build_exe_action = QAction("Build .exe...", self)
+        build_exe_action.triggered.connect(self.build_exe)
+        settings_menu.addAction(build_exe_action)
+
+        beam_menu = menubar.addMenu("Beam")
+        assert beam_menu is not None
+        species_action = QAction("Ion Species...", self)
+        species_action.triggered.connect(self.open_beam_species)
+        beam_menu.addAction(species_action)
+
+        beam_menu.addSeparator()
+
+        cs_action = QAction("Cross-Section Manager...", self)
+        cs_action.triggered.connect(self.open_cs_viewer)
+        beam_menu.addAction(cs_action)
+
+        mat_menu = menubar.addMenu("Materials")
+        mat_action = QAction("Grid Material...", self)
+        mat_action.triggered.connect(self.open_grid_material)
+        mat_menu.addAction(mat_action)
+
+        diag_menu = menubar.addMenu("Diagnostics")
+        assert diag_menu is not None
+
+        mesh_action = QAction("Mesh", self)
+        mesh_action.triggered.connect(self.open_mesh_window)
+        diag_menu.addAction(mesh_action)
+
+        perf_action = QAction("⚡ Performance Monitor...", self)
+        perf_action.triggered.connect(self.open_perf_window)
+        diag_menu.addAction(perf_action)
+
+        ppc_action = QAction("PPC Distribution...", self)
+        ppc_action.triggered.connect(self.open_ppc_window)
+        diag_menu.addAction(ppc_action)
+
+        density_action = QAction("Density...", self)
+        density_action.triggered.connect(self.open_density_window)
+        diag_menu.addAction(density_action)
+
+        phys_action = QAction("Total Energy ...", self)
+        phys_action.triggered.connect(self.open_phys_window)
+        diag_menu.addAction(phys_action)
+
+        charge_action = QAction("Total Charge Monitor...", self)
+        charge_action.triggered.connect(self.open_charge_window)
+        diag_menu.addAction(charge_action)
+
+        iedf_action = QAction("Energy Dist. (IEDF/EEDF)...", self)
+        iedf_action.triggered.connect(self.open_iedf_window)
+        diag_menu.addAction(iedf_action)
+
+        field_action = QAction("⚡ Field Diagnostics (Ex, Ey, Quiver)...", self)
+        field_action.triggered.connect(self.open_field_window)
+        diag_menu.addAction(field_action)
+
+        steady_state_action = QAction("⚖️ Steady state...", self)
+        steady_state_action.triggered.connect(self.open_steady_state_window)
+        diag_menu.addAction(steady_state_action)
+
+        self.lbl_active_config = QLabel(f"  Config: {self.current_config_name}  ")
+        self.lbl_active_config.setStyleSheet(
+            "font-weight: bold; color: #1a5276; font-size: 11px; padding-right: 12px;"
+        )
+        menubar.setCornerWidget(self.lbl_active_config, Qt.TopRightCorner)
+
+    def open_config_json(self):
+        curr_path = getattr(self, "current_config_path", None)
+        if curr_path and os.path.isfile(curr_path):
+            start_dir = os.path.dirname(curr_path)
+        else:
+            default_path = _config_path()
+            start_dir = os.path.dirname(default_path) if os.path.isdir(os.path.dirname(default_path)) else _safe_start_dir()
+
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Config JSON",
+            start_dir,
+            "JSON Files (*.json)"
+        )
+        if not file_name:
+            return
+
+        try:
+            cfg = load_json_config(file_name)
+            self.current_config_path = file_name
+            self.current_config_name = os.path.basename(file_name)
+            self.apply_config(cfg, config_name=self.current_config_name)
+            if hasattr(self, 'reload_action'):
+                self.reload_action.setText(f"Reload {self.current_config_name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Config Error", f"Failed to load config:\n{e}")
+
+    def create_input(self, labeltext, minv, maxv, step, decimals=1, scientific=False):
+        row = QHBoxLayout()
+        lbl = QLabel(labeltext)
+        lbl.setFixedWidth(130)
+        spin = ScientificSpinBox() if scientific else QDoubleSpinBox()
+        spin.setRange(minv, maxv)
+        spin.setSingleStep(step)
+        spin.setDecimals(decimals)
+        row.addWidget(lbl)
+        row.addWidget(spin)
+        return row, spin
+
+    def add_grid_ui(self, v_val, t_val, gap_val, r_val, cham_val):
+        idx = len(self.grid_widgets) + 1
+        gb = QGroupBox(f"Grid {idx}")
+        lay = QVBoxLayout()
+
+        row1, spin_v = self.create_input("DC Voltage (V):", -5000, 15000, 100, 3)
+        row2, spin_t = self.create_input("Thickness (mm):", 0.0, 10.0, 0.01, 4)
+        row3, spin_gap = self.create_input("Gap to Next (mm):", 0.0, 1000.0, 0.01, 4)
+        row4, spin_r = self.create_input("Hole Radius (mm):", 0.0, 10.0, 0.01, 4)
+        row5, spin_cham = self.create_input("Chamfer (°):", 0.0, 45.0, 0.1, 3)
+
+        spin_v.setValue(v_val)
+        spin_t.setValue(t_val)
+        spin_gap.setValue(gap_val)
+        spin_r.setValue(r_val)
+        spin_cham.setValue(cham_val)
+
+        lay.addLayout(row1)
+        lay.addLayout(row2)
+        lay.addLayout(row3)
+        lay.addLayout(row4)
+        lay.addLayout(row5)
+        gb.setLayout(lay)
+
+        self.grids_layout.insertWidget(self.grids_layout.count() - 1, gb)
+
+        if idx == 1:
+            spin_r.valueChanged.connect(lambda _: (
+                getattr(self, '_update_debye_gap', lambda: None)(),
+                getattr(self, '_update_hole_boundary_dist', lambda: None)(),
+                getattr(self, '_update_inj_y_length', lambda: None)()
+            ))
+
+        self.grid_widgets.append({
+            "gb": gb, "V": spin_v, "t": spin_t, "gap": spin_gap,
+            "r": spin_r, "cham": spin_cham
+        })
+        self.update_rf_combo()
+        self._notify_grid_count_changed()
+
+    def clear_grid_ui(self):
+        while self.grid_widgets:
+            gw = self.grid_widgets.pop()
+            gw["gb"].deleteLater()
+        self.update_rf_combo()
+
+    def remove_grid_ui(self):
+        if len(self.grid_widgets) > 1:
+            gw = self.grid_widgets.pop()
+            gw["gb"].deleteLater()
+            self.update_rf_combo()
+            self._notify_grid_count_changed()
+
+    def _notify_grid_count_changed(self):
+        if getattr(self, "_loading_config", False):
+            return
+        self._grid_count_modified_since_build = True
+        self._sweep_domain_built = False
+        if hasattr(self, "_scenario_domain_cache") and isinstance(self._scenario_domain_cache, dict):
+            self._scenario_domain_cache.clear()
+        self._current_rendered_scenario_grid_idx = None
+        if hasattr(self, "fig") and hasattr(self, "_main_grid"):
+            rebuild_groove_axes(self, len(getattr(self, "grid_widgets", [])))
+            if hasattr(self, "canvas"):
+                self.canvas.draw_idle()
+        if hasattr(self, "on_grid_count_changed"):
+            self.on_grid_count_changed()
+
+    def update_rf_combo(self):
+        if hasattr(self, "combo_rf_grid"):
+            current = self.combo_rf_grid.currentIndex()
+            self.combo_rf_grid.clear()
+            self.combo_rf_grid.addItems([f"Grid {i + 1}" for i in range(len(self.grid_widgets))])
+            if self.combo_rf_grid.count() > 0:
+                self.combo_rf_grid.setCurrentIndex(max(0, min(current, self.combo_rf_grid.count() - 1)))
+
+    def setup_ui(self):
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        root_layout = QVBoxLayout(main_widget)
+        root_layout.setSpacing(0)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Top Bar: Simulation Duration Timer & Status
+        top_bar = QFrame()
+        top_bar.setObjectName("topBar")
+        top_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        top_bar.setStyleSheet("""
+            QFrame#topBar {
+                background-color: #f8fafc;
+                border-bottom: 1px solid #cbd5e1;
+            }
+        """)
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(14, 5, 14, 5)
+        top_bar_layout.setSpacing(8)
+
+        self.lbl_sim_status_badge = QLabel("IDLE")
+        self.lbl_sim_status_badge.setStyleSheet(
+            "background-color: #e2e8f0; color: #475569; font-weight: bold; "
+            "border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        top_bar_layout.addWidget(self.lbl_sim_status_badge)
+
+        self.lbl_sim_timer = QLabel("⏱ 00:00:00.0")
+        self.lbl_sim_timer.setToolTip("Active Simulation Duration (excludes idle/paused time)")
+        self.lbl_sim_timer.setStyleSheet(
+            "font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; font-weight: bold; "
+            "color: #0f172a; padding: 3px 8px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;"
+        )
+        top_bar_layout.addWidget(self.lbl_sim_timer)
+
+        self.btn_reset_timer = QPushButton("Reset")
+        self.btn_reset_timer.setFixedWidth(55)
+        self.btn_reset_timer.setToolTip("Reset the simulation duration timer to 00:00:00.0")
+        self.btn_reset_timer.setStyleSheet("padding: 2px 6px; font-size: 11px;")
+        self.btn_reset_timer.clicked.connect(self.reset_simulation_timer)
+        top_bar_layout.addWidget(self.btn_reset_timer)
+
+        self.lbl_sweep_badge = QLabel("Sweep mode active")
+        self.lbl_sweep_badge.setVisible(False)
+        self.lbl_sweep_badge.setStyleSheet(
+            "background-color: #f3e8ff; color: #7e22ce; font-weight: bold; "
+            "border: 1px solid #c084fc; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        top_bar_layout.addWidget(self.lbl_sweep_badge)
+
+        # Dedicated container for sweep controls to strictly preserve layout ordering
+        # and prevent combobox from ever overlapping or going under action buttons
+        self.sweep_control_group = QWidget(top_bar)
+        self.sweep_control_group.setObjectName("sweepControlGroup")
+        self.sweep_control_group.setVisible(False)
+        self.sweep_control_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        sweep_group_layout = QHBoxLayout(self.sweep_control_group)
+        sweep_group_layout.setContentsMargins(0, 0, 0, 0)
+        sweep_group_layout.setSpacing(6)
+        sweep_group_layout.setSizeConstraint(QLayout.SetFixedSize)
+
+        arrow_icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "down_arrow.svg")).replace("\\", "/")
+        self.combo_sweep_scenario = QComboBox(self.sweep_control_group)
+        self.combo_sweep_scenario.setVisible(False)
+        self.combo_sweep_scenario.setFixedWidth(280)
+        self.combo_sweep_scenario.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.combo_sweep_scenario.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_sweep_scenario.setMinimumContentsLength(20)
+        if self.combo_sweep_scenario.view():
+            self.combo_sweep_scenario.view().setMinimumWidth(400)
+        self.combo_sweep_scenario.setToolTip("Select an ongoing or completed sweep scenario to inspect its live state")
+        self.combo_sweep_scenario.setStyleSheet(
+            f"QComboBox {{ background-color: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; "
+            f"border-radius: 4px; padding: 2px 24px 2px 8px; font-weight: bold; font-size: 11px; }} "
+            f"QComboBox:hover {{ border-color: #94a3b8; }} "
+            f"QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; "
+            f"width: 22px; border-left: 1px solid #cbd5e1; border-top-right-radius: 4px; border-bottom-right-radius: 4px; "
+            f"background-color: #f8fafc; }} "
+            f"QComboBox::down-arrow {{ image: url('{arrow_icon_path}'); width: 10px; height: 10px; }}"
+        )
+        self.combo_sweep_scenario.currentIndexChanged.connect(self._on_sweep_scenario_selected)
+        sweep_group_layout.addWidget(self.combo_sweep_scenario)
+
+        # btn_stop_sweep is kept for backward programmatic compatibility, but not added to top_bar_layout
+        # as top-bar control is unified into the dynamic action button (Start Sweep / Pause Sweep / Resume Sweep).
+        self.btn_stop_sweep = QPushButton("Stop Sweep", self.sweep_control_group)
+        self.btn_stop_sweep.setVisible(False)
+        self.btn_stop_sweep.setStyleSheet(
+            "background-color: #fee2e2; color: #b91c1c; font-weight: bold; "
+            "border: 1px solid #fca5a5; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        self.btn_stop_sweep.clicked.connect(self.stop_sweep)
+
+        self.btn_resume_sweep = QPushButton("Start Sweep", self.sweep_control_group)
+        self.btn_resume_sweep.setVisible(False)
+        self.btn_resume_sweep.setFixedWidth(95)
+        self.btn_resume_sweep.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_resume_sweep.setToolTip("Start parametric sweep simulation across all scenarios")
+        self.btn_resume_sweep.setStyleSheet(
+            "background-color: #f0fdf4; color: #15803d; font-weight: bold; "
+            "border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        self.btn_resume_sweep.clicked.connect(self.on_sweep_action_clicked)
+        self.btn_start_sweep = self.btn_resume_sweep
+        sweep_group_layout.addWidget(self.btn_resume_sweep)
+
+        self.btn_exit_sweep = QPushButton("Exit sweep", self.sweep_control_group)
+        self.btn_exit_sweep.setVisible(False)
+        self.btn_exit_sweep.setFixedWidth(75)
+        self.btn_exit_sweep.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_exit_sweep.setToolTip("Exit sweep mode and return to normal single simulation")
+        self.btn_exit_sweep.setStyleSheet(
+            "background-color: #f1f5f9; color: #334155; font-weight: bold; "
+            "border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+        )
+        self.btn_exit_sweep.clicked.connect(lambda: self.exit_sweep())
+        sweep_group_layout.addWidget(self.btn_exit_sweep)
+
+        top_bar_layout.addWidget(self.sweep_control_group)
+
+        top_bar_layout.addStretch()
+
+        self.lbl_top_sim_time = QLabel("Plasma Time: 0.00 µs | Iter: 0")
+        self.lbl_top_sim_time.setStyleSheet("font-family: monospace; font-size: 11px; color: #64748b;")
+        top_bar_layout.addWidget(self.lbl_top_sim_time)
+
+        root_layout.addWidget(top_bar, 0)
+
+        content_splitter = QSplitter(Qt.Horizontal)
+        content_splitter.setHandleWidth(4)
+        content_splitter.setChildrenCollapsible(False)
+        content_splitter.setStyleSheet("""
+            QSplitter::handle:horizontal {
+                background-color: #dee2e6;
+                width: 4px;
+            }
+            QSplitter::handle:horizontal:hover {
+                background-color: #0d6efd;
+            }
+            QSplitter::handle:horizontal:pressed {
+                background-color: #0b5ed7;
+            }
+        """)
+
+        # SCROLLABLE CONTROL PANEL
+        scroll_area = QScrollArea()
+        scroll_area.setMinimumWidth(100)
+        scroll_area.setMaximumWidth(700)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.control_scroll_area = scroll_area
+
+        control_panel  = QWidget()
+        control_panel.setMinimumWidth(290)
+        control_layout = QVBoxLayout(control_panel)
+
+        self.combo_rf_grid = QComboBox()
+
+        control_layout.addWidget(QLabel("1. MULTI-GRID OPTICS"))
+        self.grids_layout = QVBoxLayout()
+
+        # Upstream gap: distance from injection wall to left face of screen grid (mm)
+        row, self.inputs["upstream_gap_mm"] = self.create_input(
+            "Upstream Gap (mm):", 0.0, 50.0, 0.1, 3
+        )
+        self.btn_upstream_gap_settings = QPushButton("Settings")
+        self.btn_upstream_gap_settings.setToolTip("Configure upstream gap calculation ratio or set a custom value")
+        self.btn_upstream_gap_settings.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self.btn_upstream_gap_settings.clicked.connect(self.open_upstream_gap_dialog)
+        row.addWidget(self.btn_upstream_gap_settings)
+        control_layout.addLayout(row)
+        self.inputs["upstream_gap_mm"].setToolTip(
+            "Distance from the injection wall to the left face of the screen grid [mm].\n\n"
+            "Presheath mode (default): auto = 0.75 × screen radius.\n"
+            "Entire Bulk Plasma mode: auto = Debye-based (80/40/30 × λ_D).\n\n"
+            "Set to 0 to always use the automatic value for the active mode.\n"
+            "Any non-zero value manually entered here overrides the auto-computed gap.\n"
+            "After 'Build Domain' the value actually used is displayed here."
+        )
+
+        # Hole-to-boundary distance (distance from hole center to top/down boundary)
+        row_bound, self.inputs["hole_boundary_dist_mm"] = self.create_input(
+            "Hole-Boundary (mm):", 0.0, 50.0, 0.05, 3
+        )
+        self.btn_reset_hole_bound = QPushButton("Auto")
+        self.btn_reset_hole_bound.setToolTip("Reset to default distance: 0.5 × (r_screen + pitch)")
+        self.btn_reset_hole_bound.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self.btn_reset_hole_bound.clicked.connect(self.reset_hole_boundary_dist)
+        row_bound.addWidget(self.btn_reset_hole_bound)
+        control_layout.addLayout(row_bound)
+        self.inputs["hole_boundary_dist_mm"].setToolTip(
+            "Distance between the center of the hole and the top (or down) domain boundary [mm].\n\n"
+            "Default = 0.5 × (r_screen + pitch).\n"
+            "Determines domain transverse height (Ly):\n"
+            "  • half_hole: Ly = d\n"
+            "  • one_hole:  Ly = 2 × d (hole centered)\n"
+            "  • two_holes: Ly = 4 × d (two unit cells)\n\n"
+            "Set to 0 to auto-track the default based on screen radius and pitch."
+        )
+        self.inputs["hole_boundary_dist_mm"].valueChanged.connect(self._on_hole_boundary_dist_changed)
+
+        # Injection Y-length / radius parameter (distance from centerline across which ions are injected)
+        row_inj_y, self.inputs["inj_y_length_mm"] = self.create_input(
+            "Injection Y-Length (mm):", 0.0, 50.0, 0.05, 3
+        )
+        self.btn_reset_inj_y = QPushButton("Auto")
+        self.btn_reset_inj_y.setToolTip("Reset to default injection span (screen grid aperture radius)")
+        self.btn_reset_inj_y.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self.btn_reset_inj_y.clicked.connect(self.reset_inj_y_length)
+        row_inj_y.addWidget(self.btn_reset_inj_y)
+        control_layout.addLayout(row_inj_y)
+        self.inputs["inj_y_length_mm"].setToolTip(
+            "Transverse / radial span for ion injection at the upstream boundary [mm].\n\n"
+            "• In half_hole (axisymmetric or Cartesian half-domain): evaluated from centerline y = 0 to y = inj_y_length (clamped at Ly).\n"
+            "• In one_hole (centered hole): evaluated from hole center yc = Ly/2 outward by ±inj_y_length (clamped at Ly/2, since inj_y_length = Ly/2 covers the entire [0, Ly] domain).\n"
+            "• Default = Screen grid aperture radius (r_screen).\n\n"
+            "Set to 0 or click Auto to auto-track the screen grid radius."
+        )
+        self.inputs["inj_y_length_mm"].valueChanged.connect(self._on_inj_y_length_changed)
+
+        btn_layout = QHBoxLayout()
+        self.btn_add_grid = QPushButton("+ Add Grid")
+        self.btn_remove_grid = QPushButton("- Remove Grid")
+        self.btn_add_grid.clicked.connect(lambda: self.add_grid_ui(0.0, 0.0, 0.0, 0.0, 0.0))
+        self.btn_remove_grid.clicked.connect(self.remove_grid_ui)
+        btn_layout.addWidget(self.btn_add_grid)
+        btn_layout.addWidget(self.btn_remove_grid)
+
+        self.grids_layout.addLayout(btn_layout)
+        control_layout.addLayout(self.grids_layout)
+
+        control_layout.addSpacing(15)
+
+        control_layout.addWidget(QLabel("2. RF CO-EXTRACTION"))
+        self.chk_rf = QCheckBox("Enable RF Modulated Potential")
+        control_layout.addWidget(self.chk_rf)
+
+        rf_row = QHBoxLayout()
+        rf_row.addWidget(QLabel("Apply RF to:"))
+        rf_row.addWidget(self.combo_rf_grid)
+        control_layout.addLayout(rf_row)
+
+        row_freq, self.spin_rf_freq = self.create_input("Frequency (MHz):", 0.0, 100.0, 0.1, 4)
+        row_amp, self.spin_rf_amp   = self.create_input("Amplitude (V):", 0.0, 5000.0, 1.0, 4)
+        control_layout.addLayout(row_freq)
+        control_layout.addLayout(row_amp)
+
+        control_layout.addSpacing(15)
+
+        control_layout.addWidget(QLabel("3. PLASMA & SPUTTERING"))
+        row, self.inputs["n0_plasma"] = self.create_input("Plasma Dens (m-3):", 0.0, 1e25, 1e16, 4, scientific=True)
+        control_layout.addLayout(row)
+        row, self.inputs["Te_up"] = self.create_input("Upstream Te (eV):", 0.0, 1000.0, 0.1, 4)
+        control_layout.addLayout(row)
+        self.inputs["n0_plasma"].valueChanged.connect(self._update_debye_gap)
+        self.inputs["Te_up"].valueChanged.connect(self._update_debye_gap)
+
+        row, self.inputs["Ti"] = self.create_input("Ion Temp (eV):", 0.0, 1000.0, 0.1, 4)
+        control_layout.addLayout(row)
+        row, self.inputs["Tn"] = self.create_input("Neutral Temp (K):", 0.0, 10000.0, 1.0, 4)
+        control_layout.addLayout(row)
+        row, self.inputs["n0"] = self.create_input("Neutral Dens (m-3):", 0.0, 1e25, 1e18, 4, scientific=True)
+        control_layout.addLayout(row)
+        row, self.inputs["Accel"] = self.create_input("Accel. Factor (X):", 0.0, 1e20, 0.1, 6)
+        control_layout.addLayout(row)
+        row, self.inputs["Thresh"] = self.create_input("Cell Fail Thresh:", 0.0, 1e12, 1.0, 4)
+        control_layout.addLayout(row)
+        row, self.inputs["target_ppc"] = self.create_input("Target PPC:", 1.0, 100000.0, 40.0, 0)
+        control_layout.addLayout(row)
+
+        control_layout.addSpacing(15)
+        control_layout.addWidget(QLabel("4. SIMULATION MODE"))
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItems(["Both", "Thermal", "Erosion", "Trajectories"])
+        if hasattr(self, '_on_sim_mode_changed'):
+            self.combo_mode.currentTextChanged.connect(self._on_sim_mode_changed)
+        control_layout.addWidget(self.combo_mode)
+
+        control_layout.addWidget(QLabel("Coordinate System:"))
+        self.combo_coords = QComboBox()
+        self.combo_coords.addItems(["Cartesian (2D Slab)", "Axisymmetric (r-z)"])
+        self.combo_coords.setToolTip(
+            "Cartesian (2D Slab) — planar 2D slab geometry with unit depth (default)\n"
+            "Axisymmetric (r-z)   — 2D3V cylindrical ion beamlet with r=0 axis and true annular volumes"
+        )
+        self.combo_coords.currentIndexChanged.connect(self._on_coordinate_system_changed)
+        control_layout.addWidget(self.combo_coords)
+
+        control_layout.addWidget(QLabel("Geometry Mode:"))
+        self.combo_geometry = QComboBox()
+        self.combo_geometry.addItems(["half_hole", "one_hole", "two_holes"])
+        self.combo_geometry.setToolTip(
+            "half_hole  — half-pitch symmetry, Ly = 0.5*(r_screen + pitch), hole at y=0 (fastest, default)\n"
+            "one_hole   — full single-aperture domain, Ly = r_screen + pitch, hole centered\n"
+            "two_holes  — dual unit-cell domain, Ly = 2*(r_screen + pitch), two holes"
+        )
+        self.combo_geometry.currentIndexChanged.connect(self._on_geometry_changed)
+        control_layout.addWidget(self.combo_geometry)
+
+        row, self.inputs["inj_time_µs"] = self.create_input(
+            "Injection Time (us):", 0.0, 1000.0, 0.01, 4
+        )
+        control_layout.addLayout(row)
+        self.inputs["inj_time_µs"].setValue(0.0)
+
+        control_layout.addSpacing(15)
+        control_layout.addWidget(QLabel("5. NEUTRALIZER"))
+        self.chk_neut_match_ion = QCheckBox("el. rate = ion rate")
+        self.chk_neut_match_ion.setToolTip(
+            "When checked, the neutralizer automatically emits electron macroparticles\n"
+            "matching the ion beam current exiting the last grid each step.\n"
+            "The 'e- Inject Rate' input is ignored in this mode."
+        )
+        self.chk_neut_match_ion.setChecked(False)
+        self.chk_neut_match_ion.stateChanged.connect(self._on_neut_match_toggled)
+        control_layout.addWidget(self.chk_neut_match_ion)
+
+        row, self.inputs["neut_rate"] = self.create_input("e- Inject Rate(macro):", 0.0, 1e9, 1.0, 4)
+        control_layout.addLayout(row)
+        row, self.inputs["Te"] = self.create_input("e- Temp (eV):", 0.0, 1000.0, 0.1, 4)
+        control_layout.addLayout(row)
+        row, self.inputs["neut_x"] = self.create_input("Axial Dist (x, mm):", 0.0, 500.0, 0.1, 3)
+        self.inputs["neut_x"].setToolTip("Neutralizer axial distance along x (mm). Auto-set to 90% into downstream plume if not manually edited.")
+        self.inputs["neut_x"].editingFinished.connect(self._validate_neut_x)
+        control_layout.addLayout(row)
+        row, self.inputs["neut_r"] = self.create_input("Radius (y, mm):", 0.01, 100.0, 0.1, 2)
+        self.inputs["neut_r"].setToolTip("Neutralizer radius (y, mm). Radial boundary for injected electrons.")
+        control_layout.addLayout(row)
+
+        control_layout.addSpacing(15)
+
+        self.btn_build = QPushButton("1. BUILD DOMAIN")
+        self.btn_build.clicked.connect(self.build_domain)
+        self.lbl_build_domain_info = QLabel("Build domain is valid for all scenarios")
+        self.lbl_build_domain_info.setAlignment(Qt.AlignCenter)
+        self.lbl_build_domain_info.setWordWrap(True)
+        self.lbl_build_domain_info.setStyleSheet("color: #64748b; font-size: 10px; font-style: italic; margin-top: 1px; margin-bottom: 2px;")
+        self.lbl_build_domain_info.setVisible(False)
+        self.btn_toggle = QPushButton("2. START BEAM")
+        self.btn_toggle.clicked.connect(self.toggle_sim)
+        self.lbl_beam_info = QLabel("Start/pause applies only to current scenario")
+        self.lbl_beam_info.setAlignment(Qt.AlignCenter)
+        self.lbl_beam_info.setWordWrap(True)
+        self.lbl_beam_info.setStyleSheet("color: #64748b; font-size: 10px; font-style: italic; margin-top: 1px; margin-bottom: 2px;")
+        self.lbl_beam_info.setVisible(False)
+
+        export_row = QHBoxLayout()
+        export_row.setSpacing(4)
+        export_row.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_csv = QPushButton("Export Data (.csv / .txt)")
+        self.btn_csv.clicked.connect(self.export_csv)
+
+        self.btn_export_params = QPushButton("Parameters")
+        self.btn_export_params.setToolTip("Select which data parameters to export (.csv / .txt)")
+        self.btn_export_params.clicked.connect(self.open_export_parameters_dialog)
+        self.btn_export_params.setStyleSheet("font-size: 11px; padding: 4px 8px;")
+
+        export_row.addWidget(self.btn_csv, 1)
+        export_row.addWidget(self.btn_export_params, 0)
+
+        self.chk_track_ptcls = QCheckBox("Record Kinematics")
+        if hasattr(self, '_on_track_ptcls_toggled'):
+            self.chk_track_ptcls.toggled.connect(self._on_track_ptcls_toggled)
+
+        export_trk_row = QHBoxLayout()
+        export_trk_row.setSpacing(4)
+        export_trk_row.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_export_trk = QPushButton("Export Particle Data (.csv / .txt)")
+        self.btn_export_trk.clicked.connect(self.exporttrackingdata)
+
+        self.btn_export_trk_params = QPushButton("Parameters")
+        self.btn_export_trk_params.setToolTip("Select which particle data parameters to export (.csv / .txt)")
+        self.btn_export_trk_params.clicked.connect(self.open_export_particle_parameters_dialog)
+        self.btn_export_trk_params.setStyleSheet("font-size: 11px; padding: 4px 8px;")
+
+        export_trk_row.addWidget(self.btn_export_trk, 1)
+        export_trk_row.addWidget(self.btn_export_trk_params, 0)
+
+        self.chk_record = QCheckBox("Record Frames (0)")
+        self.btn_save   = QPushButton("Save GIF Animation")
+        self.btn_save.clicked.connect(self.save_gif)
+
+        self.lbl_status   = QLabel("Status: Ready.")
+        self.lbl_temp     = QLabel("Grid Temps: Ready")
+        self.lbl_material = QLabel(f"Grid Material: {self.mat_name or 'Molybdenum'}")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_temp.setWordWrap(True)
+        self.lbl_material.setWordWrap(True)
+
+        control_layout.addWidget(self.btn_build)
+        control_layout.addWidget(self.lbl_build_domain_info)
+        control_layout.addWidget(self.btn_toggle)
+        control_layout.addWidget(self.lbl_beam_info)
+        control_layout.addLayout(export_row)
+        control_layout.addWidget(self.chk_track_ptcls)
+        control_layout.addLayout(export_trk_row)
+
+        for w in [
+            self.chk_record, self.btn_save,
+            self.lbl_status, self.lbl_temp, self.lbl_material
+        ]:
+            control_layout.addWidget(w)
+
+        perfbox    = QGroupBox("⚡ Beam Diagnostics ")
+        perflayout = QVBoxLayout()
+        perflayout.setSpacing(2)
+        perflayout.setContentsMargins(6, 4, 6, 4)
+
+        self.lblTime         = QLabel("t_sim:        — us")
+        self.lblTransparency = QLabel("Transparency: —")
+        self.lblPerfPtcls    = QLabel("Ptcls (i/e):  —")
+        self.lblPerfStep     = QLabel("Step / RAM:   —")
+
+        for lbl in [self.lblTime, self.lblTransparency, self.lblPerfPtcls, self.lblPerfStep]:
+            lbl.setStyleSheet("font-family: monospace; font-size: 11px;")
+            perflayout.addWidget(lbl)
+
+        perfbox.setLayout(perflayout)
+        control_layout.addWidget(perfbox)
+
+        scroll_area.setWidget(control_panel)
+        content_splitter.addWidget(scroll_area)
+
+        self.fig = plt.figure(figsize=(12, 9))
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        content_splitter.addWidget(self.canvas)
+
+        # Floating scrollbar overlaid on canvas, positioned below ax_ebs only
+        self.ebs_scrollbar = QScrollBar(Qt.Horizontal, self.canvas)
+        self.ebs_scrollbar.setMinimum(0)
+        self.ebs_scrollbar.setMaximum(0)
+        self.ebs_scrollbar.setValue(0)
+        self.ebs_scrollbar.setSingleStep(1)
+        self.ebs_scrollbar.setPageStep(50)
+        self.ebs_scrollbar.setFixedHeight(12)
+        self.ebs_scrollbar.setToolTip("Scroll through potential history")
+        self.ebs_scrollbar.valueChanged.connect(self._on_ebs_scroll)
+        self.ebs_scrollbar.hide()
+
+        # Floating Live toggle button next to the ebs scrollbar
+        self.btn_ebs_live = QPushButton("📌 Live", self.canvas)
+        self.btn_ebs_live.setCheckable(True)
+        self.btn_ebs_live.setChecked(True)
+        self.btn_ebs_live.setFixedSize(48, 12)
+        self.btn_ebs_live.setToolTip("Follow the latest data live (uncheck to inspect history)")
+        self.btn_ebs_live.setStyleSheet(
+            "QPushButton { font-size: 8px; padding: 0px 2px; border: 1px solid #adb5bd; border-radius: 2px; "
+            "background-color: #d4edda; color: #155724; font-weight: bold; }"
+            "QPushButton:checked { background-color: #d4edda; color: #155724; }"
+            "QPushButton:!checked { background-color: #f8d7da; color: #721c24; }"
+        )
+        self.btn_ebs_live.toggled.connect(self._on_ebs_live_toggled)
+        self.btn_ebs_live.hide()
+
+        # Floating scrollbar overlaid on canvas, positioned below ax_div only
+        self.div_scrollbar = QScrollBar(Qt.Horizontal, self.canvas)
+        self.div_scrollbar.setMinimum(0)
+        self.div_scrollbar.setMaximum(0)
+        self.div_scrollbar.setValue(0)
+        self.div_scrollbar.setSingleStep(1)
+        self.div_scrollbar.setPageStep(50)
+        self.div_scrollbar.setFixedHeight(12)
+        self.div_scrollbar.setToolTip("Scroll through divergence history")
+        self.div_scrollbar.valueChanged.connect(self._on_div_scroll)
+        self.div_scrollbar.hide()   # shown after first layout pass
+
+        # Floating Live toggle button next to the scrollbar
+        self.btn_div_live = QPushButton("📌 Live", self.canvas)
+        self.btn_div_live.setCheckable(True)
+        self.btn_div_live.setChecked(True)
+        self.btn_div_live.setFixedSize(48, 12)
+        self.btn_div_live.setToolTip("Follow the latest data live (uncheck to inspect history)")
+        self.btn_div_live.setStyleSheet(
+            "QPushButton { font-size: 8px; padding: 0px 2px; border: 1px solid #adb5bd; border-radius: 2px; "
+            "background-color: #d4edda; color: #155724; font-weight: bold; }"
+            "QPushButton:checked { background-color: #d4edda; color: #155724; }"
+            "QPushButton:!checked { background-color: #f8d7da; color: #721c24; }"
+        )
+        self.btn_div_live.toggled.connect(self._on_div_live_toggled)
+        self.btn_div_live.hide()
+
+        content_splitter.setStretchFactor(0, 0)
+        content_splitter.setStretchFactor(1, 1)
+        content_splitter.setSizes([340, 1160])
+        content_splitter.splitterMoved.connect(lambda pos, idx: self._on_splitter_moved())
+        self.content_splitter = content_splitter
+
+        root_layout.addWidget(content_splitter, 1)
+
+        setup_figure_layout(self)
+        self.canvas.mpl_connect('pick_event', self._on_legend_pick)
+        self._update_div_legend()
+        self.setup_divergence_menu()
+        self.setup_xaxis_menu()
+
+    def _on_splitter_moved(self):
+        """Called when the splitter handle between control panel and canvas is dragged."""
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+    def setup_divergence_menu(self):
+        """Build the downstream arrow dropdown button and cascading tent menus for divergence options."""
+        self.DIVERGENCE_METHODS = {
+            "95%": 95.0,
+            "90%": 90.0,
+            "RMS (Twiss)": "RMS (Twiss)",
+            "Direct RMS": "Direct RMS",
+            "FWHM": "FWHM",
+        }
+
+        # Small downstream arrow button overlaid directly on the canvas
+        self.btn_div_menu = QToolButton(self.canvas)
+        self.btn_div_menu.setText("▼")
+        self.btn_div_menu.setToolTip("Divergence Options")
+        self.btn_div_menu.setFixedSize(18, 16)
+        self.btn_div_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_div_menu.setFocusPolicy(Qt.NoFocus)
+        self.btn_div_menu.setStyleSheet("""
+            QToolButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 3px;
+                color: #495057;
+                font-size: 8px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QToolButton:hover {
+                background-color: #e2e6ea;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+            QToolButton:pressed {
+                background-color: #dae0e5;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """)
+
+        # Main tent menu
+        self.menu_div = QMenu(self)
+        self.menu_div.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #ced4da;
+                padding: 4px 0px;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 5px 22px 5px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #e7f1ff;
+                color: #0d6efd;
+            }
+        """)
+
+        # Submenu: "Divergence evaluation"
+        self.menu_div_eval = self.menu_div.addMenu("Divergence evaluation")
+        self.menu_div_eval.setStyleSheet(self.menu_div.styleSheet())
+
+        # Submenu items: 95%, 90%, RMS (Twiss), Direct RMS, FWHM
+        self._div_method_actions = {}
+        self._div_method_group = QActionGroup(self)
+        self._div_method_group.setExclusive(True)
+
+        tooltips = {
+            "95%": "95th percentile divergence angle",
+            "90%": "90th percentile divergence angle",
+            "RMS (Twiss)": "Courant-Snyder emittance ellipse: n·σ·√(ε·γ)",
+            "Direct RMS": "Raw Root Mean Square of particle angles",
+            "FWHM": "Half the full width at half-maximum of the angular distribution peak",
+        }
+
+        current_method = getattr(self, 'div_method', '95%')
+        for method_name in self.DIVERGENCE_METHODS.keys():
+            act = self.menu_div_eval.addAction(method_name)
+            act.setCheckable(True)
+            act.setChecked(method_name == current_method)
+            if method_name in tooltips:
+                act.setToolTip(tooltips[method_name])
+            act.triggered.connect(lambda checked, m=method_name: self.set_divergence_method(m))
+            self._div_method_group.addAction(act)
+            self._div_method_actions[method_name] = act
+
+        self.action_div_plane = QAction("Plane", self)
+        self.action_div_plane.triggered.connect(self.open_divergence_plane_dialog)
+        self.menu_div.addAction(self.action_div_plane)
+
+        # Submenu: "X-axis unit" (for beam divergence)
+        self.menu_div.addSeparator()
+        self.menu_div_xaxis = self.menu_div.addMenu("X-axis unit")
+        self.menu_div_xaxis.setStyleSheet(self.menu_div.styleSheet())
+        self._div_xaxis_unit_actions = {}
+        self._div_xaxis_unit_group = QActionGroup(self)
+        self._div_xaxis_unit_group.setExclusive(True)
+
+        for unit_key, label in [("iterations", "Iterations"), ("microseconds", "Microseconds (µs)")]:
+            act = self.menu_div_xaxis.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(unit_key == getattr(self, 'div_xaxis_unit', 'iterations'))
+            act.triggered.connect(lambda checked, u=unit_key: self.set_xaxis_unit(u, target='div'))
+            self._div_xaxis_unit_group.addAction(act)
+            self._div_xaxis_unit_actions[unit_key] = act
+
+        self.btn_div_menu.setMenu(self.menu_div)
+        self.btn_div_menu.setPopupMode(QToolButton.InstantPopup)
+
+        # Reposition button + scrollbar on canvas draw and resize
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_menu_btn())
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_div_scrollbar())
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_ebs_scrollbar())
+        self.canvas.mpl_connect('draw_event', self._on_canvas_draw)
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_menu_btn())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_div_scrollbar())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_ebs_scrollbar())
+        self._reposition_div_menu_btn()
+        self._reposition_div_scrollbar()
+        self._reposition_ebs_scrollbar()
+
+    def setup_xaxis_menu(self):
+        """Build the downstream arrow dropdown buttons and independent tent menus to switch x-axis units per graph."""
+        menu_style = """
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #ced4da;
+                padding: 4px 0px;
+                font-size: 11px;
+            }
+            QMenu::item {
+                padding: 5px 22px 5px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #e7f1ff;
+                color: #0d6efd;
+            }
+        """
+
+        unit_items = [
+            ("iterations", "Iterations", "Display x-axis in simulation iterations"),
+            ("microseconds", "Microseconds (µs)", "Display x-axis in physical time (microseconds)"),
+        ]
+
+        # 1. Menu for Midline / Saddle-Point Potential graph (ax_ebs)
+        self.menu_ebs_xaxis = QMenu(self)
+        self.menu_ebs_xaxis.setStyleSheet(menu_style)
+        self._ebs_xaxis_actions = {}
+        self._ebs_xaxis_group = QActionGroup(self)
+        self._ebs_xaxis_group.setExclusive(True)
+
+        current_ebs_unit = getattr(self, 'ebs_xaxis_unit', 'iterations')
+        for unit_key, unit_label, tip in unit_items:
+            act = self.menu_ebs_xaxis.addAction(unit_label)
+            act.setCheckable(True)
+            act.setChecked(unit_key == current_ebs_unit)
+            act.setToolTip(tip)
+            act.triggered.connect(lambda checked, u=unit_key: self.set_xaxis_unit(u, target='ebs'))
+            self._ebs_xaxis_group.addAction(act)
+            self._ebs_xaxis_actions[unit_key] = act
+
+        # 2. Menu for Beam Divergence graph (ax_div)
+        self.menu_div_xaxis_btn = QMenu(self)
+        self.menu_div_xaxis_btn.setStyleSheet(menu_style)
+        self._div_xaxis_actions = {}
+        self._div_xaxis_group = QActionGroup(self)
+        self._div_xaxis_group.setExclusive(True)
+
+        current_div_unit = getattr(self, 'div_xaxis_unit', 'iterations')
+        for unit_key, unit_label, tip in unit_items:
+            act = self.menu_div_xaxis_btn.addAction(unit_label)
+            act.setCheckable(True)
+            act.setChecked(unit_key == current_div_unit)
+            act.setToolTip(tip)
+            act.triggered.connect(lambda checked, u=unit_key: self.set_xaxis_unit(u, target='div'))
+            self._div_xaxis_group.addAction(act)
+            self._div_xaxis_actions[unit_key] = act
+
+        # Backward compatibility aliases
+        self.menu_xaxis = self.menu_div_xaxis_btn
+        self._xaxis_unit_actions = self._div_xaxis_actions
+
+        btn_style = """
+            QToolButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 3px;
+                color: #495057;
+                font-size: 8px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QToolButton:hover {
+                background-color: #e2e6ea;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+            QToolButton:pressed {
+                background-color: #dae0e5;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """
+
+        # Downward arrow button next to ax_ebs (midline / saddle-point potential) x-axis label
+        self.btn_ebs_x_menu = QToolButton(self.canvas)
+        self.btn_ebs_x_menu.setText("▼")
+        self.btn_ebs_x_menu.setToolTip("Change Midline Potential X-Axis Unit (Iterations / Microseconds)")
+        self.btn_ebs_x_menu.setFixedSize(16, 14)
+        self.btn_ebs_x_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_ebs_x_menu.setFocusPolicy(Qt.NoFocus)
+        self.btn_ebs_x_menu.setStyleSheet(btn_style)
+        self.btn_ebs_x_menu.setMenu(self.menu_ebs_xaxis)
+        self.btn_ebs_x_menu.setPopupMode(QToolButton.InstantPopup)
+
+        # Downward arrow button next to ax_div (beam divergence) x-axis label
+        self.btn_div_x_menu = QToolButton(self.canvas)
+        self.btn_div_x_menu.setText("▼")
+        self.btn_div_x_menu.setToolTip("Change Beam Divergence X-Axis Unit (Iterations / Microseconds)")
+        self.btn_div_x_menu.setFixedSize(16, 14)
+        self.btn_div_x_menu.setCursor(Qt.PointingHandCursor)
+        self.btn_div_x_menu.setFocusPolicy(Qt.NoFocus)
+        self.btn_div_x_menu.setStyleSheet(btn_style)
+        self.btn_div_x_menu.setMenu(self.menu_div_xaxis_btn)
+        self.btn_div_x_menu.setPopupMode(QToolButton.InstantPopup)
+
+        # Alias for single-button reference
+        self.btn_xaxis_menu = self.btn_div_x_menu
+
+        # Reposition buttons on canvas draw and resize
+        self.canvas.mpl_connect('draw_event', lambda event: self._reposition_xaxis_menu_btns())
+        self.canvas.mpl_connect('resize_event', lambda event: self._reposition_xaxis_menu_btns())
+        self._reposition_xaxis_menu_btns()

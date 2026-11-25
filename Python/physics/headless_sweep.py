@@ -1,0 +1,836 @@
+"""
+Headless parametric sweep worker and execution utilities.
+
+Enables running simulation scenarios concurrently across all CPU cores
+without GUI dependencies, bypassing Python's GIL.
+"""
+
+import os
+import copy
+import time
+import pickle
+import numpy as np
+
+from physics.simulator import DigitalTwinSimulator
+from physics.mesh_utils import resolve_swept_upstream_gap
+from diagnostics.metrics import compute_rolling_variation
+
+
+def write_scenario_state(state_file: str, data: dict):
+    """Atomically write scenario display snapshot to disk for real-time GUI tracking."""
+    if not state_file:
+        return
+    tmp_path = state_file + f".{os.getpid()}.tmp"
+    try:
+        with open(tmp_path, 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, state_file)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+def read_scenario_state(state_file: str):
+    """Read scenario display snapshot from disk."""
+    if not state_file or not os.path.exists(state_file):
+        return None
+    try:
+        with open(state_file, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+def apply_sweep_param_to_dict(base_params: dict, param_id: str, value: float, sweep_config: dict = None) -> dict:
+    """
+    Apply a single swept parameter value to a copy of the simulation parameters dict.
+    Handles grid voltages, geometry, plasma densities, temperatures, and optional
+    coupled upstream_gap_mm updates.
+    """
+    params = copy.deepcopy(base_params)
+
+    # 1. Direct scalar parameters
+    if param_id in ("Te_up", "n0_plasma", "Ti", "n0", "Tn", "Te", "upstream_gap_mm", "neut_x", "neut_r", "target_ppc"):
+        params[param_id] = float(value)
+
+    # 2. Grid-specific parameters
+    elif param_id.startswith("grid_"):
+        parts = param_id.split("_")  # e.g. ["grid", "1", "V"] or ["grid", "2", "gap"]
+        if len(parts) >= 3:
+            grid_idx = int(parts[1]) - 1
+            prop_key = parts[2]
+            grids = params.get("grids", [])
+            if 0 <= grid_idx < len(grids):
+                grids[grid_idx][prop_key] = float(value)
+                params["grids"] = grids
+
+    # 2.5 Optional dynamic update of upstream_gap_mm from influencing parameters
+    auto_gap_updated = False
+    if isinstance(sweep_config, dict) and sweep_config.get("auto_update_upstream_gap", False):
+        coupled_gap = resolve_swept_upstream_gap(
+            param_id=param_id,
+            params=params,
+            coupling_meta=sweep_config.get("upstream_gap_coupling"),
+        )
+        if coupled_gap is not None and coupled_gap > 0.0:
+            params["upstream_gap_mm"] = float(coupled_gap)
+            auto_gap_updated = True
+
+    # 3. Synchronize auto-computed axial domain length (Lx) and neutralizer position (neut_x)
+    #    when an axial geometry parameter is swept so shrinking/growing gaps keep plume length valid.
+    grid_parts = param_id.split("_") if param_id.startswith("grid_") else []
+    is_axial_geom_param = (
+        param_id == "upstream_gap_mm"
+        or auto_gap_updated
+        or (len(grid_parts) >= 3 and grid_parts[2] in ("t", "gap"))
+    )
+    grids = params.get("grids", [])
+    if is_axial_geom_param and grids:
+        total_grid_thickness = sum(float(g["t"]) + float(g["gap"]) for g in grids)
+        user_gap = float(params.get("upstream_gap_mm", 0.0))
+
+        if params.get("user_overrode_Lx") is False:
+            params["Lx"] = round(user_gap + total_grid_thickness, 3) if user_gap > 0.0 else None
+
+        if params.get("user_overrode_neut_x") is False and user_gap > 0.0 and params.get("Lx"):
+            x_exit = user_gap + total_grid_thickness - float(grids[-1]["gap"])
+            eff_lx = max(float(params["Lx"]), user_gap + total_grid_thickness)
+            plume_span = max(eff_lx - x_exit, 0.0)
+            params["neut_x"] = round(x_exit + 0.9 * plume_span, 3)
+
+    return params
+
+
+def compute_perveance_metrics_static(grids: list, i_exit: float, q_ion: float = 1.602e-19, m_ion: float = 131.293 * 1.6605e-27, injection_area: float = None) -> tuple:
+    """
+    Calculates effective perveance, maximum Child-Langmuir perveance (Goebel-Katz),
+    and perveance fraction.
+    """
+    if not np.isfinite(i_exit) or i_exit < 0.0:
+        i_exit = 0.0
+
+    v_screen = 0.0
+    v_accel = 0.0
+    gap_mm = 1.0
+    t_screen_mm = 0.5
+    r_screen_mm = 1.0
+
+    if grids and len(grids) > 0:
+        v_screen = float(grids[0].get('V', 0.0))
+        gap_mm = float(grids[0].get('gap', 1.0))
+        t_screen_mm = float(grids[0].get('t', 0.5))
+        r_screen_mm = float(grids[0].get('r', 1.0))
+        if len(grids) > 1:
+            v_accel = float(grids[1].get('V', 0.0))
+
+    v_total = max(v_screen - v_accel, 0.0)
+
+    # Peffective = I_exit / (V_total^1.5)
+    if v_total > 0.0 and i_exit > 0.0:
+        p_eff = float(i_exit / (v_total ** 1.5))
+    else:
+        p_eff = 0.0
+
+    eps_0 = 8.8541878128e-12
+    if q_ion <= 0.0 or m_ion <= 0.0:
+        q_ion = 1.602e-19
+        m_ion = 131.293 * 1.6605e-27
+
+    l_g = max(gap_mm * 1e-3, 1e-6)
+    t_s = max(t_screen_mm * 1e-3, 0.0)
+    r_s = max(r_screen_mm * 1e-3, 1e-6)
+    l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
+
+    if injection_area is not None and injection_area > 0.0:
+        area = float(injection_area)
+    else:
+        area = max(r_screen_mm * 1e-3 * 1e-3, 1e-8)
+
+    p_max = float((4.0 * eps_0 / 9.0) * np.sqrt(2.0 * q_ion / m_ion) * (area / l_e_sq))
+
+    if p_max > 0.0 and np.isfinite(p_eff):
+        perv_frac = float(p_eff / p_max)
+    else:
+        perv_frac = 0.0
+
+    return p_eff, p_max, perv_frac
+
+
+def extract_display_particles(sim, scatter_limit=1000, return_electron_energy=False):
+    """
+    Extract particle coordinates and energy arrays for GUI visualization.
+    Coordinates (px, py) are in millimeters matching the simulator domain [0, Lx] and [0, Ly].
+    """
+    num_p = getattr(sim, 'num_p', 0)
+    num_e = getattr(sim, 'num_e', 0)
+    m_ion = getattr(sim, 'm_ion', 131.293 * 1.6605e-27)
+    m_e   = getattr(sim, 'm_e', 9.1093837e-31)
+    q     = getattr(sim, 'q_ion', getattr(sim, 'q', 1.602e-19))
+
+    prim_xy = np.empty((0, 2), dtype=np.float32)
+    e_prim = np.empty(0, dtype=np.float32)
+    cex_xy = np.empty((0, 2), dtype=np.float32)
+    e_cex = np.empty(0, dtype=np.float32)
+    elec_xy = np.empty((0, 2), dtype=np.float32)
+    e_elec = np.empty(0, dtype=np.float32)
+
+    if scatter_limit is None:
+        # None - hide all particles
+        if return_electron_energy:
+            return prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec
+        return prim_xy, e_prim, cex_xy, e_cex, elec_xy
+
+    # Extract ions
+    if num_p > 0 and hasattr(sim, 'p_x') and hasattr(sim, 'p_y'):
+        p_isCEX_raw = sim.p_isCEX[:num_p].copy() if hasattr(sim, 'p_isCEX') else np.zeros(num_p, dtype=bool)
+        p_x_raw = sim.p_x[:num_p]
+        p_y_raw = sim.p_y[:num_p]
+        p_vx_raw = sim.p_vx[:num_p] if hasattr(sim, 'p_vx') else np.zeros(num_p)
+        p_vy_raw = sim.p_vy[:num_p] if hasattr(sim, 'p_vy') else np.zeros(num_p)
+        p_vz_raw = sim.p_vz[:num_p] if hasattr(sim, 'p_vz') else np.zeros(num_p)
+
+        if scatter_limit == 0 or num_p <= scatter_limit:
+            p_isCEX = p_isCEX_raw
+            px, py = p_x_raw, p_y_raw
+            pvx, pvy, pvz = p_vx_raw, p_vy_raw, p_vz_raw
+        else:
+            ion_idx = np.random.choice(num_p, scatter_limit, replace=False)
+            ion_idx.sort()
+            p_isCEX = p_isCEX_raw[ion_idx]
+            px, py = p_x_raw[ion_idx], p_y_raw[ion_idx]
+            pvx = p_vx_raw[ion_idx]
+            pvy = p_vy_raw[ion_idx]
+            pvz = p_vz_raw[ion_idx]
+
+        prim_mask = ~p_isCEX
+        cex_mask = p_isCEX
+
+        if np.any(prim_mask):
+            prim_xy = np.column_stack((px[prim_mask], py[prim_mask])).astype(np.float32)
+            vsq = pvx[prim_mask]**2 + pvy[prim_mask]**2 + pvz[prim_mask]**2
+            e_prim = (0.5 * m_ion * vsq / max(q, 1e-25)).astype(np.float32)
+
+        if np.any(cex_mask):
+            cex_xy = np.column_stack((px[cex_mask], py[cex_mask])).astype(np.float32)
+            vsq = pvx[cex_mask]**2 + pvy[cex_mask]**2 + pvz[cex_mask]**2
+            e_cex = (0.5 * m_ion * vsq / max(q, 1e-25)).astype(np.float32)
+
+    # Extract electrons
+    if num_e > 0 and hasattr(sim, 'e_x') and hasattr(sim, 'e_y'):
+        e_x_raw = sim.e_x[:num_e]
+        e_y_raw = sim.e_y[:num_e]
+        e_vx_raw = sim.e_vx[:num_e] if hasattr(sim, 'e_vx') else np.zeros(num_e)
+        e_vy_raw = sim.e_vy[:num_e] if hasattr(sim, 'e_vy') else np.zeros(num_e)
+        e_vz_raw = sim.e_vz[:num_e] if hasattr(sim, 'e_vz') else np.zeros(num_e)
+        if scatter_limit == 0 or num_e <= scatter_limit:
+            ex, ey = e_x_raw, e_y_raw
+            evx, evy, evz = e_vx_raw, e_vy_raw, e_vz_raw
+        else:
+            e_idx = np.random.choice(num_e, scatter_limit, replace=False)
+            e_idx.sort()
+            ex, ey = e_x_raw[e_idx], e_y_raw[e_idx]
+            evx, evy, evz = e_vx_raw[e_idx], e_vy_raw[e_idx], e_vz_raw[e_idx]
+        elec_xy = np.column_stack((ex, ey)).astype(np.float32)
+        vsq_e = evx**2 + evy**2 + evz**2
+        e_elec = (0.5 * m_e * vsq_e / max(q, 1e-25)).astype(np.float32)
+
+    if return_electron_energy:
+        return prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec
+    return prim_xy, e_prim, cex_xy, e_cex, elec_xy
+
+
+def run_single_sweep_scenario_worker(payload: dict) -> dict:
+    """
+    Worker function executed in an isolated OS process.
+    Instantiates DigitalTwinSimulator, steps to steady state, and returns full metrics row.
+    """
+    scenario_idx = payload["scenario_idx"]
+    param_id = payload["param_id"]
+    parameter_value = payload["parameter_value"]
+    base_params = payload["base_params"]
+    steady_config = payload["steady_config"]
+    cancel_file = payload.get("cancel_file")
+    pause_file = payload.get("pause_file")
+    active_view_file = payload.get("active_view_file")
+    track_ptcls_file = payload.get("track_ptcls_file")
+    sim_mode_file = payload.get("sim_mode_file")
+    trk_file = payload.get("trk_file")
+    initial_track_ptcls = bool(payload.get("track_particles", False))
+    status_dict = payload.get("status_dict")
+    state_file = payload.get("state_file")
+    scatter_limit = payload.get("scatter_limit", 1000)
+
+    def _is_tracking_particles() -> bool:
+        if track_ptcls_file is not None:
+            return os.path.exists(track_ptcls_file)
+        return initial_track_ptcls
+
+    def _sync_sim_mode(params_dict: dict) -> str:
+        if sim_mode_file is not None and os.path.exists(sim_mode_file):
+            try:
+                with open(sim_mode_file, "r", encoding="utf-8") as f:
+                    m = f.read().strip()
+                if m in ("Both", "Thermal", "Erosion", "Trajectories"):
+                    params_dict["sim_mode"] = m
+            except Exception:
+                pass
+        return str(params_dict.get("sim_mode", "Both"))
+
+    from physics.active_clock import ActiveDurationTracker, get_active_clock
+    scenario_timer = ActiveDurationTracker(max_gap=None)
+    scenario_timer.start()
+    t_start = get_active_clock()
+
+    # Apply parameter variation
+    scenario_params = apply_sweep_param_to_dict(
+        base_params,
+        param_id,
+        parameter_value,
+        sweep_config=payload.get("sweep_config"),
+    )
+    _sync_sim_mode(scenario_params)
+
+    sim = DigitalTwinSimulator()
+    sim.build_domain(scenario_params)
+    if hasattr(sim, 'enable_perf_monitor'):
+        sim.enable_perf_monitor(log_every=50)
+
+    window = int(steady_config.get("window", 100))
+    thresh = float(steady_config.get("threshold", 1.0))
+    max_iters = int(steady_config.get("max_iterations", 5000))
+    min_iters = int(steady_config.get("min_iterations", 500))
+
+    scenario_iters = 0
+    steady_reached = False
+    max_hit = False
+    first_grid_entry_iter = None
+
+    prim_xy = np.empty((0, 2), dtype=np.float32)
+    e_prim = np.empty(0, dtype=np.float32)
+    cex_xy = np.empty((0, 2), dtype=np.float32)
+    e_cex = np.empty(0, dtype=np.float32)
+    elec_xy = np.empty((0, 2), dtype=np.float32)
+
+    n_grids = len(scenario_params.get("grids", []))
+    iter_hist = []
+    time_hist = []
+    div_hist = []
+    div_mid_hist = []
+    ebs_hist = []
+    trans_hist = []
+    ion_current_hist = []
+    ion_current_avg_hist = []
+    trans_ions_hist = []
+    active_cells_hist = []
+    low_ppc_cells_hist = []
+    T_hists = {i: [] for i in range(n_grids)}
+    tracking_buffer = []
+    last_tracked_iter = -1
+    last_valid_div = 0.0
+    last_valid_div_mid = 0.0
+
+    init_state = {
+        "status": "running",
+        "iter": 0,
+        "max_iters": max_iters,
+        "parameter_value": parameter_value,
+        "steady_state_reached": False,
+        "computation_time_s": 0.0,
+        "t_sim_us": 0.0,
+        "div": 0.0,
+        "div_mid": 0.0,
+        "exit_ion_current_A": 0.0,
+        "transparency": 0.0,
+        "prim_xy": prim_xy,
+        "e_prim_eV": e_prim,
+        "cex_xy": cex_xy,
+        "e_cex_eV": e_cex,
+        "elec_xy": elec_xy,
+        "iter_history": [],
+        "time_history": [],
+        "div_history": [],
+        "div_mid_history": [],
+        "ebs_history": [],
+        "transparency_history": [],
+        "ion_current_exit_history": [],
+        "ion_current_exit_avg_history": [],
+        "transmitted_ions_history": [],
+        "active_cells_history": [],
+        "low_ppc_cells_history": [],
+        "T_histories": {i: [] for i in range(n_grids)},
+        "T_grids": [float(t) for t in getattr(sim, 'T_grids', [300.0] * n_grids)],
+        "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
+        "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+        "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
+        "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
+        "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+        "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
+        "Lx": float(getattr(sim, 'Lx', 3.0)),
+        "Ly": float(getattr(sim, 'Ly', 3.0)),
+        "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
+        "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
+        "grids": scenario_params.get("grids", []),
+        "sim_mode": str(scenario_params.get("sim_mode", "Both")),
+    }
+    if status_dict is not None:
+        status_dict[scenario_idx] = init_state
+    if state_file:
+        write_scenario_state(state_file, init_state)
+
+    while True:
+        if cancel_file and (scenario_iters % 5 == 0) and os.path.exists(cancel_file):
+            break
+
+        if pause_file and os.path.exists(pause_file):
+            scenario_timer.pause()
+            t_pause_start = get_active_clock()
+            try:
+                prim_xy, e_prim, cex_xy, e_cex, elec_xy = extract_display_particles(sim, scatter_limit)
+            except Exception:
+                pass
+            if _is_tracking_particles() and last_tracked_iter != scenario_iters:
+                try:
+                    ptcl_data = sim.get_particle_kinematics()
+                    if ptcl_data.size > 0:
+                        tracking_buffer.append(ptcl_data)
+                        last_tracked_iter = scenario_iters
+                        if trk_file:
+                            write_scenario_state(trk_file, tracking_buffer)
+                except Exception:
+                    pass
+            paused_state = dict(run_state) if 'run_state' in locals() else dict(init_state)
+            paused_state["status"] = "paused"
+            paused_state["iter"] = scenario_iters
+            paused_state["prim_xy"] = prim_xy
+            paused_state["e_prim_eV"] = e_prim
+            paused_state["cex_xy"] = cex_xy
+            paused_state["e_cex_eV"] = e_cex
+            paused_state["elec_xy"] = elec_xy
+            paused_state["T_grids"] = [float(t) for t in getattr(sim, 'T_grids', [])]
+            paused_state["Tmap"] = sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None
+            paused_state["mask_grids"] = [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else []
+            paused_state["isBound"] = sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None
+            paused_state["X"] = sim.X.copy() if getattr(sim, 'X', None) is not None else None
+            paused_state["Y"] = sim.Y.copy() if getattr(sim, 'Y', None) is not None else None
+            if status_dict is not None and trk_file is None:
+                paused_state["tracking_buffer"] = list(tracking_buffer)
+            if status_dict is not None:
+                status_dict[scenario_idx] = paused_state
+            if state_file:
+                write_scenario_state(state_file, paused_state)
+
+            while os.path.exists(pause_file):
+                if cancel_file and os.path.exists(cancel_file):
+                    break
+                if _is_tracking_particles() and len(tracking_buffer) == 0 and scenario_iters > 0:
+                    try:
+                        ptcl_data = sim.get_particle_kinematics()
+                        if ptcl_data.size > 0:
+                            tracking_buffer.append(ptcl_data)
+                            last_tracked_iter = scenario_iters
+                            if trk_file:
+                                write_scenario_state(trk_file, tracking_buffer)
+                    except Exception:
+                        pass
+                time.sleep(0.05)
+            scenario_timer.start()
+            t_start += (get_active_clock() - t_pause_start)
+            resumed_state = dict(paused_state)
+            resumed_state["status"] = "running"
+            if status_dict is not None:
+                status_dict[scenario_idx] = resumed_state
+            if state_file:
+                write_scenario_state(state_file, resumed_state)
+
+        if scenario_iters % 10 == 0:
+            _sync_sim_mode(scenario_params)
+        sim.step(scenario_params)
+        scenario_timer.tick()
+        if hasattr(sim, 'get_total_energy'):
+            try:
+                sim.get_total_energy()
+            except Exception:
+                pass
+        if hasattr(sim, 'get_total_charge'):
+            try:
+                sim.get_total_charge()
+            except Exception:
+                pass
+        scenario_iters += 1
+
+        div_val = getattr(sim, 'current_div', np.nan)
+        div_c = float(div_val) if (div_val is not None and np.isfinite(div_val)) else np.nan
+        div_mid_val = getattr(sim, 'current_div_mid', np.nan)
+        div_m = float(div_mid_val) if (div_mid_val is not None and np.isfinite(div_mid_val)) else np.nan
+        min_pot_val = getattr(sim, 'min_pot', getattr(sim, 'saddle_point_potential', np.nan))
+        min_pot_c = float(min_pot_val) if (min_pot_val is not None and np.isfinite(min_pot_val)) else 0.0
+
+        if np.isfinite(div_c):
+            last_valid_div = div_c
+        if np.isfinite(div_m):
+            last_valid_div_mid = div_m
+
+        dt_val = float(getattr(sim, 'dt', 5e-10))
+        t_sim_s = float(scenario_iters * dt_val)
+        trans_c = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
+        i_inst_c = float(getattr(sim, 'exit_ion_current_step', 0.0))
+        i_avg_c = float(getattr(sim, 'exit_ion_current_avg', i_inst_c))
+        i_step_c = i_avg_c
+        trans_ions_c = int(round(float(getattr(sim, 'transmitted_ions_step', 0.0))))
+        act_cells_c = int(getattr(sim, 'total_active_cells', 0))
+        low_ppc_c = int(getattr(sim, 'low_ppc_cells', 0))
+        t_grids_c = getattr(sim, 'T_grids', [])
+
+        iter_hist.append(scenario_iters)
+        time_hist.append(t_sim_s)
+        div_hist.append(div_c)
+        div_mid_hist.append(div_m)
+        ebs_hist.append(min_pot_c)
+        trans_hist.append(trans_c)
+        ion_current_hist.append(i_inst_c)
+        ion_current_avg_hist.append(i_avg_c)
+        trans_ions_hist.append(trans_ions_c)
+        active_cells_hist.append(act_cells_c)
+        low_ppc_cells_hist.append(low_ppc_c)
+        for g_i, g_T in enumerate(t_grids_c):
+            T_hists.setdefault(g_i, []).append(float(g_T))
+
+        if _is_tracking_particles() and (scenario_iters % 10 == 0 or scenario_iters <= 5):
+            try:
+                ptcl_data = sim.get_particle_kinematics()
+                if ptcl_data.size > 0:
+                    tracking_buffer.append(ptcl_data)
+                    last_tracked_iter = scenario_iters
+                    if trk_file:
+                        write_scenario_state(trk_file, tracking_buffer)
+            except Exception:
+                pass
+
+        if (status_dict is not None or state_file is not None) and (scenario_iters % 10 == 0 or scenario_iters <= 5):
+            # Check if this scenario is currently being viewed in the GUI
+            is_active_view = True
+            if active_view_file and os.path.exists(active_view_file):
+                try:
+                    with open(active_view_file, "r") as f:
+                        is_active_view = (f.read().strip() == str(scenario_idx))
+                except Exception:
+                    is_active_view = False
+
+            if is_active_view:
+                try:
+                    prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec = extract_display_particles(sim, scatter_limit, return_electron_energy=True)
+                except Exception:
+                    pass
+
+            t_us = t_sim_s * 1e6
+            cur_comp_time = scenario_timer.get_duration()
+
+            run_state = {
+                "status": "running",
+                "iter": scenario_iters,
+                "max_iters": max_iters,
+                "parameter_value": parameter_value,
+                "steady_state_reached": False,
+                "computation_time_s": float(cur_comp_time),
+                "t_sim_us": float(t_us),
+                "div": last_valid_div,
+                "div_mid": last_valid_div_mid,
+                "exit_ion_current_A": i_step_c,
+                "transparency": trans_c,
+                "prim_xy": prim_xy,
+                "e_prim_eV": e_prim,
+                "cex_xy": cex_xy,
+                "e_cex_eV": e_cex,
+                "elec_xy": elec_xy,
+                "e_elec_eV": locals().get('e_elec', np.empty(0, dtype=np.float32)),
+                "iter_history": list(iter_hist),
+                "time_history": list(time_hist),
+                "div_history": list(div_hist),
+                "div_mid_history": list(div_mid_hist),
+                "ebs_history": list(ebs_hist),
+                "transparency_history": list(trans_hist),
+                "ion_current_exit_history": list(ion_current_hist),
+                "ion_current_exit_avg_history": list(ion_current_avg_hist),
+                "transmitted_ions_history": list(trans_ions_hist),
+                "active_cells_history": list(active_cells_hist),
+                "low_ppc_cells_history": list(low_ppc_cells_hist),
+                "T_histories": {k: list(v) for k, v in T_hists.items()},
+                "T_grids": [float(t) for t in t_grids_c],
+                "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
+                "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+                "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
+                "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
+                "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+                "sim_mode": str(scenario_params.get("sim_mode", "Both")),
+                "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
+                "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
+                "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
+                "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
+                "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+                "charge_history_t": list(getattr(sim, 'charge_history_t', [])),
+                "charge_history_q_i": list(getattr(sim, 'charge_history_q_i', [])),
+                "charge_history_q_e": list(getattr(sim, 'charge_history_q_e', [])),
+                "charge_history_q_b": list(getattr(sim, 'charge_history_q_b', [])),
+                "charge_history_q_free": list(getattr(sim, 'charge_history_q_free', [])),
+                "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
+                "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
+                "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
+                "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
+                "Lx": float(getattr(sim, 'Lx', 3.0)),
+                "Ly": float(getattr(sim, 'Ly', 3.0)),
+                "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
+                "nx": int(getattr(sim, 'nx', 0)),
+                "ny": int(getattr(sim, 'ny', 0)),
+                "dx": float(getattr(sim, 'dx', 0.05)),
+                "dy": float(getattr(sim, 'dy', 0.05)),
+                "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
+                "grids": scenario_params.get("grids", []),
+                "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
+                "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+                "current_cex_ppc_map": getattr(sim, 'current_cex_ppc_map', None).copy() if getattr(sim, 'current_cex_ppc_map', None) is not None else None,
+                "accum_cex_ppc_map": getattr(sim, 'accum_cex_ppc_map', None).copy() if getattr(sim, 'accum_cex_ppc_map', None) is not None else None,
+                "cell_vol_2d": getattr(sim, 'cell_vol_2d', None).copy() if getattr(sim, 'cell_vol_2d', None) is not None else None,
+                "n0_plasma": float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))),
+                "Te_up": float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0))),
+                "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
+                "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
+                "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
+                "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
+                "damage_map": sim.damage_map.copy() if getattr(sim, 'damage_map', None) is not None else None,
+                "eroded_depth": sim.eroded_depth.copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+                "ion_current_history": list(ion_current_avg_hist if ion_current_avg_hist else ion_current_hist),
+            }
+            if status_dict is not None and trk_file is None:
+                run_state["tracking_buffer"] = list(tracking_buffer)
+            if status_dict is not None:
+                status_dict[scenario_idx] = run_state
+            if state_file:
+                write_scenario_state(state_file, run_state)
+
+        if scenario_iters >= max_iters:
+            max_hit = True
+            break
+
+        # Check when particles entered the first grid
+        entry_iter = getattr(sim, 'first_grid_entry_iter', first_grid_entry_iter)
+        if entry_iter is None and getattr(sim, 'entered_optics', 0.0) > 0:
+            entry_iter = scenario_iters
+            first_grid_entry_iter = scenario_iters
+            sim.first_grid_entry_iter = scenario_iters
+
+        if entry_iter is not None:
+            first_grid_entry_iter = entry_iter
+            iters_since_entry = scenario_iters - entry_iter
+        else:
+            iters_since_entry = 0
+
+        # Minimum iterations must be evaluated from when particles entered the first grid
+        if iters_since_entry >= min_iters and scenario_iters >= window:
+            # Evaluate stationarity every 5 iterations
+            if scenario_iters % 5 == 0:
+                histories_to_check = []
+                if hasattr(sim, 'energy_history_tot') and len(sim.energy_history_tot) >= window:
+                    histories_to_check.append(sim.energy_history_tot[-scenario_iters:])
+                if hasattr(sim, 'charge_history_q_net') and len(sim.charge_history_q_net) >= window:
+                    histories_to_check.append(sim.charge_history_q_net[-scenario_iters:])
+                if hasattr(sim, 'potential_history') and len(sim.potential_history) >= window:
+                    histories_to_check.append(sim.potential_history[-scenario_iters:])
+                if hasattr(sim, 'ion_current_history') and len(sim.ion_current_history) >= window:
+                    histories_to_check.append(sim.ion_current_history[-scenario_iters:])
+                elif len(ion_current_avg_hist) >= window:
+                    histories_to_check.append(ion_current_avg_hist[-scenario_iters:])
+
+                if histories_to_check:
+                    all_under = True
+                    for h in histories_to_check:
+                        _, var = compute_rolling_variation(h, window=window, mode="rel_change")
+                        if len(var) == 0 or abs(var[-1]) > thresh:
+                            all_under = False
+                            break
+                    if all_under:
+                        steady_reached = True
+                        break
+
+    # Extract final particles and metrics
+    e_elec = np.empty(0, dtype=np.float32)
+    try:
+        prim_xy, e_prim, cex_xy, e_cex, elec_xy, e_elec = extract_display_particles(sim, scatter_limit, return_electron_energy=True)
+    except Exception:
+        pass
+
+    if _is_tracking_particles() and last_tracked_iter != scenario_iters and scenario_iters > 0:
+        try:
+            ptcl_data = sim.get_particle_kinematics()
+            if ptcl_data.size > 0:
+                tracking_buffer.append(ptcl_data)
+                last_tracked_iter = scenario_iters
+        except Exception:
+            pass
+    if trk_file and len(tracking_buffer) > 0:
+        write_scenario_state(trk_file, tracking_buffer)
+
+    comp_time_s = scenario_timer.get_duration()
+    t_sim_us = (sim.iteration * sim.dt * 1e6) if hasattr(sim, 'dt') else 0.0
+    e_tot = sim.energy_history_tot[-1] if hasattr(sim, 'energy_history_tot') and sim.energy_history_tot else 0.0
+    q_net = sim.charge_history_q_net[-1] if hasattr(sim, 'charge_history_q_net') and sim.charge_history_q_net else 0.0
+    fe = sim.energy_history_fe[-1] if hasattr(sim, 'energy_history_fe') and sim.energy_history_fe else 0.0
+    saddle_v = sim.min_pot if hasattr(sim, 'min_pot') else 0.0
+
+    div_val = getattr(sim, 'current_div', 0.0)
+    div = float(div_val) if np.isfinite(div_val) else last_valid_div
+
+    div_plane2_val = getattr(sim, 'current_div_mid', 0.0)
+    div_plane2 = float(div_plane2_val) if np.isfinite(div_plane2_val) else last_valid_div_mid
+    i_exit = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
+    trans = float(sim.get_transparency()) if hasattr(sim, 'get_transparency') else 0.0
+
+    p_eff, p_max, perv_frac = compute_perveance_metrics_static(
+        grids=scenario_params.get("grids", []),
+        i_exit=i_exit,
+        q_ion=getattr(sim, 'q_ion', 1.602e-19),
+        m_ion=getattr(sim, 'm_ion', 131.293 * 1.6605e-27),
+        injection_area=getattr(sim, '_last_injection_area', None)
+    )
+
+    t_grids_final_K = [float(t) for t in getattr(sim, 'T_grids', [])]
+    if not t_grids_final_K and T_hists:
+        t_grids_final_K = [float(T_hists[k][-1]) if T_hists.get(k) else 300.0 for k in sorted(T_hists.keys())]
+    t_grids_final_C = [float(t - 273.15) for t in t_grids_final_K]
+    grid_temps_dict = {}
+    for g_idx, (tk, tc) in enumerate(zip(t_grids_final_K, t_grids_final_C), start=1):
+        grid_temps_dict[f"grid_{g_idx}_temp_K"] = tk
+        grid_temps_dict[f"grid_{g_idx}_temp_C"] = tc
+
+    res_row = {
+        "scenario_idx": scenario_idx,
+        "parameter_value": parameter_value,
+        "steady_state_reached": bool(steady_reached),
+        "max_iters_hit": max_iters if max_hit else None,
+        "steady_iterations": int(scenario_iters),
+        "computation_time_s": float(comp_time_s),
+        "t_sim_us": float(t_sim_us),
+        "saddle_potential_V": float(saddle_v),
+        "divergence_deg": float(div),
+        "divergence_2nd_plane_deg": float(div_plane2),
+        "divergence_plane2_deg": float(div_plane2),
+        "exit_ion_current_A": float(i_exit),
+        "perveance_effective": float(p_eff),
+        "Peffective": float(p_eff),
+        "perveance_max": float(p_max),
+        "Pmax": float(p_max),
+        "perveance_fraction": float(perv_frac),
+        "P_fraction": float(perv_frac),
+        "transparency": float(trans),
+        "total_energy_J": float(e_tot),
+        "total_charge_C": float(q_net),
+        "field_energy_J": float(fe),
+        "T_grids_K": t_grids_final_K,
+        "T_grids_C": t_grids_final_C,
+        "iter_history": list(iter_hist),
+        "time_history": list(time_hist),
+        "div_history": list(div_hist),
+        "div_mid_history": list(div_mid_hist),
+        "ebs_history": list(ebs_hist),
+        "transparency_history": list(trans_hist),
+        "ion_current_exit_history": list(ion_current_hist),
+        "ion_current_exit_avg_history": list(ion_current_avg_hist),
+        "transmitted_ions_history": list(trans_ions_hist),
+        "active_cells_history": list(active_cells_hist),
+        "low_ppc_cells_history": list(low_ppc_cells_hist),
+        "T_histories": {k: list(v) for k, v in T_hists.items()},
+        **grid_temps_dict,
+    }
+
+    done_state = {
+        "status": "done",
+        "iter": scenario_iters,
+        "max_iters": max_iters,
+        "parameter_value": parameter_value,
+        "steady_state_reached": bool(steady_reached),
+        "computation_time_s": float(comp_time_s),
+        "t_sim_us": float(t_sim_us),
+        "div": div,
+        "div_mid": div_plane2,
+        "exit_ion_current_A": i_exit,
+        "perveance_effective": float(p_eff),
+        "perveance_max": float(p_max),
+        "perveance_fraction": float(perv_frac),
+        "transparency": float(trans),
+        "prim_xy": prim_xy,
+        "e_prim_eV": e_prim,
+        "cex_xy": cex_xy,
+        "e_cex_eV": e_cex,
+        "elec_xy": elec_xy,
+        "e_elec_eV": e_elec,
+        "iter_history": list(iter_hist),
+        "time_history": list(time_hist),
+        "div_history": list(div_hist),
+        "div_mid_history": list(div_mid_hist),
+        "ebs_history": list(ebs_hist),
+        "transparency_history": list(trans_hist),
+        "ion_current_exit_history": list(ion_current_hist),
+        "ion_current_exit_avg_history": list(ion_current_avg_hist),
+        "transmitted_ions_history": list(trans_ions_hist),
+        "active_cells_history": list(active_cells_hist),
+        "low_ppc_cells_history": list(low_ppc_cells_hist),
+        "T_histories": {k: list(v) for k, v in T_hists.items()},
+        "T_grids": t_grids_final_K,
+        "T_grids_K": t_grids_final_K,
+        "T_grids_C": t_grids_final_C,
+        "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
+        "mask_grids": [m.copy() for m in getattr(sim, 'mask_grids', [])] if getattr(sim, 'mask_grids', None) else [],
+        "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
+        "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
+        "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+        "sim_mode": str(scenario_params.get("sim_mode", "Both")),
+        "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
+        "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
+        "energy_history_ke_e": list(getattr(sim, 'energy_history_ke_e', [])),
+        "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
+        "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
+        "charge_history_t": list(getattr(sim, 'charge_history_t', [])),
+        "charge_history_q_i": list(getattr(sim, 'charge_history_q_i', [])),
+        "charge_history_q_e": list(getattr(sim, 'charge_history_q_e', [])),
+        "charge_history_q_b": list(getattr(sim, 'charge_history_q_b', [])),
+        "charge_history_q_free": list(getattr(sim, 'charge_history_q_free', [])),
+        "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
+        "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
+        "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
+        "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
+        "Lx": float(getattr(sim, 'Lx', 3.0)),
+        "Ly": float(getattr(sim, 'Ly', 3.0)),
+        "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
+        "nx": int(getattr(sim, 'nx', 0)),
+        "ny": int(getattr(sim, 'ny', 0)),
+        "dx": float(getattr(sim, 'dx', 0.05)),
+        "dy": float(getattr(sim, 'dy', 0.05)),
+        "upstream_gap_mm": float(getattr(sim, 'upstream_gap_mm', 0.0)),
+        "grids": scenario_params.get("grids", []),
+        "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
+        "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+        "current_cex_ppc_map": getattr(sim, 'current_cex_ppc_map', None).copy() if getattr(sim, 'current_cex_ppc_map', None) is not None else None,
+        "accum_cex_ppc_map": getattr(sim, 'accum_cex_ppc_map', None).copy() if getattr(sim, 'accum_cex_ppc_map', None) is not None else None,
+        "cell_vol_2d": getattr(sim, 'cell_vol_2d', None).copy() if getattr(sim, 'cell_vol_2d', None) is not None else None,
+        "n0_plasma": float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))),
+        "Te_up": float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0))),
+        "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
+        "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
+        "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],
+        "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
+        "damage_map": sim.damage_map.copy() if getattr(sim, 'damage_map', None) is not None else None,
+        "eroded_depth": sim.eroded_depth.copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+        "ion_current_history": list(ion_current_avg_hist if ion_current_avg_hist else ion_current_hist),
+        "result_row": res_row,
+    }
+    if status_dict is not None and trk_file is None:
+        done_state["tracking_buffer"] = list(tracking_buffer)
+
+    if status_dict is not None:
+        status_dict[scenario_idx] = done_state
+    if state_file:
+        write_scenario_state(state_file, done_state)
+
+    return res_row

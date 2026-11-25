@@ -1,0 +1,547 @@
+"""
+Mesh utilities and automatic domain zoning calculations.
+"""
+import numpy as np
+
+
+def compute_debye_upstream_gap(n0: float, Te_up: float) -> float:
+    """Return the physics-recommended upstream gap [mm] based on Debye length.
+
+    Sheath-formation criterion (literature-based):
+      n0 <= 1e17  m^-3  →  80 * λ_D
+      1e17 < n0 <= 4e17 →  40 * λ_D
+      n0 > 4e17         →  30 * λ_D
+
+    Parameters
+    ----------
+    n0 : float
+        Upstream plasma density [m^-3]
+    Te_up : float
+        Upstream electron temperature [eV]
+
+    Returns
+    -------
+    float
+        Recommended upstream gap in [mm]
+    """
+    eps0 = 8.854e-12
+    q    = 1.6e-19
+    debye_m  = np.sqrt(eps0 * Te_up / (q * n0 * 0.61))
+    debye_mm = debye_m * 1e3
+
+    if n0 <= 1e17:
+        n_debye = 80
+    elif n0 <= 4e17:
+        n_debye = 40
+    else:
+        n_debye = 30
+
+    raw_gap = n_debye * debye_mm
+    if raw_gap > 4.0:
+        print(f"[Warning] Debye-evaluated upstream gap ({raw_gap:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+        return 4.0
+    return raw_gap
+
+
+def compute_upstream_gap_value(
+    screen_r: float = 0.80,
+    n0: float = 1e17,
+    Te_up: float = 3.0,
+    entire_bulk_plasma: bool = False,
+    upstream_gap_settings: dict = None,
+    force_base: str = None,
+    ratio_override: float = None,
+):
+    """Compute coupled upstream gap [mm] matching GUI ratio/Debye rules, or None if invalid/custom."""
+    if force_base == "screen_r":
+        if screen_r <= 0.0:
+            return None
+        ratio = 0.75 if ratio_override is None else float(ratio_override)
+        return round(ratio * float(screen_r), 3)
+
+    if force_base == "debye":
+        if n0 <= 0.0 or Te_up <= 0.0:
+            return None
+        if ratio_override is not None:
+            debye_mm = float(np.sqrt(8.854e-12 * float(Te_up) / (1.6e-19 * float(n0) * 0.61)) * 1e3)
+            val = float(ratio_override) * debye_mm
+            if val > 4.0:
+                print(f"[Warning] Debye-evaluated upstream gap ({val:.3f} mm) exceeds 4 mm limit. Clamped to 4.0 mm.")
+                val = 4.0
+            return round(val, 3)
+        return round(float(compute_debye_upstream_gap(float(n0), float(Te_up))), 3)
+
+    if isinstance(upstream_gap_settings, dict):
+        method = upstream_gap_settings.get("method")
+        if method == "custom":
+            return None
+        if method == "ratio":
+            base = upstream_gap_settings.get("ratio_base", "screen_r")
+            ratio = float(upstream_gap_settings.get("ratio", 0.75))
+            return compute_upstream_gap_value(
+                screen_r=screen_r,
+                n0=n0,
+                Te_up=Te_up,
+                entire_bulk_plasma=entire_bulk_plasma,
+                force_base=base,
+                ratio_override=ratio,
+            )
+
+    if entire_bulk_plasma:
+        return compute_upstream_gap_value(n0=n0, Te_up=Te_up, force_base="debye")
+    return compute_upstream_gap_value(screen_r=screen_r, force_base="screen_r", ratio_override=0.75)
+
+
+def get_upstream_gap_coupling_for_param(
+    param_id: str,
+    upstream_gap_settings: dict = None,
+    entire_bulk_plasma: bool = False,
+):
+    """Return coupling descriptor `{'base', 'ratio'}` if `param_id` influences upstream_gap_mm, else None."""
+    settings = upstream_gap_settings if isinstance(upstream_gap_settings, dict) else {}
+    method = settings.get("method")
+    ratio_base = settings.get("ratio_base")
+
+    if param_id == "grid_1_r":
+        ratio = float(settings.get("ratio", 0.75)) if (method == "ratio" and ratio_base == "screen_r") else 0.75
+        return {"base": "screen_r", "ratio": ratio}
+
+    if param_id in ("n0_plasma", "Te_up"):
+        if method == "ratio" and ratio_base == "debye":
+            return {"base": "debye", "ratio": float(settings.get("ratio", 30.0))}
+        return {"base": "debye", "ratio": None}
+
+    return None
+
+
+def resolve_swept_upstream_gap(param_id: str, params: dict, coupling_meta: dict = None):
+    """Compute the updated upstream_gap_mm for a swept scenario dict, or None if not applicable."""
+    if not isinstance(params, dict):
+        return None
+    coupling = (
+        coupling_meta
+        if (isinstance(coupling_meta, dict) and coupling_meta.get("base") in ("screen_r", "debye"))
+        else get_upstream_gap_coupling_for_param(
+            param_id,
+            upstream_gap_settings=params.get("upstream_gap_settings"),
+            entire_bulk_plasma=bool(params.get("entire_bulk_plasma", False)),
+        )
+    )
+    if not coupling:
+        return None
+
+    base = coupling.get("base")
+    if not (
+        (param_id == "grid_1_r" and base == "screen_r")
+        or (param_id in ("n0_plasma", "Te_up") and base == "debye")
+    ):
+        return None
+
+    grids = params.get("grids", [])
+    screen_r = float(grids[0].get("r", 0.80)) if grids else 0.80
+    return compute_upstream_gap_value(
+        screen_r=screen_r,
+        n0=float(params.get("n0_plasma", 1e17)),
+        Te_up=float(params.get("Te_up", 3.0)),
+        force_base=base,
+        ratio_override=coupling.get("ratio"),
+    )
+
+
+def compute_efield_constrained_spacing(
+    grids,
+    n0: float,
+    Te_up: float,
+    ratio_debye: float = 0.8,
+    max_rel_jump: float = 0.10,
+    min_cells_gap: int = 20,
+    min_cells_aperture: int = 20,
+    min_cells_thickness: int = 12,
+):
+    """
+    Calculate base grid cell spacings (dx, dy) constrained by both Debye length
+    and electric field gradient / geometric limits.
+
+    When plasma density n0 is low, lambda_D becomes large. Sizing cells purely
+    from Debye length causes cells to exceed the gap width and aperture
+    radius, producing massive cell-to-cell electric field jumps and singular matrices.
+
+    This function bounds dx and dy so that:
+      dx_max = min(ratio_debye * lambda_D, max_rel_jump * gap_min, gap_min / min_cells_gap)
+      dy_max = min(ratio_debye * lambda_D, max_rel_jump * r_min, r_min / min_cells_aperture)
+
+    Parameters
+    ----------
+    grids : list of dict
+        Grid specifications (each dict with 't', 'gap', 'r', 'V').
+    n0 : float
+        Plasma density [m^-3].
+    Te_up : float
+        Electron temperature [eV].
+    ratio_debye : float
+        User requested dx / lambda_D ratio.
+    max_rel_jump : float
+        Maximum allowable fractional change in electric field between adjacent cells (default 0.10 = 10%).
+    min_cells_gap : int
+        Minimum desired cells across the inter-grid gap.
+    min_cells_aperture : int
+        Minimum desired cells across the aperture radius.
+    min_cells_thickness : int
+        Minimum desired cells across the grid thickness.
+
+    Returns
+    -------
+    tuple of (dx_final_mm, dy_final_mm)
+    """
+    eps0 = 8.854e-12
+    q = 1.6e-19
+    debye_m = np.sqrt(eps0 * Te_up / (q * max(n0, 1.0) * 0.61))
+    debye_mm = debye_m * 1e3
+    dx_debye = float(ratio_debye) * debye_mm
+
+    if not grids:
+        return dx_debye, dx_debye
+
+    gaps = [float(g['gap']) for g in grids if float(g.get('gap', 0.0)) > 0.0]
+    radii = [float(g['r']) for g in grids if float(g.get('r', 0.0)) > 0.0]
+    thicknesses = [float(g['t']) for g in grids if float(g.get('t', 0.0)) > 0.0]
+
+    gap_min = min(gaps) if gaps else 1.0
+    r_min = min(radii) if radii else 0.5
+
+    # To guarantee cell-to-cell delta E / E <= max_rel_jump:
+    # 1. Across the acceleration gap where peak dV/dx occurs:
+    dx_geom = float(max_rel_jump) * gap_min
+
+    # 2. Transversely across the aperture radius:
+    dy_geom = float(max_rel_jump) * r_min
+
+    dx_final = min(dx_debye, dx_geom)
+    dy_final = min(dx_debye, dy_geom)
+
+    return float(dx_final), float(dy_final)
+
+
+def evaluate_mesh_efield_variation(
+    Ex,
+    Ey,
+    is_bound=None,
+    max_rel_jump: float = 0.10,
+    e_floor_ratio: float = 0.02,
+    percentile: float = 95.0,
+):
+    """
+    Evaluate node-to-node relative variation in electric field magnitude |E|.
+
+    Computes:
+      delta_x = |E_{i+1, j} - E_{i, j}| / max(E_{i, j}, E_{floor})
+      delta_y = |E_{i, j+1} - E_{i, j}| / max(E_{i, j}, E_{floor})
+
+    within the active field region in free space (where E >= 0.05 * E_max,
+    excluding solid conductors). Uses the 95th percentile to robustly evaluate
+    field smoothness throughout the extraction channel while excluding
+    unphysical numerical corner singularities at re-entrant 90-degree electrode edges.
+
+    Parameters
+    ----------
+    Ex : 2D ndarray
+        Axial electric field [V/m].
+    Ey : 2D ndarray
+        Transverse electric field [V/m].
+    is_bound : 2D bool ndarray or None
+        Boundary mask (True for solid grid electrodes).
+    max_rel_jump : float
+        Allowable jump threshold (default: 0.10 for 10%).
+    e_floor_ratio : float
+        Noise floor fraction of E_max to prevent division by near-zero.
+    percentile : float
+        Percentile for jump evaluation (default: 98.0).
+
+    Returns
+    -------
+    tuple of (max_jump_x, max_jump_y, is_compliant)
+    """
+    E = np.hypot(Ex, Ey)
+    E_max = float(np.max(E))
+    if E_max < 1e-6:
+        return 0.0, 0.0, True
+
+    E_floor = e_floor_ratio * E_max
+
+    # Relative jump along x in active field region
+    diff_x = np.abs(E[:, 1:] - E[:, :-1])
+    ref_x = np.maximum(np.maximum(E[:, 1:], E[:, :-1]), E_floor)
+    rel_x = diff_x / ref_x
+    active_x = ref_x >= 0.05 * E_max
+    if is_bound is not None:
+        free_x = (~is_bound[:, :-1]) & (~is_bound[:, 1:])
+        active_x &= free_x
+
+    if np.any(active_x):
+        max_jump_x = float(np.percentile(rel_x[active_x], percentile))
+    else:
+        max_jump_x = 0.0
+
+    # Relative jump along y in active field region
+    diff_y = np.abs(E[1:, :] - E[:-1, :])
+    ref_y = np.maximum(np.maximum(E[1:, :], E[:-1, :]), E_floor)
+    rel_y = diff_y / ref_y
+    active_y = ref_y >= 0.05 * E_max
+    if is_bound is not None:
+        free_y = (~is_bound[:-1, :]) & (~is_bound[1:, :])
+        active_y &= free_y
+
+    if np.any(active_y):
+        max_jump_y = float(np.percentile(rel_y[active_y], percentile))
+    else:
+        max_jump_y = 0.0
+
+    is_compliant = (max_jump_x <= max_rel_jump) and (max_jump_y <= max_rel_jump)
+    return max_jump_x, max_jump_y, is_compliant
+
+
+def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump: float = 0.10):
+    """
+    Automatically partition the domain into physical axial zones and estimate
+    physically-grounded coarsening factors based on Debye length, aperture
+    thickness, inter-grid gaps, plume expansion, and electric field gradient limits.
+
+    Zones created:
+      1. Presheath: [0, upstream_gap], factor = 1.0 (dense plasma, resolves Debye length)
+      2. For each grid i:
+         - Grid barrel: [x_i, x_i + t_i], factor = min(1.5, max(0.8, round((t_i / 15.0) / dx0, 1)))
+           (ensures >= 15 cells across thickness for aperture resolution)
+         - Inter-grid gap: [x_i + t_i, x_{i+1}], factor = min(1.0, max(0.5, round((gap_i / 20.0) / dx0, 1)))
+           (ensures steep acceleration/deceleration electric field jumps <= 10%)
+      3. Plume:
+         - Near Plume: [x_exit, x_exit + near_len], factor = 2.0 (neutralization & transition)
+         - Far Plume:  [x_exit + near_len, Lx], factor = 4.0 (dilute neutralized beam)
+    """
+    if not grids:
+        return [
+            {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Optics',    'x_start': min(Lx / 3.0, Lx), 'x_end': min(2.0 * Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': 4.0},
+        ]
+
+    zones = []
+    x_curr = 0.0
+    up_gap = min(float(upstream_gap_mm), Lx)
+
+    # 1. Presheath Zone
+    if up_gap > 1e-5:
+        zones.append({
+            'name': 'Presheath',
+            'x_start': round(x_curr, 5),
+            'x_end': round(up_gap, 5),
+            'factor': 1.0
+        })
+        x_curr = up_gap
+
+    # 2. Grid Barrels and Inter-Grid Gaps
+    num_grids = len(grids)
+    for i, g in enumerate(grids):
+        t_grid = float(g.get('t', 0.5))
+        gap = float(g.get('gap', 1.0))
+
+        # Grid barrel
+        if x_curr < Lx:
+            x_next = min(x_curr + t_grid, Lx)
+            if x_next - x_curr > 1e-5:
+                f_t = min(1.5, max(0.8, round((t_grid / 15.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Grid_{i+1}_barrel',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_t
+                })
+                x_curr = x_next
+
+        # Internal inter-grid gap (steepest electric field: keep cell size bounded to <= 10% jump)
+        if i < num_grids - 1 and x_curr < Lx:
+            x_next = min(x_curr + gap, Lx)
+            if x_next - x_curr > 1e-5:
+                # Inter-grid acceleration gap must not be coarsened beyond 1.0 to preserve <= 10% jump
+                f_gap = min(1.0, max(0.5, round((gap / 20.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Gap_{i+1}_{i+2}',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_gap
+                })
+                x_curr = x_next
+
+    # 3. Plume Zones (Near Plume and Far Plume)
+    plume_remaining = Lx - x_curr
+    if plume_remaining > 1e-5:
+        near_plume_len = min(1.0, 0.3 * plume_remaining)
+        # Near Plume
+        if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
+            x_next = round(x_curr + near_plume_len, 5)
+            zones.append({
+                'name': 'Near_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': x_next,
+                'factor': 2.0
+            })
+            x_curr = x_next
+
+        # Far Plume
+        if Lx - x_curr > 1e-5:
+            zones.append({
+                'name': 'Far_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': round(Lx, 5),
+                'factor': 4.0
+            })
+
+    return zones
+
+
+def estimate_stability_optimized_mesh_zones(
+    sim,
+    grids: list,
+    upstream_gap_mm: float,
+    Lx: float,
+    dx0: float,
+    remesh_cfg: dict = None,
+    max_rel_jump: float = 0.10,
+) -> list:
+    """
+    Generate an optimized non-uniform axial mesh partitioned dynamically around the
+    plasma sheath/meniscus boundary detected at runtime from potential field V(x, 0).
+
+    Zones created:
+      1. Presheath Deep: [0, x_meniscus - 2*lambda_D], coarsened (factor ~ 1.5 - 2.0x)
+         because electric field is near-zero and plasma is quiescent.
+      2. Presheath Meniscus: [x_meniscus - 2*lambda_D, upstream_gap], refined (factor ~ 0.7 - 0.8x)
+         to accurately resolve the 2D curved Bohm sonic surface and sheath curvature.
+      3. Grid Barrels & Acceleration Gaps: strictly bounded to keep cell-to-cell delta E <= 10%
+         and CFL compliant.
+      4. Plume:
+         - Near Plume: factor 2.0
+         - Far Plume: coarsened by factor 3.0 - 6.0x where plasma density is dilute.
+    """
+    if remesh_cfg is None:
+        remesh_cfg = {}
+
+    coarsen_presheath = float(remesh_cfg.get("coarsen_presheath_bulk", remesh_cfg.get("coarsen_presheath", 1.5)))
+    refine_meniscus = float(remesh_cfg.get("refine_meniscus_zone", remesh_cfg.get("refine_meniscus", 0.8)))
+    coarsen_plume = float(remesh_cfg.get("coarsen_far_plume", remesh_cfg.get("coarsen_plume", 4.0)))
+
+    if not grids:
+        return [
+            {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Optics',    'x_start': min(Lx / 3.0, Lx), 'x_end': min(2.0 * Lx / 3.0, Lx), 'factor': 1.0},
+            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': coarsen_plume},
+        ]
+
+    up_gap = min(float(upstream_gap_mm), Lx)
+
+    # 1. Detect Meniscus Location x_meniscus along the centerline y=0
+    x_meniscus = None
+    if hasattr(sim, 'V') and sim.V is not None and hasattr(sim, 'x_coords') and len(sim.x_coords) > 0:
+        try:
+            V_center = sim.V[0, :]
+            V_plasma = float(V_center[0])
+            Te_up = float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0)))
+            V_sheath = V_plasma - 0.5 * Te_up
+
+            mask_up = (sim.x_coords >= 0.0) & (sim.x_coords <= up_gap)
+            idx_up = np.where(mask_up)[0]
+            if len(idx_up) > 0:
+                below_sheath = idx_up[V_center[idx_up] <= V_sheath]
+                if len(below_sheath) > 0:
+                    x_meniscus = float(sim.x_coords[below_sheath[0]])
+        except Exception:
+            x_meniscus = None
+
+    lambda_D_mm = float(getattr(sim, 'debye_length_mm', 0.05))
+    if x_meniscus is None:
+        x_meniscus = max(0.15 * up_gap, min(0.75 * up_gap, up_gap - 2.0 * lambda_D_mm))
+    else:
+        x_meniscus = max(0.15 * up_gap, min(0.90 * up_gap, x_meniscus))
+
+    x_split = max(0.10 * up_gap, round(x_meniscus - 2.0 * lambda_D_mm, 5))
+    if x_split >= up_gap - 1e-4:
+        x_split = round(0.5 * up_gap, 5)
+
+    zones = []
+    x_curr = 0.0
+
+    # 1A. Deep Presheath
+    if x_split > 1e-5:
+        zones.append({
+            'name': 'Presheath_Deep',
+            'x_start': round(x_curr, 5),
+            'x_end': round(x_split, 5),
+            'factor': max(1.0, min(3.0, coarsen_presheath))
+        })
+        x_curr = x_split
+
+    # 1B. Active Meniscus & Sheath
+    if up_gap - x_curr > 1e-5:
+        zones.append({
+            'name': 'Presheath_Meniscus',
+            'x_start': round(x_curr, 5),
+            'x_end': round(up_gap, 5),
+            'factor': max(0.4, min(1.0, refine_meniscus))
+        })
+        x_curr = up_gap
+
+    # 2. Grid Barrels and Inter-Grid Gaps
+    num_grids = len(grids)
+    for i, g in enumerate(grids):
+        t_grid = float(g.get('t', 0.5))
+        gap = float(g.get('gap', 1.0))
+
+        # Grid barrel
+        if x_curr < Lx:
+            x_next = min(x_curr + t_grid, Lx)
+            if x_next - x_curr > 1e-5:
+                f_t = min(1.5, max(0.8, round((t_grid / 15.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Grid_{i+1}_barrel',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_t
+                })
+                x_curr = x_next
+
+        # Internal inter-grid gap
+        if i < num_grids - 1 and x_curr < Lx:
+            x_next = min(x_curr + gap, Lx)
+            if x_next - x_curr > 1e-5:
+                f_gap = min(1.0, max(0.5, round((gap / 20.0) / max(dx0, 1e-6), 1)))
+                zones.append({
+                    'name': f'Gap_{i+1}_{i+2}',
+                    'x_start': round(x_curr, 5),
+                    'x_end': round(x_next, 5),
+                    'factor': f_gap
+                })
+                x_curr = x_next
+
+    # 3. Plume Zones
+    plume_remaining = Lx - x_curr
+    if plume_remaining > 1e-5:
+        near_plume_len = min(1.0, 0.3 * plume_remaining)
+        if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
+            x_next = round(x_curr + near_plume_len, 5)
+            zones.append({
+                'name': 'Near_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': x_next,
+                'factor': 2.0
+            })
+            x_curr = x_next
+
+        if Lx - x_curr > 1e-5:
+            zones.append({
+                'name': 'Far_Plume',
+                'x_start': round(x_curr, 5),
+                'x_end': round(Lx, 5),
+                'factor': max(2.0, min(8.0, coarsen_plume))
+            })
+
+    return zones
+

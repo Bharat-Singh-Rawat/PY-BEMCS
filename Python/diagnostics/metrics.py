@@ -1,0 +1,228 @@
+"""
+Physical conservation metrics calculation routines for PY-BEMCS.
+
+Computes instantaneous system energy and charge budgets from the PIC simulator state.
+"""
+
+import numpy as np
+
+
+def compute_energy_budget(sim):
+    """
+    Compute and store the instantaneous total energy of the PIC system:
+
+        E_total = E_kinetic_ions + E_kinetic_electrons + E_field
+
+    where:
+        E_kinetic_ions      = sum_p  0.5 * m_ion * (vx^2 + vy^2 + vz^2) * macro_weight
+        E_kinetic_electrons = sum_e  0.5 * m_e   * (vx^2 + vy^2 + vz^2) * macro_weight
+        E_field             = (eps0/2) * integral(|E|^2) dV
+
+    Appends results to sim.energy_history_* and prints a console warning if
+    energy changes abruptly (> 5% by default) in a single step.
+
+    Returns
+    -------
+    dict with keys: t_s, ke_ions_J, ke_elec_J, field_J, total_J
+    """
+    t_now = sim.iteration * sim.dt
+
+    # --- Ion kinetic energy ---
+    if sim.num_p > 0:
+        v2 = (sim.p_vx[:sim.num_p]**2
+              + sim.p_vy[:sim.num_p]**2
+              + sim.p_vz[:sim.num_p]**2)
+        ke_i = float(np.sum(v2)) * 0.5 * sim.m_ion * sim.macro_weight
+    else:
+        ke_i = 0.0
+
+    # --- Electron kinetic energy ---
+    if sim.num_e > 0:
+        v2e = (sim.e_vx[:sim.num_e]**2
+               + sim.e_vy[:sim.num_e]**2
+               + sim.e_vz[:sim.num_e]**2)
+        ke_e = float(np.sum(v2e)) * 0.5 * sim.m_e * sim.macro_weight
+    else:
+        ke_e = 0.0
+
+    # --- Electrostatic field energy: (eps0/2) * integral(|E|^2) dV ---
+    Ex = getattr(sim, 'Ex', None)
+    Ey = getattr(sim, 'Ey', None)
+    if Ex is None or Ey is None:
+        V = getattr(sim, 'V', None)
+        if V is not None and getattr(V, 'ndim', 0) == 2 and V.shape[0] >= 2 and V.shape[1] >= 2:
+            dy_m = float(getattr(sim, 'dy', 0.05)) * 1e-3
+            dx_m = float(getattr(sim, 'dx', 0.05)) * 1e-3
+            Ey, Ex = np.gradient(-V, dy_m, dx_m)
+            sim.Ex = Ex
+            sim.Ey = Ey
+
+    if Ex is not None and Ey is not None:
+        eps0 = getattr(sim, 'eps0', 8.8541878128e-12)
+        if hasattr(sim, 'cell_vol_2d') and sim.cell_vol_2d is not None:
+            e_field = float(np.sum((Ex**2 + Ey**2) * sim.cell_vol_2d)) * 0.5 * eps0
+        elif hasattr(sim, 'cell_area_2d') and sim.cell_area_2d is not None:
+            e_field = float(np.sum((Ex**2 + Ey**2) * sim.cell_area_2d)) * 0.5 * eps0
+        else:
+            cell_area = (float(getattr(sim, 'dx', 0.05)) * 1e-3) * (float(getattr(sim, 'dy', 0.05)) * 1e-3)  # [m^2]
+            e_field = float(np.sum(Ex**2 + Ey**2)) * 0.5 * eps0 * cell_area
+    else:
+        e_field = 0.0
+
+    total = ke_i + ke_e + e_field
+
+    # --- Step-to-step conservation warning ---
+    if sim._prev_total_energy is not None and sim._prev_total_energy > 0.0:
+        rel_change = abs(total - sim._prev_total_energy) / sim._prev_total_energy
+        if rel_change > sim.energy_warning_threshold:
+            print(
+                f"[Energy Warning] iter={sim.iteration}: "
+                f"total energy changed by {rel_change*100:.1f}% in one step "
+                f"(prev={sim._prev_total_energy:.4e} J, now={total:.4e} J). "
+                f"KE_i={ke_i:.3e} J, KE_e={ke_e:.3e} J, E_field={e_field:.3e} J"
+            )
+    sim._prev_total_energy = total
+
+    # Append to history
+    sim.energy_history_t.append(t_now)
+    sim.energy_history_ke_i.append(ke_i)
+    sim.energy_history_ke_e.append(ke_e)
+    sim.energy_history_fe.append(e_field)
+    sim.energy_history_tot.append(total)
+
+    return dict(t_s=t_now, ke_ions_J=ke_i, ke_elec_J=ke_e, field_J=e_field, total_J=total)
+
+
+def compute_charge_budget(sim):
+    """
+    Compute and store the instantaneous charge budget of the PIC system:
+
+        Q_ions        = sum_p  q_ion * macro_weight
+        Q_electrons   = - sum_e e * macro_weight
+        Q_boltzmann   = integral (rho_e_continuum) dV
+        Q_free        = Q_ions + Q_electrons   (discrete macroparticles)
+        Q_net         = Q_free + Q_boltzmann   (total space charge)
+
+    Returns
+    -------
+    dict with keys: t_s, q_ions_C, q_elec_C, q_boltz_C, q_free_C, q_net_C
+    """
+    t_now = sim.iteration * sim.dt
+
+    # --- Ion charge ---
+    if sim.num_p > 0:
+        q_i = float(sim.num_p) * sim.q_ion * sim.macro_weight
+    else:
+        q_i = 0.0
+
+    # --- Kinetic Electron charge ---
+    if sim.num_e > 0:
+        q_e = - float(sim.num_e) * sim.q * sim.macro_weight
+    else:
+        q_e = 0.0
+
+    # --- Boltzmann fluid electron charge ---
+    if hasattr(sim, 'V') and sim.V is not None:
+        grids = getattr(sim, 'grids', [{'V': 1000}])
+        v_offset = getattr(sim, 'V_plasma_offset', 20.0)
+        V_p = grids[0]['V'] + v_offset if grids else 1020.0
+        Te = getattr(sim, 'Te_up', 3.0)
+        n0 = getattr(sim, 'n0_plasma', 1e17)
+
+        interior = ~sim.isBound if hasattr(sim, 'isBound') else slice(None)
+        bf = np.exp((np.minimum(sim.V[interior], V_p) - V_p) / Te)
+        if hasattr(sim, 'cell_vol_2d'):
+            cvol_int = sim.cell_vol_2d[interior]
+            q_b = float(np.sum(-sim.q * n0 * bf * cvol_int))
+        else:
+            cell_vol = (sim.dx * 1e-3) * (sim.dy * 1e-3) * 1e-3
+            q_b = float(np.sum(-sim.q * n0 * bf)) * cell_vol
+    else:
+        q_b = 0.0
+
+    q_free = q_i + q_e
+    q_net  = q_free + q_b
+
+    # Append to history
+    sim.charge_history_t.append(t_now)
+    sim.charge_history_q_i.append(q_i)
+    sim.charge_history_q_e.append(q_e)
+    sim.charge_history_q_b.append(q_b)
+    sim.charge_history_q_free.append(q_free)
+    sim.charge_history_q_net.append(q_net)
+
+    sim._prev_total_charge = q_net
+
+    return dict(
+        t_s=t_now,
+        q_ions_C=q_i,
+        q_elec_C=q_e,
+        q_boltz_C=q_b,
+        q_free_C=q_free,
+        q_net_C=q_net,
+    )
+
+
+def compute_rolling_variation(history, window=100, mode="rel_change", eps=1e-12):
+    """
+    Compute percentage variation of a time series across a rolling window of iterations.
+
+    Parameters
+    ----------
+    history : array-like
+        1D sequence of physical values across iterations.
+    window : int, optional
+        Window size in iterations (default 100).
+    mode : {'rel_change', 'p2p_spread', 'abs_change'}, optional
+        - 'rel_change': (Q[k] - Q[k-W]) / (|Q[k-W]| + eps) * 100 [%]
+        - 'abs_change': |Q[k] - Q[k-W]| / (|Q[k-W]| + eps) * 100 [%]
+        - 'p2p_spread': (max(Q[k-W:k]) - min(Q[k-W:k])) / (|mean(Q[k-W:k])| + eps) * 100 [%]
+    eps : float, optional
+        Small regularization constant to prevent division by zero.
+
+    Returns
+    -------
+    iters : np.ndarray
+        Indices corresponding to computed variations (0-indexed or 1-indexed matching history).
+    variations : np.ndarray
+        Percentage variation values for each valid iteration.
+    """
+    arr = np.asarray(history, dtype=np.float64)
+    n = len(arr)
+    if n <= 1:
+        return np.empty(0, dtype=int), np.empty(0, dtype=np.float64)
+
+    w = max(1, int(window))
+    if n <= w:
+        # If history has fewer elements than window, compute against the first available element
+        idx = np.arange(1, n)
+        if mode in ("rel_change", "abs_change"):
+            base = np.abs(arr[0]) + eps
+            diff = arr[1:] - arr[0]
+            if mode == "abs_change":
+                diff = np.abs(diff)
+            var = (diff / base) * 100.0
+        else: # p2p_spread
+            var = np.zeros(len(idx), dtype=np.float64)
+            for i, k in enumerate(idx):
+                sub = arr[:k + 1]
+                denom = np.abs(np.mean(sub)) + eps
+                var[i] = ((np.max(sub) - np.min(sub)) / denom) * 100.0
+        return idx, var
+
+    idx = np.arange(w, n)
+    if mode in ("rel_change", "abs_change"):
+        base = np.abs(arr[:n - w]) + eps
+        diff = arr[w:] - arr[:n - w]
+        if mode == "abs_change":
+            diff = np.abs(diff)
+        var = (diff / base) * 100.0
+    else:  # p2p_spread
+        var = np.zeros(len(idx), dtype=np.float64)
+        for i, k in enumerate(idx):
+            sub = arr[k - w : k + 1]
+            denom = np.abs(np.mean(sub)) + eps
+            var[i] = ((np.max(sub) - np.min(sub)) / denom) * 100.0
+
+    return idx, var
+

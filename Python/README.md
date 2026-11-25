@@ -24,19 +24,37 @@
 
 ## 🌟 Key Features & Upgrades
 
-* **Dual-Kernel Architecture (Taichi GPU + CPU Fallback)**: High-throughput 2D3V Boris particle advancement and bilinear charge deposition accelerated with Taichi (CUDA, Metal, Vulkan) with seamless, vectorized pure-NumPy CPU fallback kernels for maximum portability across any machine.
+* **Dual-Kernel Architecture (Taichi GPU + CPU Fallback)**: High-throughput 2D3V Boris particle advancement with fused in-register sub-stepping, bilinear charge deposition, and parallel GPU wall collision and boundary tracking accelerated with Taichi (Vulkan, CUDA, CPU) with seamless, vectorized pure-NumPy CPU fallback kernels for maximum portability across any machine.
+* **Machine-Aware Hardware Profiling & Adaptive Resource Allocation**: Automatic host hardware discovery (RAM, logical/physical CPU cores, GPU/Vulkan acceleration) persisted in `configurations/hardware_profile.json`, automatically scaling memory budgets, pre-allocating particle buffers, and balancing parallel sweep workloads.
+* **Presheath-Volume Particle Budgeting**: Real presheath-volume weighting ($N_{\text{inj}} = n_{x,\text{presheath}} \times n_{y,\text{inj}}$) eliminates artificial particle dilution across long domains, guaranteeing unconstrained target PPC (50--200) across low/mid densities ($10^{15}\dots 10^{17}\,\text{m}^{-3}$) while enforcing a hardware-scaled $\ge 1{,}000{,}000$ particle safety budget at extreme densities ($10^{19}\,\text{m}^{-3}$).
+* **Dynamic RAM-Aware Sweep Scheduler & Throttling Guard**: Parametric sweep engine dynamically scales concurrent execution workers based on real-time available system memory (throttling to 1--2 workers on heavy meshes) and presents an intuitive `[⚠️ RAM Guard: 1-2 workers]` alert badge in the GUI.
+* **Downstream Plume Truncation & Pre-Flight Advisory**: Automated pre-flight detection of excessively long downstream plume regions ($L_{\text{plume}} > 3 \cdot r_{\text{accel}}$), offering interactive runtime pause warnings and automatic geometric truncation (`"truncate_downstream_plume": true`) that cuts mesh size by >20% without impacting optical extraction physics.
+* **Simulation Timer & Exact Computational Clock**: High-resolution wall-clock tracking accounting for active computation time (`ActiveSimulationTimer`), ensuring exported metrics reflect exact execution duration independent of sleep/pause states.
+* **Coordinate Systems (Cartesian 2D Slab vs. Axisymmetric $r\text{--}z$ Cylindrical)**: Configurable via `"coordinate_system": "axisymmetric"` (or `"cartesian"`). In Axisymmetric mode, the solver models true 3D circular beamlets with exact annular control volumes ($V_{\mathrm{cell}} = 2\pi r \Delta r h_i^x$), on-axis L'Hôpital boundary condition ($c_{N,0} = 4.0$), Birdsall & Langdon local-Cartesian coordinate rotation preserving canonical angular momentum ($L_z = r v_\theta$) and transverse kinetic energy, uniform circular injection ($r = r_{\mathrm{inj}}\sqrt{U}$), and true 3D beamlet cone divergence ($\theta_{\mathrm{3D}} = \arctan2(\sqrt{v_r^2 + v_\theta^2}, v_x)$).
+* **Specular Symmetry Reflection**: In `half_hole` and axisymmetric modes, particles crossing the symmetry boundary ($y < 0$) or outer domain ($y > L_y$) undergo physical specular reflection ($y \leftarrow -y, v_y \leftarrow -v_y$) rather than being deleted, preserving high-angle crossover rays and resolving low-density divergence underprediction.
 * **Automated Numerical Physics Controls**: Built-in automated checks for spatial Debye length resolution ($\Delta x, \Delta y \le \lambda_{\mathrm{D}}$), plasma frequency integration limits ($\Delta t \le 2\pi/\omega_{\mathrm{pi}}$), and CFL velocity limits ($v_{\max} \Delta t \le \Delta x$).
-* **Modular JSON Configuration (`config.json`)**: Replaced legacy INI format with a clean, extensible `config.json` supporting arbitrary $N$-grid optics, discharge chamber parameters, and reaction cross-section tables, complete with in-app hot-reloading.
+* **Customizable Upstream Gap & Sheath Ratio Controls**: Interactive modal dialog (**Settings** button aside Upstream Gap) allowing users to inspect and adjust the physical calculation ratio (Presheath: $k \cdot r_{\mathrm{screen}}$; Entire Bulk Plasma: $N \cdot \lambda_{\mathrm{D}}$), reset to literature recommendations, or set a direct custom gap in millimeters that remains locked during parameter updates.
+* **Granular Export Parameter Selectors**: Dedicated pop-up checklist dialogs (**Parameters** buttons beside Data and Particle exports) to selectively choose which simulation variables and particle kinematics ($t, x, y, v_x, v_y, v_z, E, \text{type}$) are saved to `.csv` or `.txt`.
+* **Multi-Zone Non-Uniform Mesh Architecture**: Parametrizable geometric axial zoning (Presheath, Optics Barrels, Inter-grid Gaps, Near & Far Plume) with adaptive coarsening factors ($1.0\times$, $1.5\times$, $2.0\times$, $4.0\times$), reducing domain mesh cell count and Poisson solve times by 25--35% while maintaining strict sub-Debye resolution in dense plasma.
+* **Adaptive Picard & Sticky Newton-Raphson Poisson Solver**: Dynamic error residual tracking ($\Delta V_{\max} \le 50\text{ mV}$) that auto-scales Picard under-relaxation iterations with an automatic sticky Newton-Raphson fallback solver if stagnation occurs, completely eliminating unphysical potential excursions.
+* **Multi-Metric Steady-State Convergence & Exit Ion Current Stability**: Evaluates simultaneous stationarity across Total System Energy, Net Charge, Centerline Saddle-Point Potential, and Exit Ion Current ($I_{\mathrm{ion,exit}}$), preventing premature scenario completion during current transients in standalone runs and parametric sweeps.
+* **PPC-Mesh Ground-Truth 2D Density Diagnostics**: Computes physical plasma number density directly from the complete Particles-Per-Cell mesh field scaled by macro-weight and cell volumes ($n(x,y) = w_{\mathrm{macro}} \cdot \mathrm{PPC} / V_{\mathrm{cell}}$), delivering smooth, continuous 2D contours and 1D radial profiles in both instantaneous and time-averaged modes regardless of GUI particle display subsampling.
+* **Dynamic Midline Potential Range Autoscaling**: Centerline potential telemetry automatically rescales the Y-axis span when positive space-charge accumulation or virtual anode formations exceed $+100\,\text{V}$ (e.g. at $n_0 = 10^{19}\,\text{m}^{-3}$).
+* **Integrated Parametric Sweep Framework (GUI & Headless)**: Automated parameter space exploration (`SweepMixin`, `ParallelSweepWorker`, and `physics.headless_sweep`) across voltages, densities, and grid gaps with real-time multi-scenario switching, interactive high-density plume advisory holding, and RAM-guard throttling.
+* **Interactive Diagnostics Suite with Native Desktop Toolbars**: Multi-window diagnostic suite including Electric Potential (`field_window`), Mesh Discretization (`mesh_window`), Total Energy (`energy_window`), Total Charge (`charge_window`), PPC (`ppc_window`), 2D Log Density (`density_window`), Steady-State Convergence (`steady_state_window`), IEDF (`iedf_window`), Cross-Section Viewer (`cs_viewer_window`), and Hardware Performance (`perf_window`) with Matplotlib navigation toolbars and window controls.
+* **Modular Clean Architecture**: Refactored modular structure cleanly partitioned into `gui/app/` (UI layout, controls, sweep, export, rendering), `physics/` (simulator, mesh utils, backend, headless sweep, mixins, step pipeline), and `diagnostics/` for high stability and testability.
+* **Modular JSON Configuration (`config.json`)**: Extensible JSON configuration supporting arbitrary $N$-grid optics, discharge chamber parameters, and reaction cross-section tables, complete with in-app hot-reloading.
 * **In-App Standalone Executable Builder**: Compile the application into a single-file executable directly from the GUI (**Settings → Build .exe...**) using an asynchronous background thread (`QThread`) with live progress milestone tracking.
 * **Multi-Core Benchmarking Suite (`benchmarks/`)**: Automated parallel multi-process parametric sweeps for CEX erosion rates, Electron Backstreaming (EBS) limits, primary beam impingement / grid scraping, and perveance-divergence curves.
 * **Thermo-Mechanical Cantilever Grid Deflection**: Real-time modeling of grid aperture deformation driven by Euler--Bernoulli cantilever thermal expansion ($\delta = \frac{\alpha \Delta T L^2}{2t}$), with dynamic mesh distortion and Poisson refactorization.
-* **Live Telemetry & Diagnostics**: Real-time tracking of 95th-percentile beam divergence ($\theta_{95}$), centerline saddle-point potential, Ion Energy Distribution Function (IEDF), and asynchronous progress dialogs for CSV, phase-space, and GIF exports.
+* **Live Telemetry & Divergence Analysis**: Real-time tracking of 95th-percentile beam divergence ($\theta_{95}$), midline divergence, centerline saddle-point potential, and interactive axial divergence evaluation plane controls positioned cleanly under the telemetry graphs.
+* **Blitted Real-Time GUI Display & Display Particle Controls**: High-throughput Matplotlib blitting (`canvas.blit`) updates live particle trajectories in under $10\text{ ms}$ on top of cached domain contours. Default display set to `Custom: 100,000` particles for high-fidelity extraction beam visualization; lightweight power-saving settings (`None` / `1,000`) are provided for extended sweeps and battery-powered laptops lacking dedicated GPUs.
 
 ---
 
 ## 🔬 Numerical Controls & Physics Validation
 
-When generating the simulation domain (`build_domain`), the engine automatically verifies the physical consistency of your grid resolution and numerical time step:
+When generating the simulation domain (`build_domain`), the engine automatically verifies the physical consistency of your grid resolution, sheath boundaries, and numerical time step:
 
 1. **Debye Length Resolution ($\lambda_{\mathrm{D}}$)**:
    $$\lambda_{\mathrm{D}} = \sqrt{\frac{\varepsilon_0 T_{\mathrm{e,up}}}{e \cdot (0.61 n_0)}}, \qquad \Delta x \le \lambda_{\mathrm{D}} \quad \text{and} \quad \Delta y \le \lambda_{\mathrm{D}}$$
@@ -47,41 +65,123 @@ When generating the simulation domain (`build_domain`), the engine automatically
 3. **Courant--Friedrichs--Lewy (CFL) Velocity Bound**:
    $$v_{\max} = v_{\mathrm{Bohm}} + 4 v_{\mathrm{thermal,i}} = \sqrt{\frac{Z e T_{\mathrm{e}}}{m_{\mathrm{ion}}}} + 4\sqrt{\frac{Z e T_{\mathrm{i}}}{m_{\mathrm{ion}}}}, \qquad \frac{\Delta x}{\Delta t} \ge v_{\max}, \quad \frac{\Delta y}{\Delta t} \ge v_{\max}$$
    Guarantees that fast particles do not skip entire mesh cells within a single time increment.
-4. **Dynamic Domain & Geometry Modes**:
-   - **Axial Extent**: $L_x = \SI{1.5}{\milli\meter} + \sum_k (t_k + g_k) + \SI{3.0}{\milli\meter}$ dynamically computed from the grid stack.
-   - **`half_hole`**: Axisymmetric half-aperture with specular symmetry reflection at $y = 0$.
-   - **`one_hole`**: Full single-aperture extraction domain with periodic boundary conditions along $y$.
-   - **`two_holes`**: Dual-aperture coupling domain with periodic boundaries along $y$.
+4. **Upstream Sheath & Extraction Gap Sizing**:
+   - **Presheath Mode (Default)**: Automatically sized from the screen grid aperture radius: $\text{gap}_{\mathrm{up}} = 0.75 \cdot r_{\mathrm{screen}}$.
+   - **Entire Bulk Plasma Mode**: Sized via Debye sheath criteria: $\text{gap}_{\mathrm{up}} = N \cdot \lambda_{\mathrm{D}}$, where $N = 80$ ($n_0 \le 10^{17}\,\si{\per\meter\cubed}$), $N = 40$ ($10^{17} < n_0 \le 4\times 10^{17}\,\si{\per\meter\cubed}$), and $N = 30$ ($n_0 > 4\times 10^{17}\,\si{\per\meter\cubed}$).
+   - **Custom Manual Override**: Users can specify an arbitrary physical gap directly in millimeters via the **Settings** dialog.
+5. **Dynamic Domain & Geometry Modes**:
+   - **Axial Extent**: $L_x = \text{gap}_{\mathrm{up}} + \sum_k (t_k + g_k) + L_{\mathrm{downstream}}$ dynamically computed from the grid stack.
+   - **`half_hole`**: Half-aperture domain with specular symmetry reflection at $y = 0$ (default, required for axisymmetric simulations).
+   - **`one_hole`**: Full single-aperture extraction domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+   - **`two_holes`**: Dual-aperture coupling domain with periodic boundaries along $y$ (Cartesian 2D slab only).
+   - **Why Multi-Hole Modes are Blocked in Axisymmetric Configuration**: In cylindrical coordinates ($r\text{--}z$), $r=0$ is the central axis of rotational revolution. Revolving an aperture centered at $r > 0$ generates a hollow toroidal ring (donut-shaped channel) rather than a circular beamlet, while adjacent discrete holes break axisymmetry ($\partial/\partial\theta \ne 0$) and require a 3D solver. Periodic boundaries along $r$ are physically meaningless because mapping $r = L_y$ to $r = 0$ violates charge conservation and Gauss's law. Therefore, Axisymmetric mode strictly constrains geometry to `half_hole`.
+6. **Aperture & Injection Transverse Controls**:
+   - **Hole-Boundary Distance (hole_boundary_dist_mm)**: Controls the minimum solid webbing margin between the outermost grid aperture wall and the top domain boundary $.
+   - **Injection Y-Length (inj_y_length_mm)**: Controls the transverse/radial span across which upstream ions are injected at  = 0$. By default, it equals the screen grid aperture radius {\mathrm{screen}}$ (Auto button resets to {\mathrm{screen}}$), but can be increased up to the domain height $ to model expanded Debye sheath curvature over the solid screen grid webbing at low plasma densities.
 
 ---
 
 ## 📁 Repository Structure
 
-```text
+`	ext
 Python/
-├── main.py                         # PyQt5 GUI application with live diagnostics & .exe builder
-├── physics_engine.py               # DigitalTwinSimulator (Taichi GPU + NumPy CPU kernels)
-├── run_simulation_from_config.py   # Headless simulation runner reading config.json
-├── config.json                     # Primary JSON simulation configuration
+├── main.py                         # PyQt5 GUI application entry point
+├── physics_engine.py               # Compatibility shim for DigitalTwinSimulator
+├── run_simulation_from_config.py   # Headless simulation runner reading JSON configs
+├── configurations/                 # JSON simulation configuration profiles
+│   ├── config.json                 # Primary JSON simulation configuration
+│   ├── configNSTAR.json            # NSTAR benchmark configuration
+│   ├── configRF.json               # RF co-extraction configuration
+│   ├── newConfig.json              # Custom/experimental multi-grid configuration
+│   └── hardware_profile.json       # Host hardware capabilities & adaptive memory bounds
+├── analyses/                       # Technical analysis reports & solver verification
+│   ├── diagnostic_and_stability_improvements.md # Diagnostic, PPC density & stability criteria report
+│   ├── injection_ppc_analysis.md   # Particle injection, PPC scaling & hardware budgeting report
+│   ├── low_density_divergence_report.md # Beam divergence investigation & NSTAR study
+│   ├── new_mesh_configuration.md   # Non-uniform multi-zone mesh walkthrough
+│   └── poisson_solver_convergence_report.md # Poisson convergence & adaptive solver report
 ├── sample.txt                      # Example custom cross-section / SEE data table
+├── pytest.ini                      # Pytest configuration
+├── gui/                            # Modular PyQt5 GUI implementation
+│   ├── app/                        # Application layout, control mixins & rendering
+│   │   ├── main_window.py          # Central DigitalTwinApp window
+│   │   ├── ui_builder.py           # Control panel, buttons & layout builder
+│   │   ├── dialogs_mixin.py        # Pop-up dialog openers & state handlers
+│   │   ├── config_mixin.py         # Config persistence, JSON syncing & gap auto-update
+│   │   ├── sim_control.py          # Worker lifecycle & simulation loop controls
+│   │   ├── sweep_mixin.py          # Parametric sweep controller & scenario switcher
+│   │   ├── export.py               # Selective CSV data & particle export routines
+│   │   ├── figure_layout.py        # Matplotlib subplots & figure layout
+│   │   └── rendering.py            # Canvas blitting, static domain & live plots
+│   ├── dialogs.py                  # Modal configuration dialogs (Upstream Gap, Exports, Sweep, etc.)
+│   ├── widgets.py                  # Specialized GUI widgets (ScientificSpinBox)
+│   ├── bootstrap.py                # HiDPI initialization & asset directory resolver
+│   ├── config_io.py                # JSON configuration serialization & validation
+│   └── workers/                    # Background threads & multiprocessing workers
+│       ├── simulation_worker.py    # Multi-threaded PIC-MCC simulation loop worker
+│       ├── sweep_worker.py         # Multi-process parallel parametric sweep worker
+│       └── pyinstaller_worker.py   # Asynchronous standalone .exe builder
+├── physics/                        # Computational PIC-MCC physics core
+│   ├── simulator.py                # DigitalTwinSimulator state container & orchestrator
+│   ├── backend.py                  # Taichi backend initialization & GPU memory management
+│   ├── hardware.py                 # System discovery, RAM estimation & hardware profile manager
+│   ├── active_clock.py             # Active simulation runtime clock tracking
+│   ├── constants.py                # Fundamental physical constants (SI) & materials
+│   ├── mesh_utils.py               # Multi-zone non-uniform mesh & domain zoning routines
+│   ├── headless_sweep.py           # Headless parallel scenario runner & convergence checker
+│   ├── kernels_taichi.py           # GPU-accelerated PIC particle push & deposition
+│   ├── kernels_cpu.py              # Vectorized NumPy CPU fallback kernels
+│   ├── step/                       # Modular simulation step phases
+│   │   ├── context.py              # Step execution context container
+│   │   ├── injection.py            # Upstream Bohm sheath macroparticle injection
+│   │   ├── field_solve.py          # Charge deposition & Poisson solver trigger
+│   │   ├── push.py                 # Boris leapfrog particle advancement & sub-stepping
+│   │   ├── ion_walls.py            # Grid solid collision tracking & boundary conditions
+│   │   ├── collisions.py           # Monte Carlo Charge Exchange (CEX) scattering
+│   │   ├── electrons.py            # Electron pusher & neutralizer injection
+│   │   ├── thermal.py              # 2D heat diffusion, radiation & cantilever deflection
+│   │   └── probes.py               # Virtual Faraday cups & divergence plane diagnostics
+│   └── mixins/                     # Physics mixins (domain, fields, particles, thermal)
+│       ├── domain.py               # Geometry construction & boundary mask synthesis
+│       ├── mesh.py                 # Mesh discretization & non-uniform coordinate mapping
+│       ├── poisson.py              # Unified Poisson solver interface & Newton fallback
+│       ├── poisson_cpu.py          # SuperLU sparse CPU Poisson-Boltzmann solver
+│       ├── poisson_gpu.py          # GPU-accelerated CuPy sparse Poisson solver
+│       ├── particles.py            # Macroparticle memory allocation & species setup
+│       ├── materials.py            # Grid thermophysical properties & sputtering models
+│       └── diagnostics.py          # Real-time telemetry, energy & charge metrics
+├── diagnostics/                    # Standalone interactive diagnostic windows
+│   ├── charge_window.py            # Total charge conservation & net current monitor
+│   ├── density_window.py           # 2D plasma number density & radial cut profiles
+│   ├── energy_window.py            # Total, kinetic & potential energy monitor
+│   ├── field_window.py             # 2D electric potential contour & vector visualizer
+│   ├── mesh_window.py              # Non-uniform computational grid & substep inspector
+│   ├── iedf_window.py              # Ion energy distribution function (IEDF) spectrum
+│   ├── steady_state_window.py      # Rolling variance steady-state convergence monitor
+│   ├── cs_viewer_window.py         # Reaction cross-section & spline interpolation viewer
+│   ├── ppc_window.py               # Particles-per-cell (PPC) density diagnostic
+│   ├── metrics.py                  # Physical energy, charge, and divergence estimators
+│   ├── performance_monitor.py      # Telemetry logging & step timing diagnostic
+│   └── perf_window.py              # Real-time hardware performance & loop timer
 ├── benchmarks/                     # Parallel multi-core physics sweep scripts
 │   ├── benchmark_cex.py            # CEX erosion rate vs. neutral density sweep
 │   ├── benchmark_ebs.py            # EBS saddle-point potential vs. accelerator voltage
 │   ├── benchmark_impingement.py    # Primary ion grid impingement fraction vs. perveance
 │   ├── benchmark_perveance.py      # Beam divergence vs. perveance across multiple gaps
 │   └── benchmark_perveance_Vs_Sweep.py # Divergence vs. Screen grid voltage sweep
+├── tests/                          # Automated pytest test suite (140+ unit/integration tests)
 ├── docs/                           # Physics and user manuals (LaTeX & PDF)
 │   ├── PY-BEMCS_Manual.tex         # Complete LaTeX physics reference manual
 │   └── PY-BEMCS_Manual.pdf         # Compiled user manual
 └── README.md                       # This documentation file
-```
+`
 
 ---
 
 ## 🚀 Installation & Setup
 
 ### 1. Prerequisites
-Python 3.10+ (Python 3.12 recommended).
+Python 3.10+ (Python 3.12/3.13 recommended).
 
 ```bash
 # Navigate to the Python directory
@@ -113,14 +213,19 @@ pip install numpy scipy matplotlib PyQt5 Pillow taichi pyinstaller
 ```bash
 python main.py
 ```
+* **Upstream Gap & Sheath Settings**: Click the small **Settings** button next to **Upstream Gap (mm)** to inspect the active ratio, adjust the calculation factor, or enter a custom physical gap.
+* **Selective Data & Particle Export**: Click **Parameters** beside either **Export Data** or **Export Particle Data** to choose exactly which variables and kinematics columns to write.
+* **Interactive Diagnostics**: Launch external diagnostic windows (**Diagnostics** menu or buttons) equipped with Matplotlib navigation toolbars (Pan/Zoom/Save) and desktop window minimize/maximize controls.
 * **Hot-Reloading Configurations**: Go to **Settings → Open Config JSON...** or **Settings → Reload config.json** to swap configurations on the fly.
 * **Build Standalone Executable**: Click **Settings → Build .exe...**, select a destination directory, and track real-time compilation progress.
 * **Configure Species & Materials**: Manage species via **Beam → Ion Species...**, material presets via **Materials → Grid Material...**, and custom reaction tables via **Beam → Cross-Section Manager...**.
 
-### 2. Headless Batch Execution via `config.json`
+### 2. Headless Batch Execution via Configuration JSON
 Run simulations in headless / cluster mode without launching a GUI:
 ```bash
 python run_simulation_from_config.py
+# Or supply a specific configuration file:
+python run_simulation_from_config.py configurations/configNSTAR.json
 ```
 
 ### 3. Parallel Multi-Core Benchmarking Sweeps
@@ -135,9 +240,9 @@ python benchmarks/benchmark_perveance_Vs_Sweep.py
 
 ---
 
-## ⚙️ Configuration Guide (`config.json`)
+## ⚙️ Configuration Guide (`configurations/config.json`)
 
-The simulator is driven by `config.json`. Below is a standard multi-grid configuration:
+The simulator is driven by JSON configuration files located in `configurations/` (defaulting to `configurations/config.json`). Below is a standard multi-grid configuration:
 
 ```json
 {
@@ -149,6 +254,7 @@ The simulator is driven by `config.json`. Below is a standard multi-grid configu
     "preset": "Molybdenum"
   },
   "simulation": {
+    "coordinate_system": "axisymmetric",
     "n0_plasma": 7.73e17,
     "Te_up": 8.5,
     "Ti": 0.034,

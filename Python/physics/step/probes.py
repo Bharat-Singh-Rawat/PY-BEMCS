@@ -1,0 +1,92 @@
+"""
+Centerline and mid-hole saddle point potential evaluation, plus PPC spatial binning.
+"""
+import numpy as np
+from .context import StepContext
+
+
+def step_midhole_probe(sim, ctx: StepContext):
+    """Evaluate centerline/saddle potential at the axial midpoint of the first downstream grid."""
+    grids = ctx.grids
+    geometry = getattr(sim, 'geometry', 'half_hole')
+    hole_centers = getattr(sim, 'hole_centers', None)
+
+    if not hole_centers:
+        if grids and geometry in ('one_hole', 'two_holes'):
+            hole_centers = [0.5 * getattr(sim, 'Ly', 3.0)] if geometry == 'one_hole' else [0.25 * getattr(sim, 'Ly', 3.0), 0.75 * getattr(sim, 'Ly', 3.0)]
+        else:
+            hole_centers = [0.0]
+
+    if len(grids) >= 2:
+        x_grid_mm = 0.5 * (sim.grid_x_starts[1] + sim.grid_x_ends[1])
+    elif len(grids) == 1:
+        x_grid_mm = 0.5 * (sim.grid_x_starts[0] + sim.grid_x_ends[0])
+    else:
+        x_grid_mm = sim.Lx * 0.5
+
+    x_idx = sim._x_to_ix(x_grid_mm)
+    y_c_first = hole_centers[0]
+    y_idx = int(np.clip(round(y_c_first / sim.dy), 0, sim.ny - 1))
+    min_pot = float(sim.V[y_idx, x_idx])
+    sim.min_pot = min_pot
+    sim.saddle_point_potential = min_pot
+    if hasattr(sim, 'potential_history'):
+        sim.potential_history.append(min_pot)
+    ctx.min_pot = min_pot
+
+
+def step_end_accounting(sim, ctx: StepContext):
+    """Compute per-cell particle counts, transparency, performance metrics, and build return tuple."""
+    ctx.trans_last_frame = sim.get_third_grid_transparency_frame()
+
+    p_x_active = sim.p_x[:sim.num_p]
+    p_y_active = sim.p_y[:sim.num_p]
+
+    ix = sim._x_to_ix(p_x_active)
+    iy = np.clip(np.round(p_y_active / sim.dy).astype(int), 0, sim.ny - 1)
+
+    flat_idx = iy * sim.nx + ix
+    ppc_flat = np.bincount(flat_idx, minlength=sim.nx * sim.ny)
+    ppc_map = ppc_flat.reshape((sim.ny, sim.nx))
+    sim.current_ppc_map = ppc_map
+    if not hasattr(sim, 'accum_ppc_map') or sim.accum_ppc_map is None or sim.accum_ppc_map.shape != (sim.ny, sim.nx):
+        sim.accum_ppc_map = np.zeros_like(ppc_map, dtype=np.float64)
+    sim.accum_ppc_map += ppc_map
+    sim.ppc_steps_count = getattr(sim, 'ppc_steps_count', 0) + 1
+
+    # Species-resolved PPC accounting (Primary vs CEX ions)
+    if hasattr(sim, 'p_isCEX') and sim.p_isCEX is not None and len(sim.p_isCEX) >= sim.num_p and sim.num_p > 0:
+        is_cex = sim.p_isCEX[:sim.num_p]
+        if np.any(is_cex):
+            cex_flat = np.bincount(flat_idx[is_cex], minlength=sim.nx * sim.ny)
+            sim.current_cex_ppc_map = cex_flat.reshape((sim.ny, sim.nx))
+        else:
+            sim.current_cex_ppc_map = np.zeros((sim.ny, sim.nx), dtype=np.int32)
+    else:
+        sim.current_cex_ppc_map = np.zeros((sim.ny, sim.nx), dtype=np.int32)
+
+    sim.current_prim_ppc_map = np.maximum(0, sim.current_ppc_map - sim.current_cex_ppc_map)
+    if not hasattr(sim, 'accum_cex_ppc_map') or sim.accum_cex_ppc_map is None or sim.accum_cex_ppc_map.shape != (sim.ny, sim.nx):
+        sim.accum_cex_ppc_map = np.zeros((sim.ny, sim.nx), dtype=np.float64)
+    sim.accum_cex_ppc_map += sim.current_cex_ppc_map
+
+    # Exit ion current history for steady-state stationarity evaluation
+    i_exit_now = float(getattr(sim, 'exit_ion_current_avg', getattr(sim, 'exit_ion_current_step', 0.0)))
+    if not hasattr(sim, 'ion_current_history') or sim.ion_current_history is None:
+        sim.ion_current_history = []
+    sim.ion_current_history.append(i_exit_now)
+    sim.exit_ion_current_history = sim.ion_current_history
+
+    thresh = getattr(sim, 'min_ppc_threshold', 3)
+    low_ppc_mask = (ppc_map > 0) & (ppc_map < thresh)
+    sim.total_active_cells = int(np.count_nonzero(ppc_map > 0))
+    sim.low_ppc_cells = int(np.count_nonzero(low_ppc_mask))
+
+    if sim._perf_monitor is not None:
+        from physics.active_clock import get_active_clock
+        step_wall = get_active_clock() - getattr(sim, '_step_t0', get_active_clock())
+        if step_wall > 2.0:
+            step_wall = min(step_wall, 0.5)
+        sim._perf_monitor.record_step(sim, step_wall)
+
+    return ctx.remeshed, ctx.min_pot, ctx.current_div, sim.T_grids, ctx.trans_last_frame

@@ -1,0 +1,41 @@
+"""
+Diagnostics package for PY-BEMCS.
+
+Contains performance monitoring, physical conservation budgets (energy & charge),
+and Qt diagnostic pop-up visualization windows.
+"""
+
+from .performance_monitor import PerformanceMonitor, StepDiagnostics
+from .metrics import compute_energy_budget, compute_charge_budget, compute_rolling_variation
+from .cs_viewer_window import CrossSectionViewerWindow
+from .iedf_window import IEDFWindow
+from .ppc_window import PPCWindow
+from .density_window import DensityWindow
+from .energy_window import PhysicalConstraintsWindow, TotalEnergyWindow
+from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
+from .perf_window import PerformanceMonitorWindow
+from .mesh_window import MeshWindow, DisplacementSubstepsWindow, SubstepGraphWidget
+from .field_window import FieldDiagnosticWindow
+from .steady_state_window import SteadyStateWindow
+
+__all__ = [
+    "PerformanceMonitor",
+    "StepDiagnostics",
+    "compute_energy_budget",
+    "compute_charge_budget",
+    "compute_rolling_variation",
+    "CrossSectionViewerWindow",
+    "IEDFWindow",
+    "PPCWindow",
+    "DensityWindow",
+    "PhysicalConstraintsWindow",
+    "TotalEnergyWindow",
+    "TotalChargeMonitorWindow",
+    "ChargeMonitorWindow",
+    "PerformanceMonitorWindow",
+    "MeshWindow",
+    "DisplacementSubstepsWindow",
+    "SubstepGraphWidget",
+    "FieldDiagnosticWindow",
+    "SteadyStateWindow",
+]

@@ -32,7 +32,7 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 - **Python Digital Twin (Latest Modular Implementation — Version 2.0)**
   - **GUI Application (`Python/main.py`):** Interactive PyQt5 desktop suite featuring live plasma visualization, multi-grid optics geometry editor, RF co-extraction controls, IEDF/EEDF diagnostics, cross-section manager, and an in-app PyInstaller `.exe` compiler.
   - **Physics Engine (`Python/physics_engine.py`):** High-performance `DigitalTwinSimulator` featuring a dual-kernel architecture (Taichi GPU acceleration + pure-NumPy CPU fallback), 2D3V Boris particle pusher, SuperLU/CuPy Poisson solver, in-situ sputter erosion, thermal conduction, and automated numerical validation checks.
-  - **Headless Batch Runner (`Python/run_simulation_from_config.py`):** Cluster- and CLI-friendly headless runner reading configuration from `Python/config.json`.
+  - **Headless Batch Runner (`Python/run_simulation_from_config.py`):** Cluster- and CLI-friendly headless runner reading configuration from `Python/configurations/config.json` (or any specified config).
   - **Multi-Core Benchmarking Suite (`Python/benchmarks/`):** Parallel sweep scripts for CEX erosion rates, Electron Backstreaming (EBS) limits, primary beam grid impingement, and perveance-divergence curves.
   - **Documentation & User Manual (`Python/docs/`):** Complete LaTeX reference manual (`PY-BEMCS_Manual.tex`) and compiled PDF guide (`PY-BEMCS_Manual.pdf`).
 - **Legacy Python Single-File App (`Python/transient_digital_twin.py`)**
@@ -48,6 +48,11 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 
 ## 🌟 Key Features & Capabilities
 
+### 🌐 Non-Uniform Multi-Zone Mesh & Adaptive Field Solvers
+- **Multi-Zone Non-Uniform Mesh:** 3 parametrizable geometric axial zones (Presheath, Optics Barrels, Plume) with adaptive coarsening factors (.0\times, 1.5\times, 2.0\times, 4.0\times$), cutting cell count and solve times by 25--35% while maintaining strict sub-Debye resolution.
+- **Adaptive Picard & Newton-Raphson Solver:** Real-time residual tracking ($\Delta V_{\max} \le 50\text{ mV}$) that auto-scales Picard iterations and automatically engages a sticky Newton-Raphson fallback solver if stagnation occurs.
+- **Automated Parametric Sweep Framework:** Multi-threaded and multi-process batch execution (SweepMixin, ParallelSweepWorker, and headless_sweep.py) with multi-metric steady-state convergence criteria.
+
 ### ⚡ Dual-Kernel Hardware Acceleration
 - **Taichi GPU Acceleration:** Particle pusher (2D3V Boris algorithm), bilinear charge density deposition, and 2D thermal conduction run natively on GPU via Taichi (supporting Vulkan, CUDA, and Metal backends).
 - **Vectorized CPU Fallback:** Seamless, pure-NumPy CPU fallback kernels ensure 100% functionality on CPU-only machines or within frozen executable bundles.
@@ -55,6 +60,8 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 
 ### 🔬 Advanced Core Physics
 - **Self-Consistent Beam Extraction:** Meniscus formation governed by upstream Bohm velocity criterion and sheath thermodynamics.
+- **Coordinate Systems (Axisymmetric $r\text{--}z$ vs. Cartesian 2D Slab):** Toggle between 2D planar slit optics (`"cartesian"`) and true 3D circular beamlets (`"axisymmetric"`). The cylindrical solver incorporates exact annular control volumes ($V_{\mathrm{cell}} = 2\pi r \Delta r h_i^x$), L'Hôpital on-axis boundary handling ($c_{N,0} = 4.0$), Birdsall & Langdon local-Cartesian Boris rotation conserving angular momentum ($L_z = r v_\theta$) and transverse kinetic energy, and true 3D beamlet cone divergence ($\theta_{\mathrm{3D}} = \arctan2(\sqrt{v_r^2 + v_\theta^2}, v_x)$).
+- **Specular Transverse Reflection:** In `half_hole` and axisymmetric modes, particles crossing the centerline ($y < 0$) or domain boundary ($y > L_y$) undergo physical specular reflection ($y \leftarrow -y, v_y \leftarrow -v_y$) rather than being deleted, preserving crossover trajectories and resolving low-perveance divergence underprediction.
 - **Artificial Electron Mass Approximation:** Accelerated multi-scale time-stepping ($m_e = M_{\mathrm{ion}} / 100\dots 1000$).
 - **Charge-Exchange (CEX) Collisions:** Monte Carlo collision modeling with probabilistic scattering (Birdsall/Roy model) and customizable cross-section data tables.
 - **In-Situ Dynamic Sputter Erosion:** Real-time grid mass removal and hole geometry enlargement driven by primary and CEX ion impacts.
@@ -68,6 +75,8 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 - **Live Visualizations:** Real-time ion/electron trajectory tracking, grid temperature heatmaps, sputter damage maps, and radial accelerator grid erosion groove profiles.
 - **95th-Percentile Beam Divergence ($\theta_{95}$):** Continuous tracking of beam envelope divergence.
 - **Saddle-Point Potential & EBS Monitoring:** Centerline saddle-point potential tracking to detect Electron Backstreaming risk barriers ($V_{\mathrm{saddle}} \le -5\,\text{V}$).
+- **2D Plasma Density Visualizer (density_window.py):** Logarithmic 2D number density maps and radial density profiles at user-defined axial evaluation planes.
+- **Steady-State Convergence Monitor (steady_state_window.py):** Real-time multi-variable rolling variance tracking ($\le 1.0\%$) with automated stabilization detection.
 - **Energy Distribution Function Viewer (IEDF / EEDF):** Dedicated diagnostic window to inspect ion and electron energy spectra.
 - **Cross-Section Manager:** Visual log-log cubic spline fitting and interpolation for custom Charge Exchange (CX), Secondary Electron Emission (SEE), and gas mixture interaction data.
 - **Material Preset Library:** Built-in properties for Molybdenum, SS316 Stainless Steel, Titanium, and Graphite, with fully customizable thermal and sputtering coefficients.
@@ -95,9 +104,13 @@ When generating the simulation domain (`build_domain`), the physics engine autom
 
 4. **Dynamic Domain & Geometry Modes**:
    - **Axial Domain Length:** $L_x = 1.5\,\text{mm} + \sum_k (t_k + g_k) + 3.0\,\text{mm}$ automatically computed from the grid geometry.
-   - **`half_hole`:** Axisymmetric half-aperture with specular symmetry reflection at $y = 0$ (default, fastest).
-   - **`one_hole`:** Full single-aperture extraction domain with periodic boundary conditions along $y$.
-   - **`two_holes`:** Dual-aperture coupling domain with periodic boundary conditions along $y$.
+   - **`half_hole`:** Half-aperture domain with specular symmetry reflection at $y = 0$ (default, required for axisymmetric simulations).
+   - **`one_hole`:** Full single-aperture extraction domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+   - **`two_holes`:** Dual-aperture coupling domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
+   - **Why Multi-Hole Modes are Blocked in Axisymmetric Configuration:** In cylindrical coordinates ($r\text{--}z$), $r=0$ is the singular axis of rotational symmetry. Revolving an aperture located at $r > 0$ generates a hollow toroidal ring (donut-shaped channel) rather than a circular beamlet, while adjacent discrete holes break axisymmetry ($\partial/\partial\theta \ne 0$) and require a 3D solver. Furthermore, periodic boundary conditions along $r$ are physically meaningless because mapping $r = L_y$ to $r = 0$ couples cells of unequal volume and violates charge conservation. Therefore, Axisymmetric mode strictly constrains geometry to `half_hole`.
+6. **Aperture & Injection Transverse Controls**:
+   - **Hole-Boundary Distance (hole_boundary_dist_mm)**: Controls the minimum solid webbing margin between the outermost grid aperture wall and the top domain boundary $.
+   - **Injection Y-Length (inj_y_length_mm)**: Controls the transverse/radial span across which upstream ions are injected at  = 0$. By default, it equals the screen grid aperture radius {\mathrm{screen}}$ (Auto button resets to {\mathrm{screen}}$), but can be increased up to the domain height $ to model expanded Debye sheath curvature over the solid screen grid webbing at low plasma densities.
 
 ---
 
@@ -193,10 +206,12 @@ python Python/main.py
 - **Build Standalone Executable:** Click **Settings → Build .exe...**, choose an output path, and track compilation.
 - **Diagnostics & Windows:** Inspect energy spectra via **Show Energy Dist. (IEDF/EEDF)**, manage materials in **Materials → Grid Material...**, and inspect cross-sections in **Beam → Cross-Section Manager...**.
 
-### 2. Headless Batch Execution via `config.json`
+### 2. Headless Batch Execution via Configuration JSON
 Run high-throughput simulations on remote clusters or headless servers:
 ```bash
 python Python/run_simulation_from_config.py
+# Or supply a specific configuration file:
+python Python/run_simulation_from_config.py Python/configurations/configNSTAR.json
 ```
 
 ### 3. Parallel Multi-Core Benchmarking Sweeps
@@ -218,9 +233,9 @@ charge_exchange_code   % Plume expansion & CEX study
 
 ---
 
-## ⚙️ Configuration Guide (`config.json`)
+## ⚙️ Configuration Guide (`Python/configurations/config.json`)
 
-Simulations are configured via `Python/config.json`:
+Simulations are configured via JSON files in `Python/configurations/` (defaulting to `config.json`):
 
 ```json
 {
@@ -240,6 +255,7 @@ Simulations are configured via `Python/config.json`:
     "Ly": 3.0
   },
   "simulation": {
+    "coordinate_system": "axisymmetric",
     "n0_plasma": 7.73e17,
     "Te_up": 8.5,
     "Ti": 0.034,
@@ -318,7 +334,7 @@ If you use this software in your research, please cite:
 
 ```bibtex
 @software{PY-BEMCS,
-  author       = {Bharat Singh Rawat},
+  author       = {Bharat Singh Rawat and Nick Magrin},
   title        = {Python Beam Extraction and Monte Carlo Simulator (PY-BEMCS)},
   year         = {2026},
   publisher    = {GitHub},

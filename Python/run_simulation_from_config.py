@@ -19,50 +19,34 @@ Instructions:
 """
 #import configparser
 import json
-from logging import config
-import re
 import time
 import os
 import numpy as np
 from scipy.interpolate import UnivariateSpline
+from physics.constants import MATERIAL_PRESETS
 from physics_engine import DigitalTwinSimulator
 
 def parse_config(config_path='config.json'):
     """
-    Parses the config.json file and returns:
+    Parses the configuration JSON file and returns:
     - params: dictionary for DigitalTwinSimulator
     - output_selection: dictionary controlling terminal prints
     """
     if not os.path.isfile(config_path):
-        raise FileNotFoundError(f"Config file '{config_path}' not found.")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cand1 = os.path.join(script_dir, 'configurations', config_path)
+        cand2 = os.path.join(script_dir, config_path)
+        if os.path.isfile(cand1):
+            config_path = cand1
+        elif os.path.isfile(cand2):
+            config_path = cand2
+        else:
+            raise FileNotFoundError(f"Config file '{config_path}' not found.")
 
     with open(config_path, 'r', encoding='utf-8') as f:
         config = json.load(f)
 
     params = {}
-
-    MATERIAL_PRESETS = {
-        'Molybdenum': {
-            'k': 138.0, 'rho': 10280.0, 'cp': 250.0,
-            'emissivity': 0.80, 'alpha': 4.8e-6,
-            'E_mod': 329e9, 'Y_coeff': 1.05e-4, 'E_th': 30.0
-        },
-        'Steel (SS316)': {
-            'k': 16.3, 'rho': 8000.0, 'cp': 500.0,
-            'emissivity': 0.60, 'alpha': 16.0e-6,
-            'E_mod': 193e9, 'Y_coeff': 2.8e-4, 'E_th': 25.0
-        },
-        'Titanium': {
-            'k': 21.9, 'rho': 4507.0, 'cp': 520.0,
-            'emissivity': 0.50, 'alpha': 8.6e-6,
-            'E_mod': 116e9, 'Y_coeff': 1.8e-4, 'E_th': 20.0
-        },
-        'Graphite': {
-            'k': 120.0, 'rho': 2200.0, 'cp': 710.0,
-            'emissivity': 0.85, 'alpha': 3.0e-6,
-            'E_mod': 11e9, 'Y_coeff': 3.5e-4, 'E_th': 15.0
-        }
-    }
 
     # --- Beam species ---
     beam = config.get('beam_species', {})
@@ -88,13 +72,19 @@ def parse_config(config_path='config.json'):
         })
 
     # --- Advanced settings ---
-    adv = config.get('advanced_settings', {})
-    params['neut_x'] = adv.get('neut_x', 19.9)
-    params['neut_r'] = adv.get('neut_r', 3.0)
+    adv = config.get('advanced', {})
+    neut = config.get('neutralizer', {})
+    params['neut_rate'] = neut.get('neut_rate', 30.0)
+    params['neut_match_ion'] = bool(neut.get('neut_match_ion', False))
+    params['Te'] = neut.get('Te', 2.0)
+    params['neut_x'] = neut.get('neut_x', adv.get('neut_x', None))
+    params['neut_r'] = neut.get('neut_r', adv.get('neut_r', 1.5))
     params['V_plasma_offset'] = adv.get('V_plasma_offset', 20.0)
     params['m_e_ratio'] = adv.get('m_e_ratio', 1000.0)
-    params['Lx'] = adv.get('Lx', 20.0)
-    params['Ly'] = adv.get('Ly', 3.0)
+    if 'Lx' in adv:
+        params['Lx'] = adv['Lx']
+    if 'Ly' in adv:
+        params['Ly'] = adv['Ly']
 
     # --- Cross-section files ---
     cs_store = {}
@@ -155,6 +145,12 @@ def parse_config(config_path='config.json'):
     params['Thresh'] = sim_cfg.get('Thresh', 10000.0)
     params['sim_mode'] = sim_cfg.get('sim_mode', 'Both')
     params['geometry'] = sim_cfg.get('geometry', 'half_hole')
+    if 'hole_boundary_dist_mm' in sim_cfg:
+        params['hole_boundary_dist_mm'] = sim_cfg['hole_boundary_dist_mm']
+    dc = config.get('discharge_chamber', {})
+    params['pitch_mm'] = dc.get('pitch_mm', 3.0)
+    params['discharge_chamber'] = dc
+    params['target_ppc'] = sim_cfg.get('target_ppc', 40.0)
 
     # --- RF co-extraction ---
     rf_cfg = config.get('rf_co_extraction', {})
@@ -166,6 +162,7 @@ def parse_config(config_path='config.json'):
     # --- Neutralizer ---
     neut_cfg = config.get('neutralizer', {})
     params['neut_rate'] = neut_cfg.get('neut_rate', 0)
+    params['neut_match_ion'] = bool(neut_cfg.get('neut_match_ion', False))
     params['Te'] = neut_cfg.get('Te', 5.0)
 
     # --- Grids ---
@@ -194,12 +191,20 @@ def parse_config(config_path='config.json'):
 
     return params, output_selection
 
-def run_simulation():
+def run_simulation(config_path=None):
     """
-    Initializes and runs the simulation from config.json.
+    Initializes and runs the simulation from a JSON configuration file.
     """
+    if config_path is None:
+        import sys
+        if len(sys.argv) > 1:
+            config_path = sys.argv[1]
+        else:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(script_dir, 'configurations', 'config.json')
+            if not os.path.isfile(config_path):
+                config_path = os.path.join(script_dir, 'config.json')
     try:
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
         params, output_selection = parse_config(config_path)
         print("Using config file:", config_path)
     except Exception as e:
@@ -239,13 +244,17 @@ def run_simulation():
         print(f"Built Grid {i}: V={g['V']} V, t={g['t']} mm, gap={g['gap']} mm, r={g['r']} mm, cham={g['cham']} deg")
     print("Domain built successfully.")
 
+    # Enable runtime performance monitor
+    monitor = sim.enable_perf_monitor(log_every=50)
+    print("Performance monitor enabled (summary every 50 steps).")
+
     print("Starting simulation...")
     print("Press Ctrl+C to stop.")
 
     try:
         while True:
             start_time = time.time()
-            remeshed, min_pot, current_div, T_grids = sim.step(params)
+            remeshed, min_pot, current_div, T_grids, _ = sim.step(params)
             end_time = time.time()
 
             if sim.iteration % 10 == 0:
@@ -279,9 +288,16 @@ def run_simulation():
         print("Simulation stopped by user.")
     except Exception as e:
         print(f"An error occurred during the simulation: {e}")
+    finally:
+        # Final report and CSV export
+        if monitor is not None:
+            monitor.print_final_report()
+            csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'perf_log.csv')
+            monitor.export_csv(csv_path)
 
 if __name__ == "__main__":
     run_simulation() 
+
 """
 ================================================================================
 EXAMPLE config.ini file

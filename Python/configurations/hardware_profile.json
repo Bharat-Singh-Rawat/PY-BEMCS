@@ -1,0 +1,19 @@
+{
+  "hardware_detected": {
+    "total_ram_gb": 31.65,
+    "available_ram_gb": 19.58,
+    "logical_cores": 12,
+    "physical_cores": 6,
+    "vulkan_available": false
+  },
+  "system": {
+    "max_ram_usage_percent": 80.0,
+    "reserved_os_ram_gb": 4.0,
+    "max_cores_to_use": 10,
+    "allow_ssd_paging": false
+  },
+  "particle_budget": {
+    "base_budget": 1000000.0,
+    "hard_particle_ceiling": 2500000.0
+  }
+}
