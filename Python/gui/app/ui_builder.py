@@ -81,6 +81,21 @@ class UIBuilderMixin:
         cs_action.triggered.connect(self.open_cs_viewer)
         beam_menu.addAction(cs_action)
 
+        beam_menu.addSeparator()
+
+        self.processes_menu = beam_menu.addMenu("Processes")
+        self.action_proc_see = QAction("Secondary e- emissions", self)
+        self.action_proc_see.setCheckable(True)
+        self.action_proc_see.setChecked(bool(getattr(self, "enable_see", True)))
+        self.action_proc_see.toggled.connect(self._on_beam_processes_toggled)
+        self.processes_menu.addAction(self.action_proc_see)
+
+        self.action_proc_cex = QAction("charge exchange", self)
+        self.action_proc_cex.setCheckable(True)
+        self.action_proc_cex.setChecked(bool(getattr(self, "enable_cex", True)))
+        self.action_proc_cex.toggled.connect(self._on_beam_processes_toggled)
+        self.processes_menu.addAction(self.action_proc_cex)
+
         mat_menu = menubar.addMenu("Materials")
         mat_action = QAction("Grid Material...", self)
         mat_action.triggered.connect(self.open_grid_material)
@@ -130,6 +145,34 @@ class UIBuilderMixin:
             "font-weight: bold; color: #1a5276; font-size: 11px; padding-right: 12px;"
         )
         menubar.setCornerWidget(self.lbl_active_config, Qt.TopRightCorner)
+
+    def _on_beam_processes_toggled(self, _checked=None):
+        """Update Secondary e- emissions and charge exchange flags when toggled in Beam -> Processes."""
+        if hasattr(self, "action_proc_see"):
+            self.enable_see = bool(self.action_proc_see.isChecked())
+        if hasattr(self, "action_proc_cex"):
+            self.enable_cex = bool(self.action_proc_cex.isChecked())
+
+        if hasattr(self, "sim") and self.sim is not None:
+            self.sim.enable_see = self.enable_see
+            self.sim.enable_cex = self.enable_cex
+
+        if hasattr(self, "_sweep_base_params") and isinstance(self._sweep_base_params, dict):
+            self._sweep_base_params["enable_see"] = self.enable_see
+            self._sweep_base_params["enable_cex"] = self.enable_cex
+        if hasattr(self, "_scenario_domain_cache") and isinstance(self._scenario_domain_cache, dict):
+            for d in self._scenario_domain_cache.values():
+                if isinstance(d, dict) and isinstance(d.get("params"), dict):
+                    d["params"]["enable_see"] = self.enable_see
+                    d["params"]["enable_cex"] = self.enable_cex
+
+        if hasattr(self, "_sim_worker") and self._sim_worker is not None:
+            if hasattr(self, "get_params"):
+                self._sim_worker.update_params(self.get_params())
+
+        if hasattr(self, "parallel_sweep_worker") and self.parallel_sweep_worker is not None:
+            if hasattr(self.parallel_sweep_worker, "set_processes"):
+                self.parallel_sweep_worker.set_processes(self.enable_see, self.enable_cex)
 
     def open_config_json(self):
         curr_path = getattr(self, "current_config_path", None)

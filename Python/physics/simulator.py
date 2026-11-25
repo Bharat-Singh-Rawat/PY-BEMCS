@@ -40,6 +40,8 @@ class DigitalTwinSimulator(
         self.dt = 5e-10
         self.injection_stop_time = None
         self.injection_enabled   = True
+        self.enable_see          = True
+        self.enable_cex          = True
 
         self.q      = Q_ELEM
         self.m_XE   = M_XE
@@ -243,13 +245,21 @@ class DigitalTwinSimulator(
         self.last_n_sub_ion       = 1
         self.last_n_sub_e         = 1
 
-        self.adaptive_remesh_enabled = False
+        self.adaptive_remesh_enabled = True
+        self.remesh_interval_iterations = 150
+        self.adaptive_remesh_settings = {"enabled": True, "interval_iterations": 150}
+        self.plume_history_iterations = []
+        self.plume_history_dx = []
+        self.plume_dx_history = []
+        self._last_remesh_plume_factor = None
+        self._current_plume_factor = 4.0
         self._has_stability_remeshed = False
         self._stability_remesh_iter  = None
-        self.remesh_min_iters        = 500
-        self.remesh_window           = 100
         self.remesh_threshold        = 1.0
-        self.adaptive_remesh_settings= {}
+        self.n0_plasma               = 1e17
+        self.n0                      = 1e17
+        self.Te_up                   = 3.0
+        self.debye_length_mm         = 0.05
 
     def step(self, params):
         if self.laplacian_lu is None or getattr(self, '_stop_requested', False):
@@ -304,38 +314,22 @@ class DigitalTwinSimulator(
         step_cex(self, ctx)
 
         res = step_end_accounting(self, ctx)
-        remesh_flag = getattr(self, 'adaptive_remesh_enabled', False) or params.get("adaptive_remesh_enabled", False) or params.get("adaptive_remesh_settings", {}).get("enabled", False)
-        if remesh_flag and not getattr(self, '_has_stability_remeshed', False):
-            self._check_and_execute_stability_remesh(params)
+        remesh_cfg = {}
+        if params and isinstance(params.get("adaptive_remesh_settings"), dict) and params["adaptive_remesh_settings"]:
+            remesh_cfg = params["adaptive_remesh_settings"]
+        elif params and isinstance(params.get("advanced_settings"), dict) and isinstance(params["advanced_settings"].get("adaptive_remesh_settings"), dict):
+            remesh_cfg = params["advanced_settings"]["adaptive_remesh_settings"]
+        elif getattr(self, 'adaptive_remesh_settings', None):
+            remesh_cfg = self.adaptive_remesh_settings
+
+        remesh_enabled = getattr(self, 'adaptive_remesh_enabled', None)
+        if remesh_enabled is None:
+            remesh_enabled = remesh_cfg.get("enabled", True)
+        if remesh_enabled:
+            interval = int(remesh_cfg.get("interval_iterations", getattr(self, 'remesh_interval_iterations', 150)))
+            if interval > 0 and self.iteration > 0 and (self.iteration % interval == 0):
+                self.execute_plume_remesh(params)
         return res
 
     def _check_and_execute_stability_remesh(self, params):
-        remesh_cfg = getattr(self, 'adaptive_remesh_settings', {}) or params.get("adaptive_remesh_settings", {})
-        min_iters = int(remesh_cfg.get("min_iterations", getattr(self, 'remesh_min_iters', 500)))
-        if self.iteration < min_iters or (self.iteration % 5 != 0):
-            return False
-
-        window = getattr(self, 'remesh_window', 100)
-        thresh = getattr(self, 'remesh_threshold', 1.0)
-
-        histories = []
-        if hasattr(self, 'energy_history_tot') and len(self.energy_history_tot) >= window:
-            histories.append(self.energy_history_tot)
-        if hasattr(self, 'charge_history_q_net') and len(self.charge_history_q_net) >= window:
-            histories.append(self.charge_history_q_net)
-        if hasattr(self, 'potential_history') and len(self.potential_history) >= window:
-            histories.append(self.potential_history)
-        if hasattr(self, 'ion_current_history') and len(self.ion_current_history) >= window:
-            histories.append(self.ion_current_history)
-
-        if not histories:
-            return False
-
-        from diagnostics.metrics import compute_rolling_variation
-        for h in histories:
-            _, var = compute_rolling_variation(h, window=window, mode="rel_change")
-            if len(var) == 0 or abs(var[-1]) > thresh:
-                return False
-
-        remesh_cfg = getattr(self, 'adaptive_remesh_settings', {}) or params.get("adaptive_remesh_settings", {})
-        return self.execute_stability_remesh(params=params, remesh_cfg=remesh_cfg)
+        return self.execute_plume_remesh(params=params)

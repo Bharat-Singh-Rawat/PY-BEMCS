@@ -398,7 +398,7 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
     return zones
 
 
-def estimate_stability_optimized_mesh_zones(
+def estimate_automatic_plume_mesh_zones(
     sim,
     grids: list,
     upstream_gap_mm: float,
@@ -408,88 +408,34 @@ def estimate_stability_optimized_mesh_zones(
     max_rel_jump: float = 0.10,
 ) -> list:
     """
-    Generate an optimized non-uniform axial mesh partitioned dynamically around the
-    plasma sheath/meniscus boundary detected at runtime from potential field V(x, 0).
-
-    Zones created:
-      1. Presheath Deep: [0, x_meniscus - 2*lambda_D], coarsened (factor ~ 1.5 - 2.0x)
-         because electric field is near-zero and plasma is quiescent.
-      2. Presheath Meniscus: [x_meniscus - 2*lambda_D, upstream_gap], refined (factor ~ 0.7 - 0.8x)
-         to accurately resolve the 2D curved Bohm sonic surface and sheath curvature.
-      3. Grid Barrels & Acceleration Gaps: strictly bounded to keep cell-to-cell delta E <= 10%
-         and CFL compliant.
-      4. Plume:
-         - Near Plume: factor 2.0
-         - Far Plume: coarsened by factor 3.0 - 6.0x where plasma density is dilute.
+    Generate an adapted non-uniform axial mesh partitioned dynamically where:
+    - Upstream presheath strictly maintains baseline factor = 1.0 (no coarsening, no meniscus refining).
+    - Grid barrels and inter-grid optics gaps strictly maintain baseline resolution.
+    - Plume zones (Near Plume and Far Plume) are automatically adapted based on local
+      plume ion density, Debye length expansion, and beam kinematics.
     """
-    if remesh_cfg is None:
-        remesh_cfg = {}
-
-    coarsen_presheath = float(remesh_cfg.get("coarsen_presheath_bulk", remesh_cfg.get("coarsen_presheath", 1.5)))
-    refine_meniscus = float(remesh_cfg.get("refine_meniscus_zone", remesh_cfg.get("refine_meniscus", 0.8)))
-    coarsen_plume = float(remesh_cfg.get("coarsen_far_plume", remesh_cfg.get("coarsen_plume", 4.0)))
-
     if not grids:
         return [
             {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(Lx / 3.0, Lx), 'factor': 1.0},
             {'name': 'Optics',    'x_start': min(Lx / 3.0, Lx), 'x_end': min(2.0 * Lx / 3.0, Lx), 'factor': 1.0},
-            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': coarsen_plume},
+            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': 4.0},
         ]
-
-    up_gap = min(float(upstream_gap_mm), Lx)
-
-    # 1. Detect Meniscus Location x_meniscus along the centerline y=0
-    x_meniscus = None
-    if hasattr(sim, 'V') and sim.V is not None and hasattr(sim, 'x_coords') and len(sim.x_coords) > 0:
-        try:
-            V_center = sim.V[0, :]
-            V_plasma = float(V_center[0])
-            Te_up = float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0)))
-            V_sheath = V_plasma - 0.5 * Te_up
-
-            mask_up = (sim.x_coords >= 0.0) & (sim.x_coords <= up_gap)
-            idx_up = np.where(mask_up)[0]
-            if len(idx_up) > 0:
-                below_sheath = idx_up[V_center[idx_up] <= V_sheath]
-                if len(below_sheath) > 0:
-                    x_meniscus = float(sim.x_coords[below_sheath[0]])
-        except Exception:
-            x_meniscus = None
-
-    lambda_D_mm = float(getattr(sim, 'debye_length_mm', 0.05))
-    if x_meniscus is None:
-        x_meniscus = max(0.15 * up_gap, min(0.75 * up_gap, up_gap - 2.0 * lambda_D_mm))
-    else:
-        x_meniscus = max(0.15 * up_gap, min(0.90 * up_gap, x_meniscus))
-
-    x_split = max(0.10 * up_gap, round(x_meniscus - 2.0 * lambda_D_mm, 5))
-    if x_split >= up_gap - 1e-4:
-        x_split = round(0.5 * up_gap, 5)
 
     zones = []
     x_curr = 0.0
+    up_gap = min(float(upstream_gap_mm), Lx)
 
-    # 1A. Deep Presheath
-    if x_split > 1e-5:
+    # 1. Presheath Zone: strictly baseline factor = 1.0
+    if up_gap > 1e-5:
         zones.append({
-            'name': 'Presheath_Deep',
-            'x_start': round(x_curr, 5),
-            'x_end': round(x_split, 5),
-            'factor': max(1.0, min(3.0, coarsen_presheath))
-        })
-        x_curr = x_split
-
-    # 1B. Active Meniscus & Sheath
-    if up_gap - x_curr > 1e-5:
-        zones.append({
-            'name': 'Presheath_Meniscus',
+            'name': 'Presheath',
             'x_start': round(x_curr, 5),
             'x_end': round(up_gap, 5),
-            'factor': max(0.4, min(1.0, refine_meniscus))
+            'factor': 1.0
         })
         x_curr = up_gap
 
-    # 2. Grid Barrels and Inter-Grid Gaps
+    # 2. Grid Barrels and Inter-Grid Gaps: strictly baseline resolution
     num_grids = len(grids)
     for i, g in enumerate(grids):
         t_grid = float(g.get('t', 0.5))
@@ -521,7 +467,51 @@ def estimate_stability_optimized_mesh_zones(
                 })
                 x_curr = x_next
 
-    # 3. Plume Zones
+    # 3. Plume Zones: Automatic determination based on local beam core density / Debye ratio
+    x_exit = x_curr
+    f_far = getattr(sim, '_current_plume_factor', 4.0) if sim is not None else 4.0
+    if sim is not None and getattr(sim, 'num_p', 0) > 5:
+        try:
+            num_p = sim.num_p
+            p_x = sim.p_x[:num_p]
+            plume_mask = (p_x >= x_exit) & (p_x <= Lx)
+            n_in_plume = int(np.sum(plume_mask))
+
+            n0 = float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17)))
+            if n_in_plume >= 10:
+                plume_len_m = max(1e-4, (Lx - x_exit) * 1e-3)
+                p_y = sim.p_y[:num_p][plume_mask]
+
+                # Evaluate actual beam envelope radius r_core (90th percentile of |y|)
+                # Bounded by screen grid aperture radius and domain boundary Ly
+                r_screen = float(grids[0].get('r', 1.0)) if grids else 1.0
+                if len(p_y) > 0:
+                    r_core_mm = max(float(np.percentile(np.abs(p_y), 90)), r_screen * 0.5, 0.3)
+                else:
+                    r_core_mm = r_screen
+                Ly = float(getattr(sim, 'Ly', r_core_mm))
+                r_core_mm = min(r_core_mm, Ly)
+
+                is_axi = getattr(sim, 'is_axisymmetric', False)
+                if is_axi:
+                    vol_core_m3 = math.pi * (r_core_mm * 1e-3)**2 * plume_len_m
+                else:
+                    vol_core_m3 = (r_core_mm * 1e-3) * 1e-3 * plume_len_m
+
+                macro_weight = float(getattr(sim, 'macro_weight', 1.0))
+                n_phys_ions = n_in_plume * macro_weight
+                n_core_avg = n_phys_ions / max(vol_core_m3, 1e-15)
+
+                if n_core_avg > 0:
+                    density_ratio = n0 / max(n_core_avg, 1e12)
+                    auto_factor = math.sqrt(density_ratio)
+                    # Clamped sensibly between 2.0x and 8.0x
+                    f_far = max(2.0, min(8.0, round(auto_factor, 1)))
+        except Exception:
+            f_far = getattr(sim, '_current_plume_factor', 4.0)
+
+    f_near = round(min(3.0, max(1.2, 0.5 * (1.0 + f_far))), 1)
+
     plume_remaining = Lx - x_curr
     if plume_remaining > 1e-5:
         near_plume_len = min(1.0, 0.3 * plume_remaining)
@@ -531,7 +521,7 @@ def estimate_stability_optimized_mesh_zones(
                 'name': 'Near_Plume',
                 'x_start': round(x_curr, 5),
                 'x_end': x_next,
-                'factor': 2.0
+                'factor': f_near
             })
             x_curr = x_next
 
@@ -540,8 +530,56 @@ def estimate_stability_optimized_mesh_zones(
                 'name': 'Far_Plume',
                 'x_start': round(x_curr, 5),
                 'x_end': round(Lx, 5),
-                'factor': max(2.0, min(8.0, coarsen_plume))
+                'factor': f_far
             })
 
     return zones
+
+
+def estimate_stability_optimized_mesh_zones(
+    sim,
+    grids: list,
+    upstream_gap_mm: float,
+    Lx: float,
+    dx0: float,
+    remesh_cfg: dict = None,
+    max_rel_jump: float = 0.10,
+) -> list:
+    """Backward-compatible alias pointing to estimate_automatic_plume_mesh_zones."""
+    return estimate_automatic_plume_mesh_zones(
+        sim=sim,
+        grids=grids,
+        upstream_gap_mm=upstream_gap_mm,
+        Lx=Lx,
+        dx0=dx0,
+        remesh_cfg=remesh_cfg,
+        max_rel_jump=max_rel_jump,
+    )
+
+
+def compute_plume_mean_dx(sim, zone_configs=None) -> float:
+    """Compute the weighted mean cell size Delta x [mm] across downstream plume zones."""
+    if sim is None:
+        return 0.04
+    Lx = float(getattr(sim, 'Lx', 10.0))
+    dx0 = float(getattr(sim, 'dx', 0.04))
+    cfg = zone_configs or getattr(sim, 'zone_configs', None)
+    if not cfg:
+        return dx0
+
+    plume_zones = [z for z in cfg if 'plume' in z.get('name', '').lower()]
+    if not plume_zones:
+        return dx0
+
+    total_len = 0.0
+    weighted_dx = 0.0
+    for z in plume_zones:
+        z_len = max(0.0, float(z.get('x_end', 0.0)) - float(z.get('x_start', 0.0)))
+        z_dx = dx0 * float(z.get('factor', 1.0))
+        total_len += z_len
+        weighted_dx += z_len * z_dx
+
+    if total_len > 0:
+        return weighted_dx / total_len
+    return dx0
 

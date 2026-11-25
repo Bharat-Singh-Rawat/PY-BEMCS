@@ -309,6 +309,25 @@ class DialogsMixin:
         if hasattr(self, 'sim'):
             self.substep_window.update_plot(self.sim)
 
+    def open_plume_window(self):
+        """Open Plume Mesh Cell Size monitor window."""
+        from diagnostics.mesh_window import PlumeMeshSizeWindow
+        if getattr(self, 'plume_window', None) is None:
+            self.plume_window = PlumeMeshSizeWindow(self)
+        self.plume_window.show()
+        self.plume_window.raise_()
+        self.plume_window.activateWindow()
+
+        is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
+        if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
+            scen_num = self.combo_sweep_scenario.currentIndex() + 1
+            if hasattr(self, '_render_sweep_scenario_snapshot'):
+                self._render_sweep_scenario_snapshot(scen_num)
+                return
+
+        if hasattr(self, 'sim'):
+            self.plume_window.update_plot(self.sim)
+
     def open_field_window(self):
         """Open Electric Field & Potential Diagnostics window."""
         if getattr(self, 'field_window', None) is None:

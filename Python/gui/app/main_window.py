@@ -124,6 +124,7 @@ class DigitalTwinApp(
         self.field_window = None
         self.steady_state_window = None
         self.substep_window = None
+        self.plume_window = None
         self.is_sweep_active = False
         self.sweep_mode_armed = False
         self._sweep_paused_current = False
@@ -150,6 +151,8 @@ class DigitalTwinApp(
 
         self.beam_mass_amu     = None
         self.beam_charge_state = None
+        self.enable_see        = True
+        self.enable_cex        = True
         self.cs_store   = {}
         self.mat_name   = None
         self.mat_props  = {}

@@ -99,6 +99,7 @@ class SubstepGraphWidget(QWidget):
         # ── Matplotlib Canvas ─────────────────────────────────────────
         self.fig = Figure(figsize=(8.5, 4.2), dpi=100)
         self.fig.patch.set_facecolor("#ffffff")
+        self.fig.subplots_adjust(left=0.08, right=0.97, top=0.80, bottom=0.14)
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
 
@@ -358,9 +359,15 @@ class SubstepGraphWidget(QWidget):
         self.ax.yaxis.set_major_locator(MaxNLocator(integer=True))
         self.ax.set_xlabel("Iteration", fontsize=9.5, fontweight="bold")
         self.ax.set_ylabel("Required Substeps", fontsize=9.5, fontweight="bold")
-        self.ax.set_title("Required Boris Pusher Substeps per Iteration (Displacement Criterion)", fontsize=10.5, fontweight="bold", pad=8)
+        self.ax.set_title("Required Boris Pusher Substeps per Iteration (Displacement Criterion)", fontsize=10.5, fontweight="bold", pad=28)
         self.ax.grid(True, linestyle=":", alpha=0.5, color="#cbd5e1")
-        self.ax.legend(loc="upper right", framealpha=0.9, fontsize=8.5)
+        self.ax.legend(
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=3,
+            framealpha=0.95,
+            fontsize=8.5
+        )
 
         self.canvas.draw_idle()
 
@@ -385,6 +392,266 @@ class DisplacementSubstepsWindow(QDialog):
 
     def update_plot(self, sim=None):
         self.substep_widget.update_plot(sim)
+
+
+class PlumeMeshSizeGraphWidget(QWidget):
+    """
+    Graph widget showing the evolution of downstream plume mesh cell size
+    Delta x [mm] vs. simulation iterations as automatic adaptive remeshing executes.
+    """
+    def __init__(self, parent=None, is_standalone=False):
+        super().__init__(parent)
+        self.parent_app = parent
+        self.is_standalone = is_standalone
+        self._cached_sim = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # ── Controls toolbar ──────────────────────────────────────────
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.setSpacing(12)
+
+        self.chk_points = QCheckBox("Show Data Points")
+        self.chk_points.setChecked(True)
+        self.chk_points.setToolTip("Show individual remesh event markers on the graph")
+        self.chk_points.stateChanged.connect(self._replot)
+        ctrl_layout.addWidget(self.chk_points)
+
+        self.chk_lines = QCheckBox("Connect Step Line")
+        self.chk_lines.setChecked(True)
+        self.chk_lines.setToolTip("Draw step-wise lines showing plume mesh cell size across iterations")
+        self.chk_lines.stateChanged.connect(self._replot)
+        ctrl_layout.addWidget(self.chk_lines)
+
+        self.chk_baseline = QCheckBox("Show Baseline Nominal Δx₀")
+        self.chk_baseline.setChecked(True)
+        self.chk_baseline.setToolTip("Show nominal uncoarsened baseline cell size line")
+        self.chk_baseline.stateChanged.connect(self._replot)
+        ctrl_layout.addWidget(self.chk_baseline)
+
+        ctrl_layout.addStretch()
+
+        self.btn_clear = QPushButton("Clear History")
+        self.btn_clear.setToolTip("Clear plume cell size history")
+        self.btn_clear.clicked.connect(self._on_clear_clicked)
+        ctrl_layout.addWidget(self.btn_clear)
+
+        self.btn_export = QPushButton("Export CSV...")
+        self.btn_export.setToolTip("Export plume cell size history to CSV")
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        ctrl_layout.addWidget(self.btn_export)
+
+        layout.addLayout(ctrl_layout)
+
+        # ── Matplotlib Canvas ─────────────────────────────────────────
+        self.fig = Figure(figsize=(8.5, 4.2), dpi=100)
+        self.fig.patch.set_facecolor("#ffffff")
+        self.fig.subplots_adjust(left=0.08, right=0.97, top=0.80, bottom=0.14)
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+
+        if NavigationToolbar is not None:
+            self.toolbar = NavigationToolbar(self.canvas, self)
+            self.toolbar.setMaximumHeight(30)
+            layout.addWidget(self.toolbar)
+
+        layout.addWidget(self.canvas, stretch=1)
+
+        # ── Readouts bar at the bottom ────────────────────────────────
+        stats_frame = QFrame()
+        stats_frame.setStyleSheet("""
+            QFrame {
+                background-color: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                padding: 4px;
+            }
+        """)
+        stats_layout = QHBoxLayout(stats_frame)
+        stats_layout.setContentsMargins(8, 8, 8, 8)
+        stats_layout.setSpacing(16)
+
+        self.lbl_curr_iter = QLabel("Current Iteration: —")
+        self.lbl_curr_dx = QLabel("Plume Cell Size Δx: —")
+        self.lbl_curr_factor = QLabel("Plume Factor: —")
+        self.lbl_base_dx = QLabel("Nominal Δx₀: —")
+        self.lbl_total_remeshes = QLabel("Remesh Events: 0")
+
+        for lbl in (self.lbl_curr_iter, self.lbl_curr_dx, self.lbl_curr_factor, self.lbl_base_dx, self.lbl_total_remeshes):
+            lbl.setStyleSheet("font-size: 11px; color: #1e293b;")
+            stats_layout.addWidget(lbl)
+
+        layout.addWidget(stats_frame)
+
+    def _replot(self):
+        if self._cached_sim is not None:
+            self.update_plot(self._cached_sim)
+
+    def _on_clear_clicked(self):
+        if self._cached_sim is not None:
+            if hasattr(self._cached_sim, 'plume_history_iterations'):
+                self._cached_sim.plume_history_iterations.clear()
+            if hasattr(self._cached_sim, 'plume_history_dx'):
+                self._cached_sim.plume_history_dx.clear()
+            if hasattr(self._cached_sim, 'plume_dx_history'):
+                self._cached_sim.plume_dx_history.clear()
+        self.update_plot(self._cached_sim)
+
+    def _on_export_clicked(self):
+        sim = self._cached_sim
+        iters = getattr(sim, 'plume_history_iterations', [])
+        dxs = getattr(sim, 'plume_history_dx', [])
+        if not iters or len(iters) == 0:
+            QMessageBox.information(self, "Export CSV", "No plume cell size history to export.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Save Plume Cell Size History", "plume_cell_size_history.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+
+        dx0 = getattr(sim, 'dx', 0.04)
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Iteration", "Plume_dx_mm", "Plume_dx_um", "Nominal_dx0_mm", "Coarsening_Factor"])
+                for it, val in zip(iters, dxs):
+                    fac = val / dx0 if dx0 > 0 else 1.0
+                    writer.writerow([it, f"{val:.6f}", f"{val * 1e3:.3f}", f"{dx0:.6f}", f"{fac:.2f}"])
+            QMessageBox.information(self, "Export CSV", f"Successfully exported {len(iters)} records to {path}.")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export CSV: {e}")
+
+    def update_plot(self, sim=None):
+        self._cached_sim = sim
+        if sim is None:
+            return
+
+        from physics.mesh_utils import compute_plume_mean_dx
+        dx0 = float(getattr(sim, 'dx', 0.04))
+        iters = getattr(sim, 'plume_history_iterations', [])
+        dxs = getattr(sim, 'plume_history_dx', [])
+
+        # Auto-seed initial baseline if history is empty
+        if len(iters) == 0:
+            init_dx = compute_plume_mean_dx(sim)
+            if not hasattr(sim, 'plume_history_iterations'):
+                sim.plume_history_iterations = []
+                sim.plume_history_dx = []
+                sim.plume_dx_history = []
+            sim.plume_history_iterations.append(0)
+            sim.plume_history_dx.append(init_dx)
+            sim.plume_dx_history.append((0, init_dx))
+            iters = sim.plume_history_iterations
+            dxs = sim.plume_history_dx
+
+        self.ax.clear()
+
+        n_pts = min(len(iters), len(dxs))
+        if n_pts == 0:
+            self.ax.text(
+                0.5, 0.5,
+                "No plume remesh history recorded yet.\nStart simulation to view adaptive plume cell size evolution.",
+                ha="center", va="center", transform=self.ax.transAxes,
+                fontsize=11, color="#64748b"
+            )
+            self.ax.set_xticks([])
+            self.ax.set_yticks([])
+            self.lbl_curr_iter.setText("Current Iteration: —")
+            self.lbl_curr_dx.setText("Plume Cell Size Δx: —")
+            self.lbl_curr_factor.setText("Plume Factor: —")
+            self.lbl_base_dx.setText(f"Nominal Δx₀: <b>{dx0:.4f} mm</b>")
+            self.lbl_total_remeshes.setText("Remesh Events: 0")
+            self.canvas.draw_idle()
+            return
+
+        x = np.asarray(iters[:n_pts], dtype=int)
+        y = np.asarray(dxs[:n_pts], dtype=float)
+
+        curr_it = getattr(sim, 'iteration', x[-1])
+        curr_val = y[-1]
+        curr_fac = curr_val / dx0 if dx0 > 0 else 1.0
+
+        self.lbl_curr_iter.setText(f"Current Iteration: <b>{curr_it}</b>")
+        self.lbl_curr_dx.setText(f"Plume Cell Size Δx: <b>{curr_val:.4f} mm</b> ({curr_val * 1e3:.1f} µm)")
+        self.lbl_curr_factor.setText(f"Plume Factor: <b>{curr_fac:.2f}×</b>")
+        self.lbl_base_dx.setText(f"Nominal Δx₀: <b>{dx0:.4f} mm</b> ({dx0 * 1e3:.1f} µm)")
+        self.lbl_total_remeshes.setText(f"Remesh Events: <b>{n_pts:,}</b>")
+
+        # Baseline reference line at nominal dx0
+        if self.chk_baseline.isChecked():
+            self.ax.axhline(dx0, color="#94a3b8", linestyle="--", linewidth=1.2, alpha=0.85, zorder=2, label=f"Baseline Nominal Δx₀ ({dx0:.4f} mm)")
+
+        # Step line showing evolution across iterations
+        if len(x) > 0 and x[0] > 0:
+            x_line_start = np.insert(x, 0, 0)
+            y_line_start = np.insert(y, 0, dx0)
+        else:
+            x_line_start = x
+            y_line_start = y
+
+        if self.chk_lines.isChecked():
+            if curr_it > x_line_start[-1]:
+                x_line = np.append(x_line_start, curr_it)
+                y_line = np.append(y_line_start, y_line_start[-1])
+            else:
+                x_line = x_line_start
+                y_line = y_line_start
+            self.ax.step(x_line, y_line, where='post', color="#2563eb", linewidth=1.8, alpha=0.9, zorder=4, label="Plume Δx(t)")
+
+        # Data point markers at each remesh event
+        if self.chk_points.isChecked():
+            self.ax.scatter(
+                x, y,
+                s=40, c="#2563eb", edgecolors="#1e3a8a", linewidths=0.9,
+                alpha=0.95, zorder=6, label=f"Remesh Milestones ({n_pts})"
+            )
+
+        x_max = max(np.max(x), curr_it)
+        pad_x = max(10, int(x_max * 0.05)) if x_max > 0 else 150
+        self.ax.set_xlim(0, x_max + pad_x)
+
+        y_min = min(dx0, np.min(y)) * 0.85
+        y_max = max(dx0, np.max(y)) * 1.15
+        self.ax.set_ylim(max(0.0, y_min), y_max)
+
+        self.ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        self.ax.set_xlabel("Simulation Iteration", fontsize=9.5, fontweight="bold")
+        self.ax.set_ylabel("Plume Mesh Cell Size Δx [mm]", fontsize=9.5, fontweight="bold")
+        self.ax.set_title("Adaptive Plume Mesh Cell Size vs. Simulation Iteration", fontsize=10.5, fontweight="bold", pad=28)
+        self.ax.grid(True, linestyle=":", alpha=0.5, color="#cbd5e1")
+        self.ax.legend(
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=3,
+            framealpha=0.95,
+            fontsize=8.5
+        )
+
+        self.canvas.draw_idle()
+
+
+class PlumeMeshSizeWindow(QDialog):
+    """
+    Dedicated second window displaying the Plume Mesh Cell Size diagnostic graph
+    (Iterations on x-axis, Plume Cell Size Delta x [mm] on y-axis).
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_app = parent
+        self.setWindowTitle("Plume Mesh Cell Size Monitor — (Iterations vs Plume Δx)")
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        self.resize(880, 580)
+        self.setMinimumSize(680, 440)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        self.plume_widget = PlumeMeshSizeGraphWidget(parent=self.parent_app, is_standalone=True)
+        layout.addWidget(self.plume_widget)
+
+    def update_plot(self, sim=None):
+        self.plume_widget.update_plot(sim)
 
 
 class MeshWindow(QDialog):
@@ -471,6 +738,11 @@ class MeshWindow(QDialog):
         self.btn_open_substeps.setToolTip("Open Required Substeps graph in a separate floating window")
         self.btn_open_substeps.clicked.connect(self.open_substeps_window)
         ctrl_layout.addWidget(self.btn_open_substeps)
+
+        self.btn_open_plume = QPushButton("🗗 Open Plume Δx in Second Window")
+        self.btn_open_plume.setToolTip("Open Plume Cell Size vs. Iterations graph in a separate floating window")
+        self.btn_open_plume.clicked.connect(self.open_plume_window)
+        ctrl_layout.addWidget(self.btn_open_plume)
 
         self.btn_refresh = QPushButton("⟳ Refresh")
         self.btn_refresh.setToolTip("Re-read simulation state and redraw mesh")
@@ -561,6 +833,10 @@ class MeshWindow(QDialog):
         self.substep_widget = SubstepGraphWidget(parent=self.parent_app, is_standalone=False)
         self.tabs.addTab(self.substep_widget, "⚡ Displacement Substeps (Iterations vs Substeps)")
 
+        # ── Tab 3: Plume Mesh Cell Size Monitor ───────────────────────
+        self.plume_mesh_widget = PlumeMeshSizeGraphWidget(parent=self.parent_app, is_standalone=False)
+        self.tabs.addTab(self.plume_mesh_widget, "📈 Plume Cell Size History (Δx vs Iterations)")
+
         self.tabs.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.tabs)
 
@@ -568,6 +844,7 @@ class MeshWindow(QDialog):
         self._cached_sim = None
         self._cached_params = None
         self._substeps_dialog = None
+        self._plume_size_dialog = None
 
     def _group_style(self):
         return """
@@ -602,12 +879,36 @@ class MeshWindow(QDialog):
         if sim is not None:
             self._substeps_dialog.update_plot(sim)
 
+    def open_plume_window(self):
+        """Open or focus the separate Plume Mesh Cell Size Monitor window."""
+        if getattr(self, '_plume_size_dialog', None) is None:
+            self._plume_size_dialog = PlumeMeshSizeWindow(parent=self.parent_app or self)
+        self._plume_size_dialog.show()
+        self._plume_size_dialog.raise_()
+        self._plume_size_dialog.activateWindow()
+        sim = getattr(self, '_cached_sim', None)
+        if sim is None and self.parent_app and hasattr(self.parent_app, 'sim'):
+            sim = self.parent_app.sim
+        if sim is not None:
+            self._plume_size_dialog.update_plot(sim)
+
     def _on_tab_changed(self, idx):
-        if idx == 1:
-            sim = getattr(self, '_cached_sim', None)
-            if sim is None and self.parent_app and hasattr(self.parent_app, 'sim'):
-                sim = self.parent_app.sim
-            self.substep_widget.update_plot(sim)
+        sim = getattr(self, '_cached_sim', None)
+        if sim is None and self.parent_app and hasattr(self.parent_app, 'sim'):
+            sim = self.parent_app.sim
+        params = getattr(self, '_cached_params', None)
+        if params is None and self.parent_app and hasattr(self.parent_app, 'get_params'):
+            params = self.parent_app.get_params()
+
+        if idx == 0:
+            if sim is not None:
+                self.update_plot(sim, params=params)
+        elif idx == 1:
+            if hasattr(self, 'substep_widget'):
+                self.substep_widget.update_plot(sim)
+        elif idx == 2:
+            if hasattr(self, 'plume_mesh_widget'):
+                self.plume_mesh_widget.update_plot(sim)
 
     def _on_refresh_clicked(self):
         sim = getattr(self.parent_app, 'sim', None)
@@ -620,15 +921,20 @@ class MeshWindow(QDialog):
             self.update_plot(self._cached_sim, params=self._cached_params)
 
     def update_plot(self, sim, params=None):
-        """Update domain visualization, mesh analytics, and substeps graph."""
+        """Update domain visualization, mesh analytics, substeps graph, and plume cell size graph."""
         self._cached_sim = sim
         self._cached_params = params
 
-        # Always update substeps on Tab 2 and floating window if active
+        # Always update substeps and plume size graphs (and pop-out windows if active)
         if hasattr(self, 'substep_widget'):
             self.substep_widget.update_plot(sim)
         if getattr(self, '_substeps_dialog', None) is not None and self._substeps_dialog.isVisible():
             self._substeps_dialog.update_plot(sim)
+
+        if hasattr(self, 'plume_mesh_widget'):
+            self.plume_mesh_widget.update_plot(sim)
+        if getattr(self, '_plume_size_dialog', None) is not None and self._plume_size_dialog.isVisible():
+            self._plume_size_dialog.update_plot(sim)
 
         self.ax.clear()
 

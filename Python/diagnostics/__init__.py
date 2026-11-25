@@ -14,7 +14,13 @@ from .density_window import DensityWindow
 from .energy_window import PhysicalConstraintsWindow, TotalEnergyWindow
 from .charge_window import TotalChargeMonitorWindow, ChargeMonitorWindow
 from .perf_window import PerformanceMonitorWindow
-from .mesh_window import MeshWindow, DisplacementSubstepsWindow, SubstepGraphWidget
+from .mesh_window import (
+    MeshWindow,
+    DisplacementSubstepsWindow,
+    SubstepGraphWidget,
+    PlumeMeshSizeWindow,
+    PlumeMeshSizeGraphWidget,
+)
 from .field_window import FieldDiagnosticWindow
 from .steady_state_window import SteadyStateWindow
 

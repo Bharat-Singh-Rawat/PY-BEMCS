@@ -25,6 +25,19 @@ class ConfigMixin:
         """Populate the UI with safe hardcoded defaults when no config.json is present."""
         self.beam_mass_amu  = 131.293   # Xenon
         self.beam_charge_state = 1
+        self.enable_see = True
+        self.enable_cex = True
+        if hasattr(self, "action_proc_see"):
+            self.action_proc_see.blockSignals(True)
+            self.action_proc_see.setChecked(True)
+            self.action_proc_see.blockSignals(False)
+        if hasattr(self, "action_proc_cex"):
+            self.action_proc_cex.blockSignals(True)
+            self.action_proc_cex.setChecked(True)
+            self.action_proc_cex.blockSignals(False)
+        if hasattr(self, "sim") and self.sim is not None:
+            self.sim.enable_see = True
+            self.sim.enable_cex = True
 
         self.mat_name  = "Molybdenum"
         self.mat_props = GridMaterialDialog.PRESETS["Molybdenum"].copy()
@@ -41,13 +54,10 @@ class ConfigMixin:
             r"\deltax/debye_length": 0.8,
             "dt_ns": 0.50,
             "dt": 5e-10,
-            "adaptive_remesh_enabled": False,
+            "adaptive_remesh_enabled": True,
             "adaptive_remesh_settings": {
-                "enabled": False,
-                "min_iterations": 500,
-                "coarsen_presheath_bulk": 1.5,
-                "refine_meniscus_zone": 0.8,
-                "coarsen_far_plume": 4.0,
+                "enabled": True,
+                "interval_iterations": 150,
             },
         }
 
@@ -416,13 +426,10 @@ class ConfigMixin:
             r"\deltax/debye_length": float(val_dx_debye),
             "dt_ns": float(val_dt_ns),
             "dt": float(val_dt_ns) * 1e-9,
-            "adaptive_remesh_enabled": bool(remesh_cfg.get("enabled", adv.get("adaptive_remesh_enabled", False))),
+            "adaptive_remesh_enabled": bool(remesh_cfg.get("enabled", adv.get("adaptive_remesh_enabled", True))),
             "adaptive_remesh_settings": {
-                "enabled": bool(remesh_cfg.get("enabled", adv.get("adaptive_remesh_enabled", False))),
-                "min_iterations": int(remesh_cfg.get("min_iterations", adv.get("remesh_min_iters", 500))),
-                "coarsen_presheath_bulk": float(remesh_cfg.get("coarsen_presheath_bulk", remesh_cfg.get("coarsen_presheath", 1.5))),
-                "refine_meniscus_zone": float(remesh_cfg.get("refine_meniscus_zone", remesh_cfg.get("refine_meniscus", 0.8))),
-                "coarsen_far_plume": float(remesh_cfg.get("coarsen_far_plume", remesh_cfg.get("coarsen_plume", 4.0))),
+                "enabled": bool(remesh_cfg.get("enabled", adv.get("adaptive_remesh_enabled", True))),
+                "interval_iterations": int(remesh_cfg.get("interval_iterations", adv.get("remesh_interval_iterations", 150))),
             },
         }
 
@@ -433,6 +440,19 @@ class ConfigMixin:
         })
 
         sim = config.get("simulation", {})
+        self.enable_see = bool(sim.get("enable_see", True))
+        self.enable_cex = bool(sim.get("enable_cex", True))
+        if hasattr(self, "action_proc_see"):
+            self.action_proc_see.blockSignals(True)
+            self.action_proc_see.setChecked(self.enable_see)
+            self.action_proc_see.blockSignals(False)
+        if hasattr(self, "action_proc_cex"):
+            self.action_proc_cex.blockSignals(True)
+            self.action_proc_cex.setChecked(self.enable_cex)
+            self.action_proc_cex.blockSignals(False)
+        if hasattr(self, "sim") and self.sim is not None:
+            self.sim.enable_see = self.enable_see
+            self.sim.enable_cex = self.enable_cex
         self.inputs["n0_plasma"].blockSignals(True)
         self.inputs["Te_up"].blockSignals(True)
         self.inputs["n0_plasma"].setValue(sim["n0_plasma"])
@@ -729,6 +749,8 @@ class ConfigMixin:
             sim_cfg["div_xaxis_unit"] = str(self.div_xaxis_unit)
         if getattr(self, "xaxis_unit", None) is not None:
             sim_cfg["xaxis_unit"] = str(self.xaxis_unit)
+        sim_cfg["enable_see"] = bool(getattr(self, "enable_see", True))
+        sim_cfg["enable_cex"] = bool(getattr(self, "enable_cex", True))
 
         cfg["simulation"] = sim_cfg
 
@@ -895,11 +917,13 @@ class ConfigMixin:
             self.sim.dt = float(self.adv_params["dt"])
 
         remesh_cfg = self.adv_params.get("adaptive_remesh_settings", {})
-        self.sim.adaptive_remesh_enabled = bool(remesh_cfg.get("enabled", self.adv_params.get("adaptive_remesh_enabled", False)))
-        self.sim.remesh_min_iters = int(remesh_cfg.get("min_iterations", self.adv_params.get("remesh_min_iters", 500)))
+        self.sim.adaptive_remesh_enabled = bool(remesh_cfg.get("enabled", self.adv_params.get("adaptive_remesh_enabled", True)))
+        self.sim.remesh_interval_iterations = int(remesh_cfg.get("interval_iterations", self.adv_params.get("remesh_interval_iterations", 150)))
         self.sim.adaptive_remesh_settings = dict(remesh_cfg)
 
         self.sim.set_material(props=self.mat_props)
+        self.sim.enable_see = bool(getattr(self, "enable_see", True))
+        self.sim.enable_cex = bool(getattr(self, "enable_cex", True))
 
         self.sim.user_cs = {}
         for label, ds in self.cs_store.items():
@@ -981,4 +1005,6 @@ class ConfigMixin:
             params['beam_mass_amu'] = float(self.beam_mass_amu)
         if getattr(self, 'beam_charge_state', None) is not None:
             params['beam_charge_state'] = int(self.beam_charge_state)
+        params['enable_see'] = bool(getattr(self, 'enable_see', True))
+        params['enable_cex'] = bool(getattr(self, 'enable_cex', True))
         return params

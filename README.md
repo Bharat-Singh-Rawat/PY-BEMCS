@@ -65,6 +65,7 @@ This repository includes a comprehensive multi-tier simulation ecosystem:
 - **Artificial Electron Mass Approximation:** Accelerated multi-scale time-stepping ($m_e = M_{\mathrm{ion}} / 100\dots 1000$).
 - **Charge-Exchange (CEX) Collisions:** Monte Carlo collision modeling with probabilistic scattering (Birdsall/Roy model) and customizable cross-section data tables.
 - **In-Situ Dynamic Sputter Erosion:** Real-time grid mass removal and hole geometry enlargement driven by primary and CEX ion impacts.
+- **Decoupled Sub-Grid Structural Surface & 1D Radial Thermal Mesh:** Decouples physical grid boundaries, continuous Yamamura sputtering erosion, and 1D radial heat conduction from the background Eulerian PIC mesh. Sputtering recession ($\Delta d$) evolves continuously along analytical 1D boundary polylines without discrete staircasing or chunky cell-dropping.
 - **Thermo-Mechanical Cantilever Grid Deflection:** Dynamic aperture distortion based on Euler–Bernoulli cantilever thermal expansion ($\delta = \frac{\alpha \Delta T L^2}{2t}$), with live mesh updating and Poisson refactorization.
 - **RF Co-Extraction:** Modulated RF extraction potentials ($V_{\mathrm{RF}}\sin(2\pi f t)$) for simultaneous or alternating electron-ion beam extraction.
 - **Neutralizer Electron Injection:** Configurable downstream electron injection rate and electron thermal temperature.
@@ -108,9 +109,43 @@ When generating the simulation domain (`build_domain`), the physics engine autom
    - **`one_hole`:** Full single-aperture extraction domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
    - **`two_holes`:** Dual-aperture coupling domain with periodic boundary conditions along $y$ (Cartesian 2D slab only).
    - **Why Multi-Hole Modes are Blocked in Axisymmetric Configuration:** In cylindrical coordinates ($r\text{--}z$), $r=0$ is the singular axis of rotational symmetry. Revolving an aperture located at $r > 0$ generates a hollow toroidal ring (donut-shaped channel) rather than a circular beamlet, while adjacent discrete holes break axisymmetry ($\partial/\partial\theta \ne 0$) and require a 3D solver. Furthermore, periodic boundary conditions along $r$ are physically meaningless because mapping $r = L_y$ to $r = 0$ couples cells of unequal volume and violates charge conservation. Therefore, Axisymmetric mode strictly constrains geometry to `half_hole`.
-6. **Aperture & Injection Transverse Controls**:
-   - **Hole-Boundary Distance (hole_boundary_dist_mm)**: Controls the minimum solid webbing margin between the outermost grid aperture wall and the top domain boundary $.
-   - **Injection Y-Length (inj_y_length_mm)**: Controls the transverse/radial span across which upstream ions are injected at  = 0$. By default, it equals the screen grid aperture radius {\mathrm{screen}}$ (Auto button resets to {\mathrm{screen}}$), but can be increased up to the domain height $ to model expanded Debye sheath curvature over the solid screen grid webbing at low plasma densities.
+5. **Aperture & Injection Transverse Controls**:
+   - **Hole-Boundary Distance (hole_boundary_dist_mm)**: Controls the minimum solid webbing margin between the outermost grid aperture wall and the top domain boundary $L_y$.
+   - **Injection Y-Length (inj_y_length_mm)**: Controls the transverse/radial span across which upstream ions are injected at $x = 0$. By default, it equals the screen grid aperture radius $r_{\mathrm{screen}}$ (Auto button resets to $r_{\mathrm{screen}}$), but can be increased up to the domain height $L_y$ to model expanded Debye sheath curvature over the solid screen grid webbing at low plasma densities.
+
+6. **Multi-Metric Steady-State Convergence & Stationarity Criterion**:
+   To prevent premature scenario termination during sheath expansion or virtual anode oscillations, stationarity is evaluated simultaneously across four physical observables over a rolling window ($W = 100$ steps):
+   $$\Delta Q[k] = \frac{Q[k] - Q[k-W]}{|Q[k-W]| + \epsilon} \times 100\%$$
+   where $Q \in \{E_{\mathrm{tot}}, Q_{\mathrm{net}}, V_{\mathrm{saddle}}, I_{\mathrm{ion,exit}}\}$:
+   - **Total System Energy ($E_{\mathrm{tot}}$)**: Sum of ion kinetic, electron kinetic, and electric field energies.
+   - **Net System Charge ($Q_{\mathrm{net}}$)**: Sum of free particle charges and Boltzmann electron fluid charge.
+   - **Saddle-Point Potential ($V_{\mathrm{saddle}}$)**: Midline potential barrier controlling electron backstreaming and meniscus shape.
+   - **Exit Ion Beam Current ($I_{\mathrm{ion,exit}}$)**: Far-field Faraday cup current accumulated at the exit plane:
+     $$I_{\mathrm{ion,exit}} = \frac{q_{\mathrm{ion}} w_{\mathrm{macro}} \sum_{\mathrm{exit}} 1}{\Delta t}$$
+   Stationarity is declared when $\max(|\Delta E_{\mathrm{tot}}|, |\Delta Q_{\mathrm{net}}|, |\Delta V_{\mathrm{saddle}}|, |\Delta I_{\mathrm{ion,exit}}|) \le \varepsilon_{\mathrm{threshold}}$ (default $\le 1.0\%$), subject to minimum $k \ge 500$ post-entry iterations and bounded by $k_{\max} = 5000$.
+
+7. **Child-Langmuir Perveance & Perveance Fraction Evaluation**:
+   Evaluated across all parametric sweeps, headless batch scripts, and live telemetry to monitor extraction space-charge limits:
+   - **Total Acceleration Potential**: $V_{\mathrm{tot}} = \max(V_{\mathrm{screen}} - V_{\mathrm{accel}}, \, 0.0)$
+   - **Measured Effective Perveance**:
+     $$P_{\mathrm{eff}} = \frac{I_{\mathrm{exit}}}{V_{\mathrm{tot}}^{3/2}} \quad [\text{A}/\text{V}^{1.5}]$$
+   - **Theoretical Maximum Child-Langmuir Perveance** (Goebel & Katz formulation with equivalent acceleration length $l_e$):
+     $$l_e^2 = (l_g + t_s)^2 + r_s^2, \qquad P_{\max} = \frac{4 \varepsilon_0}{9} \sqrt{\frac{2 q_{\mathrm{ion}}}{m_{\mathrm{ion}}}} \frac{A_{\mathrm{aperture}}}{l_e^2}$$
+     where $l_g$ is grid gap, $t_s$ is screen thickness, $r_s$ is aperture radius, and $A_{\mathrm{aperture}}$ is the screen aperture open area ($\pi r_s^2$ in radial mode, $r_s \times 1\,\text{mm}$ in Cartesian half-slit mode). It is strictly defined by $r_s$ and invariant to domain size $L_y$.
+   - **Perveance Fraction**:
+     $$\Pi = \frac{P_{\mathrm{eff}}}{P_{\max}}$$
+     Quantifies whether extraction is under-perveant ($\Pi \ll 0.2$), optimally collimated ($\Pi \approx 0.2\dots 0.6$), or approaching space-charge choking ($\Pi \to 1.0$).
+
+8. **Decoupled Sub-Grid Structural Surface & 1D Radial Thermal Model**:
+   Decouples physical grid boundaries and thermal diffusion from the background Eulerian PIC mesh:
+   - **Analytical 1D Boundary Polylines**: Upstream face ($\hat{\mathbf{n}} = (-1, 0)$), aperture barrel / conical chamfer ($\hat{\mathbf{n}} = (-\sin\theta, -\cos\theta)$), and downstream face ($\hat{\mathbf{n}} = (+1, 0)$) with fine subgrid resolution ($\sim 5\dots 10\,\mu\text{m}$).
+   - **Exact Incident Impact Angle**: $\cos\theta = \max\left(0.1, \frac{-\mathbf{v}\cdot\hat{\mathbf{n}}}{\|\mathbf{v}\|}\right)$.
+   - **Continuous Yamamura Angular Sputtering**:
+     $$Y(E, \theta) = Y_{\mathrm{coeff}} \max(0, E - E_{\mathrm{th}}) \min\left(3.0, \; \frac{1}{\cos\theta}\right), \qquad \Delta d = \frac{Y(E,\theta) w_{\mathrm{macro}}}{D_{\mathrm{thresh}}} \Delta y$$
+     Replaces discrete cell-dropping, producing smooth continuous erosion depth profiles without staircasing.
+   - **1D Radial Structural Thermal Continuum**: Solves radial metal conduction with Stefan-Boltzmann radiation cooling:
+     $$\rho c_p t_{\mathrm{grid}} \frac{\partial T}{\partial t} = \frac{1}{r}\frac{\partial}{\partial r}\left(k t_{\mathrm{grid}} r \frac{\partial T}{\partial r}\right) + \dot{q}_{\mathrm{dep}}(r) - 2 \varepsilon \sigma (T^4 - 300^4)$$
+     bounded by explicit numerical Fourier stability $\text{Fo} = \frac{\alpha \Delta t_{\mathrm{eff}}}{\Delta r^2} \le 0.20$, coupled with Euler-Bernoulli cantilever bending deflection $\delta_{\mathrm{cant}} = \frac{\alpha (\bar{T}-300) L_{\mathrm{cant}}^2}{2 t_{\mathrm{grid}}}$.
 
 ---
 

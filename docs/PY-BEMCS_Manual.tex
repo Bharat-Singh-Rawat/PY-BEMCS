@@ -200,6 +200,110 @@ The transverse domain height $L_y$ and boundary conditions adapt to the selected
     \item \textbf{\texttt{two\_holes}}: Dual-aperture inter-hole coupling domain ($L_y = 3.0 r_{\mathrm{s}} + \text{pitch}$) with periodic boundaries in $y$.
 \end{itemize}
 
+\subsection{Multi-Metric Steady-State Stationarity Criterion}
+\label{sec:steady_state_criterion}
+
+To guarantee that simulations and parametric sweep scenarios reach true physical steady state before recording telemetry or advancing to subsequent design points, the physics engine enforces a multi-metric stationarity evaluation across a rolling iteration window $W$ (default: $W = 100$ steps). 
+
+Evaluating Poisson convergence or net charge balance alone is insufficient: sheath expansion and virtual anode relaxation can induce slow hydrodynamic current oscillations downstream long after the electrostatic potential appears stable. Therefore, stationarity is evaluated simultaneously across four fundamental physical observables:
+\begin{enumerate}[nosep]
+    \item \textbf{Total System Energy} ($E_{\mathrm{tot}}$): Sum of ion kinetic energy, electron kinetic energy, and electrostatic field energy:
+    \begin{equation}
+        E_{\mathrm{tot}} = \frac{1}{2} m_{\mathrm{ion}} w_{\mathrm{macro}} \sum_{p=1}^{N_{\mathrm{i}}} \|\vb{v}_p\|^2 + \frac{1}{2} m_{\mathrm{e}} w_{\mathrm{macro}} \sum_{e=1}^{N_{\mathrm{e}}} \|\vb{v}_e\|^2 + \frac{\varepsilon_0}{2} \int_{\Omega} \|\vb{E}\|^2 \dd{V}.
+    \end{equation}
+    \item \textbf{Total Net Space Charge} ($Q_{\mathrm{net}}$): Sum of discrete macroparticle charges and the interior Boltzmann electron fluid charge:
+    \begin{equation}
+        Q_{\mathrm{net}} = q_{\mathrm{ion}} w_{\mathrm{macro}} N_{\mathrm{i}} - e \, w_{\mathrm{macro}} N_{\mathrm{e}} - e \int_{\Omega_{\mathrm{plasma}}} n_0 \exp\!\left(\frac{V - V_{\mathrm{p}}}{T_{\mathrm{e}}}\right) \dd{V}.
+    \end{equation}
+    \item \textbf{Centerline Saddle-Point Potential} ($V_{\mathrm{saddle}}$): The minimum potential barrier along the aperture midline ($y = 0$) governing electron backstreaming and ion extraction sheath curvature.
+    \item \textbf{Exit Ion Extraction Current} ($I_{\mathrm{ion,exit}}$): Instantaneous and cumulative ion current collected across the downstream Faraday cup exit boundary plane:
+    \begin{equation}
+        I_{\mathrm{ion,exit}} = \frac{q_{\mathrm{ion}} w_{\mathrm{macro}} \sum_{\mathrm{exit}} 1}{\Delta t}.
+    \end{equation}
+\end{enumerate}
+
+For each observable $Q \in \{E_{\mathrm{tot}}, Q_{\mathrm{net}}, V_{\mathrm{saddle}}, I_{\mathrm{ion,exit}}\}$, the rolling relative variation over the evaluation window $W$ is computed as:
+\begin{equation}
+    \Delta Q[k] = \frac{Q[k] - Q[k-W]}{|Q[k-W]| + \epsilon} \times 100\%,
+\end{equation}
+where $\epsilon = 10^{-12}$ prevents division-by-zero singularities. Stationarity is confirmed if and only if all tracked quantities simultaneously satisfy:
+\begin{equation}
+    \max\!\left(|\Delta E_{\mathrm{tot}}|, \, |\Delta Q_{\mathrm{net}}|, \, |\Delta V_{\mathrm{saddle}}|, \, |\Delta I_{\mathrm{ion,exit}}|\right) \le \varepsilon_{\mathrm{threshold}},
+\end{equation}
+where the default convergence tolerance is $\varepsilon_{\mathrm{threshold}} = 1.0\%$. 
+
+Furthermore, to prevent false premature triggers during initial beam transit, the stationarity check enforces:
+\begin{itemize}[nosep]
+    \item $k_{\mathrm{transit}} \ge k_{\mathrm{min}}$: At least $k_{\mathrm{min}} = 500$ iterations must elapse \emph{after} the first primary ions traverse the screen grid into the inter-grid optics.
+    \item $k \ge W$: The scenario history must span at least the full evaluation window $W = 100$.
+    \item Safeguard iteration limit $k_{\max} = 5000$: If stationarity is not reached within $k_{\max}$, the scenario terminates with a warning flag (\texttt{steady\_state\_reached = False}) to prevent indefinite run stalls.
+\end{itemize}
+
+\subsection{Adaptive Plume Remeshing Formulation}
+\label{sec:adaptive_plume_remeshing}
+
+To balance computational efficiency and field fidelity, \PYBEMCS{} features an automatic periodic \textbf{Adaptive Plume Remeshing} engine (\texttt{adaptive\_remesh\_settings.enabled = true}, default interval $N_{\mathrm{remesh}} = 150$ iterations):
+\begin{itemize}[nosep]
+    \item \textbf{Presheath \& Optics Invariance}: Upstream presheath ($[0, x_{\mathrm{screen}}]$) and inter-grid optics barrels/gaps strictly preserve their baseline resolution ($\Delta x_0$, factor $= 1.0$), ensuring that sheath curvature and inter-grid electric fields $\mathbf{E}$ remain unperturbed.
+    \item \textbf{Automatic Plume Cell Sizing}: Downstream of the final grid exit ($x > x_{\mathrm{exit}}$), the local average ion density $n_{\mathrm{plume}}$ is sampled dynamically:
+    \begin{equation}
+        n_{\mathrm{plume}} = \frac{N_{\mathrm{plume,ions}} \cdot w_{\mathrm{macro}}}{V_{\mathrm{plume}}} \quad [\si{\per\meter\cubed}].
+    \end{equation}
+    The local Debye length expansion ratio determines the far-plume coarsening factor $f_{\mathrm{far}}$:
+    \begin{equation}
+        f_{\mathrm{target}} = \sqrt{\frac{n_0}{\max(n_{\mathrm{plume}}, \, 10^{12})}}, \quad f_{\mathrm{far}} = \operatorname{clip}\left(\operatorname{round}(f_{\mathrm{target}}, 1), \, 1.0, \, 8.0\right).
+    \end{equation}
+    The near-plume buffer zone smoothly transitions with factor $f_{\mathrm{near}} = \operatorname{clip}\left(\operatorname{round}(0.5(1.0 + f_{\mathrm{far}}), 1), \, 1.0, \, 2.0\right)$.
+    \item \textbf{Dynamic Bidirectional Adaptation}: As beam density increases or focuses, the mesh cells automatically restrict (refine); as the plume dilutes or expands, cells automatically enlarge (coarsen).
+    \item \textbf{Telemetry \& Visualization}: Tracked live in the Computational Domain \& Mesh Grid window via Tab 3 (\emph{Plume Cell Size History}) displaying $\Delta x_{\mathrm{plume}}$ vs.\ iterations alongside baseline nominal $\Delta x_0$.
+\end{itemize}
+
+\subsection{Child--Langmuir Perveance and Perveance Fraction Evaluation}
+\label{sec:perveance_formulation}
+
+Perveance characterizes the space-charge limited current extraction capacity of gridded ion optics. In \PYBEMCS{}, perveance metrics are evaluated automatically in all parametric sweeps, headless executions, and telemetry tables:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Total Acceleration Voltage} ($V_{\mathrm{tot}}$):
+    The net potential difference driving ion acceleration between the screen grid ($V_{\mathrm{s}}$) and accelerator grid ($V_{\mathrm{a}}$):
+    \begin{equation}
+        V_{\mathrm{tot}} = \max(V_{\mathrm{s}} - V_{\mathrm{a}}, \, 0.0).
+    \end{equation}
+    
+    \item \textbf{Measured Effective Perveance} ($P_{\mathrm{eff}}$):
+    Calculated directly from the measured steady-state exit ion beam current $I_{\mathrm{ion,exit}}$ and total acceleration voltage:
+    \begin{equation}
+        P_{\mathrm{eff}} = \frac{I_{\mathrm{ion,exit}}}{V_{\mathrm{tot}}^{3/2}} \quad \left[\si{\ampere\per\volt^{1.5}}\right].
+    \end{equation}
+    If $V_{\mathrm{tot}} \le 0$ or $I_{\mathrm{ion,exit}} \le 0$, $P_{\mathrm{eff}} = 0.0$.
+    
+    \item \textbf{Theoretical Maximum Child--Langmuir Perveance} ($P_{\max}$):
+    Following Goebel and Katz~\cite{goebel}, the space-charge limited current limit for circular aperture optics accounts for screen grid thickness $t_{\mathrm{s}}$, inter-grid separation gap $l_{\mathrm{g}}$, and screen hole radius $r_{\mathrm{s}}$ through the equivalent acceleration length $l_{\mathrm{e}}$:
+    \begin{equation}
+        l_{\mathrm{e}}^2 = (l_{\mathrm{g}} + t_{\mathrm{s}})^2 + r_{\mathrm{s}}^2.
+    \end{equation}
+    The maximum theoretical Child--Langmuir perveance limit is:
+    \begin{equation}
+        P_{\max} = \frac{4\varepsilon_0}{9} \sqrt{\frac{2 q_{\mathrm{ion}}}{m_{\mathrm{ion}}}} \, \frac{A_{\mathrm{aperture}}}{l_{\mathrm{e}}^2} \quad \left[\si{\ampere\per\volt^{1.5}}\right],
+    \end{equation}
+    where $A_{\mathrm{aperture}}$ is the physical extraction open area of the screen grid hole:
+    \begin{equation}
+        A_{\mathrm{aperture}} =
+        \begin{cases}
+            \pi r_{\mathrm{s}}^2, & \text{in Axisymmetric ($r\text{--}z$) cylindrical coordinates}, \\
+            r_{\mathrm{s}} \cdot d_{\mathrm{unit}}, & \text{in Cartesian 2D slab mode (\texttt{half\_hole}) with } d_{\mathrm{unit}} = \SI{1}{\milli\meter}.
+        \end{cases}
+    \end{equation}
+    Critically, $A_{\mathrm{aperture}}$ is strictly defined by the aperture radius $r_{\mathrm{s}}$, remaining invariant to whether upstream macroparticle injection covers only the aperture or extends across the entire simulation domain ($R_{\mathrm{domain}} = L_y$). This avoids artificial $P_{\max}$ inflation and guarantees consistent perveance fractions between 2D Cartesian and radial simulations.
+    
+    \item \textbf{Perveance Fraction} ($\Pi$):
+    The non-dimensional ratio quantifying beam extraction efficiency relative to the theoretical space-charge limit:
+    \begin{equation}
+        \Pi = \frac{P_{\mathrm{eff}}}{P_{\max}}.
+    \end{equation}
+    A perveance fraction $\Pi \ll 1$ indicates under-perveance (concave meniscus, excessive beam crossover and impingement), $\Pi \approx 0.2\text{--}0.6$ corresponds to optimal beamlet collimation with minimum divergence, and $\Pi \to 1.0$ approaches space-charge choking and virtual anode formation.
+\end{enumerate}
+
 % =====================================================
 \section{Particle-in-Cell Electrostatic Algorithm}
 % =====================================================
@@ -332,27 +436,56 @@ The extraction optics consist of an arbitrary sequence of $N$ conducting grids d
     \item Upstream chamfer angle $\theta_k$ (\si{\degree})
 \end{itemize}
 
-Solid boundary masks $\mathcal{M}_k(x,y)$ are dynamically synthesised and rasterised onto the finite-difference mesh.
+Solid boundary masks $\mathcal{M}_k(x,y)$ are dynamically synthesised and rasterised onto the finite-difference Poisson mesh. However, physical boundary interactions, continuous sputtering erosion, and grid heat transfer are decoupled into dedicated continuous sub-grid models.
 
-\subsection{Cantilever Thermo-Mechanical Grid Deformation}
+\subsection{Decoupled Sub-Grid Structural Surface Representation}
+\label{sec:subgrid_surface}
 
-Under intense ion impingement and radiative heating, individual grid membranes experience substantial temperature rises $\Delta T_k = T_k - T_{\infty}$. Each grid is modeled as an annular plate segment undergoing Euler--Bernoulli cantilever bending clamped at the outer boundary ($y = L_y$) and free at the aperture edge ($y = r_k$):
+In conventional PIC-MCC gridded optics codes, rasterizing curved apertures onto discrete Eulerian cells ($\Delta x \times \Delta y \sim \SI{20}{\micro\meter}$--\SI{50}{\micro\meter}) causes unphysical staircased corners that distort radial electric fields, over-scatter periphery ions, and result in chunky ``cell-dropping'' erosion. 
+
+\PYBEMCS{} resolves this limitation by completely decoupling the physical grid geometry from the background Poisson mesh via a continuous sub-grid surface representation (\texttt{SubgridApertureProfile} and \texttt{SubgridSegment}):
+\begin{itemize}[nosep]
+    \item \textbf{Continuous Boundary Segments}: Each grid aperture is discretized into fine 1D line elements (\SI{5}{\micro\meter}--\SI{10}{\micro\meter} resolution) spanning:
+    \begin{enumerate}[label=(\roman*),nosep]
+        \item \emph{Upstream Face}: $x = g_{\mathrm{start}} + \delta_{\mathrm{cant}}$, $y \in [r_{\mathrm{front}}, L_y]$ with outward unit normal $\hat{\vb{n}} = (-1, 0)^{\mathsf{T}}$.
+        \item \emph{Conical Chamfer / Barrel}: Connecting $(g_{\mathrm{start}} + \delta_{\mathrm{cant}}, r_{\mathrm{front}})$ to $(g_{\mathrm{end}} + \delta_{\mathrm{cant}}, r_{\mathrm{back}})$ with conical taper angle $\theta_{\mathrm{cham}}$ and inward-pointing normal:
+        \begin{equation}
+            \hat{\vb{n}} = (-\sin\theta_{\mathrm{cham}}, \, -\cos\theta_{\mathrm{cham}})^{\mathsf{T}}.
+        \end{equation}
+        \item \emph{Downstream Face}: $x = g_{\mathrm{end}} + \delta_{\mathrm{cant}}$, $y \in [r_{\mathrm{back}}, L_y]$ with outward normal $\hat{\vb{n}} = (+1, 0)^{\mathsf{T}}$.
+    \end{enumerate}
+    \item \textbf{Continuous Impact Angle Determination}: When an ion strikes the grid at continuous coordinates $(x_i, y_i)$ with velocity $\vb{v}_i$, it is projected onto the nearest sub-grid segment $k$. The exact incident angle $\theta_i$ is computed:
+    \begin{equation}
+        \cos\theta_i = \max\!\left(0.1, \; \frac{-\vb{v}_i \cdot \hat{\vb{n}}_k}{\|\vb{v}_i\|}\right).
+    \end{equation}
+\end{itemize}
+
+\subsection{1D Radial Structural Thermal Continuum and Cantilever Deflection}
+\label{sec:subgrid_thermal}
+
+Rather than solving 2D finite-difference heat diffusion on coarse vacuum/solid cells, \PYBEMCS{} models each grid membrane as a dedicated 1D radial finite-volume continuum $r \in [r_{\mathrm{aperture}}, L_y]$ (\texttt{SubgridThermalModel}):
 \begin{equation}
-    \delta_{\max,k} = \frac{\alpha_k \Delta T_k L_k^2}{2 t_k}, \qquad L_k = L_y - r_k,
+    \rho_k c_{p,k} t_k \frac{\partial T}{\partial t} = \frac{1}{r} \frac{\partial}{\partial r}\left(k_k t_k r \frac{\partial T}{\partial r}\right) + \dot{q}_{\mathrm{dep}}(r) - 2 \varepsilon_k \sigma_{\mathrm{SB}} \left(T^4 - T_{\infty}^4\right),
 \end{equation}
-where $\alpha_k$ is the linear thermal expansion coefficient ($\si{\per\kelvin}$). The transverse displacement profile:
-\begin{equation}
-    \delta(y) = \delta_{\max,k} \left(\frac{L_y - y}{L_k}\right)^2,
-\end{equation}
-is dynamically added as an axial coordinate distortion to the grid boundaries. Whenever cumulative structural deformation exceeds $\SI{5}{\micro\meter}$, the Poisson sparse matrix operator is automatically re-factored.
+where $t_k$ is grid thickness, $k_k$ is thermal conductivity, $\rho_k$ is material density, $c_{p,k}$ is specific heat capacity, $\varepsilon_k$ is surface emissivity, $\sigma_{\mathrm{SB}} = \SI{5.67e-8}{\watt\per\meter\squared\per\kelvin\tothe{4}}$, and $T_{\infty} = \SI{300}{\kelvin}$.
 
-\subsection{2D Thermal Diffusion and Radiative Dissipation}
+The boundary conditions are:
+\begin{itemize}[nosep]
+    \item \textbf{Inner Aperture Edge} ($r = r_{\mathrm{aperture}}$): Adiabatic / radiation-only condition, $\left.\frac{\partial T}{\partial r}\right|_{r = r_{\mathrm{ap}}} = 0$.
+    \item \textbf{Outer Chassis Edge} ($r = L_y$): Isothermal clamped boundary anchored to the mounting ring at $T(L_y) = \SI{300}{\kelvin}$.
+\end{itemize}
 
-Thermal energy deposition from impacting ions is balanced by 2D conduction within the grid solid mask and Stefan--Boltzmann radiative cooling to space:
+Numerical stability of explicit radial diffusion is strictly bounded by the 1D Fourier criterion:
 \begin{equation}
-    \rho_k c_{p,k} \frac{\partial T}{\partial t} = k_k \left(\frac{\partial^2 T}{\partial x^2} + \frac{\partial^2 T}{\partial y^2}\right) + \dot{q}_{\mathrm{dep}} - \frac{\varepsilon_k \sigma_{\mathrm{SB}}}{\Delta z}\left(T^4 - T_{\infty}^4\right),
+    \mathrm{Fo} = \frac{k_k}{\rho_k c_{p,k}} \frac{\Delta t_{\mathrm{eff}}}{\Delta r^2} \le 0.20,
 \end{equation}
-where $k_k$ is thermal conductivity, $c_{p,k}$ is specific heat capacity, $\varepsilon_k$ is surface emissivity, $\sigma_{\mathrm{SB}} = \SI{5.67e-8}{\watt\per\meter\squared\per\kelvin\tothe{4}}$, and $T_{\infty} = \SI{300}{\kelvin}$.
+preventing numerical oscillations during accelerated thermal integration ($\Delta t_{\mathrm{eff}} = \Delta t \times 10^7$).
+
+The resulting mean grid temperature rise $\Delta \bar{T}_k = \bar{T}_k - T_{\infty}$ drives Euler--Bernoulli cantilever bending deflection of the circular grid aperture segment:
+\begin{equation}
+    \delta_{\mathrm{cant},k} = \frac{\alpha_k \Delta \bar{T}_k L_{\mathrm{cant},k}^2}{2 t_k}, \qquad L_{\mathrm{cant},k} = L_y - r_k,
+\end{equation}
+where $\alpha_k$ is the thermal expansion coefficient. This deflection dynamically updates grid axial positions ($g_{\mathrm{start}} + \delta_{\mathrm{cant}}$), accounting for thermal gap closure. Whenever cumulative structural deformation exceeds $\SI{5}{\micro\meter}$, the Poisson sparse matrix operator is automatically re-factored.
 
 % =====================================================
 \section{Collisions and Sputter Erosion}
@@ -376,19 +509,24 @@ The analytical xenon CEX cross-section formulation is:
 \end{equation}
 where $g = |\vb{v}|$ is relative collision speed. If custom cross-section CSV tables are imported, this formula is dynamically superseded by cubic spline interpolation in $\log_{10}(E)$--$\log_{10}(\sigma)$ space.
 
-\subsection{Sputter Yield and Dynamic Cell Removal}
+\subsection{Continuous Yamamura Sputter Erosion vs.\ Cell Removal}
 
-Erosion of grid boundaries under ion bombardment is governed by the empirical Matsunami sputtering yield relation~\cite{matsunami}:
+Erosion of grid boundaries under ion bombardment is governed by the energy-dependent Matsunami yield~\cite{matsunami} combined with Yamamura's angular enhancement formulation~\cite{yamamura}:
 \begin{equation}
-    Y(E) = \min\!\left[Y_0 \left(E_{\mathrm{eV}} - E_{\mathrm{th}}\right)^{1.5},\; 1.0\right],
+    Y(E_i, \theta_i) = Y_{\mathrm{coeff}} \cdot \max\!\left(0, \, E_i - E_{\mathrm{th}}\right) \cdot f(\theta_i),
 \end{equation}
-where $Y_0$ is the sputter yield coefficient and $E_{\mathrm{th}}$ is the sputtering threshold energy ($\si{\eV}$).
+where $Y_{\mathrm{coeff}}$ is the material sputtering coefficient, $E_{\mathrm{th}}$ is the threshold displacement energy, and the angular enhancement function is bounded to avoid numerical divergence at grazing incidence:
+\begin{equation}
+    f(\theta_i) = \min\!\left(3.0, \; \frac{1}{\cos\theta_i}\right), \qquad \cos\theta_i = \max\!\left(0.1, \; \frac{-\vb{v}_i \cdot \hat{\vb{n}}_k}{\|\vb{v}_i\|}\right).
+\end{equation}
 
-Cumulative damage per cell is accumulated as:
+In legacy implementations, sputtering damage $D_{i,j}$ was accumulated onto discrete Cartesian grid cells. When $D_{i,j} \ge D_{\mathrm{fail}}$, entire cells were removed from the solid mask. This ``cell-dropping'' approach generated jagged, $90^\circ$ stepped notches of size $\Delta x \times \Delta y$, causing unphysical local electric field distortions and staircased corner scattering.
+
+In the current architecture, sputtering erosion is evaluated directly on the decoupled sub-grid segments (\texttt{SubgridSegment}). Cumulative recession depth evolves continuously:
 \begin{equation}
-    D_{i,j} \mathrel{+}= Y(E) \cdot \kappa_{\mathrm{acc}},
+    \Delta d_k = \frac{Y(E_i, \theta_i) \, w_{\mathrm{macro}}}{D_{\mathrm{thresh}}} \, \Delta y,
 \end{equation}
-where $\kappa_{\mathrm{acc}}$ is the numerical time-acceleration factor. When $D_{i,j} \ge D_{\mathrm{fail}}$, the grid cell is removed from the solid mask, exposing new interior nodes and updating the field solver in real time.
+where $D_{\mathrm{thresh}}$ is the normalized damage threshold and $\Delta y$ is the local transverse mesh scale. This continuous formulation produces smooth, sub-micrometer erosion groove profiles that are fed directly to telemetry and contour diagnostics (\texttt{get\_groove\_profile()}) without altering Poisson mesh connectivity or introducing unphysical discrete cell deletions.
 
 % =====================================================
 \section{Modular Configuration Architecture (\texttt{config.json})}
@@ -550,6 +688,16 @@ R.~I.~S. Roy, \textit{Numerical Simulation of Ion Thruster Plume Backflow}, Ph.D
 \bibitem{matsunami}
 N.~Matsunami \textit{et al.},
 ``Energy dependence of the yields of ion-induced sputtering of monatomic solids,'' \textit{Atomic Data and Nuclear Data Tables}, vol.~31, no.~1, pp.~1--80, 1984.
+
+\bibitem{goebel}
+D.~M.~Goebel and I.~Katz,
+\textit{Fundamentals of Electric Propulsion: Ion and Hall Thrusters},
+John Wiley \& Sons, Hoboken, NJ, 2008.
+
+\bibitem{yamamura}
+Y.~Yamamura, Y.~Itikawa, and N.~Itoh,
+``Angular dependence of sputtering yields of monatomic solids,''
+\textit{Institute of Plasma Physics Report IPPJ-AM-26}, Nagoya University, 1983.
 \end{thebibliography}
 
 \end{document}

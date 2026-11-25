@@ -9,6 +9,8 @@ from .context import StepContext
 def step_cex(sim, ctx: StepContext):
     """Perform charge exchange collisions between energetic beam ions and background neutrals."""
     params = ctx.params
+    if not bool(params.get('enable_cex', getattr(sim, 'enable_cex', True))):
+        return
 
     if sim.num_p > 0:
         p_x = sim.p_x[:sim.num_p]

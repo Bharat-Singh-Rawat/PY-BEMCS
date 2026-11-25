@@ -253,6 +253,17 @@ class SweepMixin:
             "ny": int(snap.get('ny', getattr(sim, 'ny', 0))),
             "dx": float(snap.get('dx', getattr(sim, 'dx', 0.05))),
             "dy": float(snap.get('dy', getattr(sim, 'dy', 0.05))),
+            "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
+            "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
+            "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
+            "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
+            "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
+            "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+            "zone_configs": getattr(sim, 'zone_configs', None),
+            "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
+            "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
+            "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+            "zone_configs": getattr(sim, 'zone_configs', None),
         }
 
     def _get_sweep_scenario_tracking_buffer(self, scenario_idx: int) -> list:
@@ -2282,7 +2293,12 @@ class SweepMixin:
                 print(f"[Phys Snapshot Update Error] {exc}")
 
         # 6. Update Computational Domain & Mesh Inspector Window for the selected scenario if open
-        if (getattr(self, 'mesh_window', None) and self.mesh_window.isVisible()) or (getattr(self, 'substep_window', None) and self.substep_window.isVisible()):
+        if (
+            (getattr(self, 'mesh_window', None) and self.mesh_window.isVisible())
+            or (getattr(self, 'substep_window', None) and self.substep_window.isVisible())
+            or (getattr(self, 'plume_window', None) and self.plume_window.isVisible())
+            or (getattr(self, 'mesh_window', None) and getattr(self.mesh_window, '_plume_size_dialog', None) and self.mesh_window._plume_size_dialog.isVisible())
+        ):
             try:
                 self._update_mesh_window_for_scenario(scenario_idx, info, d_data)
             except Exception as exc:
@@ -2435,11 +2451,15 @@ class SweepMixin:
         except Exception as exc:
             print(f"[Phys Window Warning] Error updating energy plot for scenario {scenario_idx}: {exc}")
 
-    def _update_mesh_window_for_scenario(self, scenario_idx, info, d_data=None):
+    def _update_mesh_window_for_scenario(self, scenario_idx, info, d_data=None, force=False):
         """Update Computational Domain & Mesh Grid Inspector and Substeps graphs for scenario_idx."""
-        has_mesh = getattr(self, 'mesh_window', None) and self.mesh_window.isVisible()
-        has_substep = getattr(self, 'substep_window', None) and self.substep_window.isVisible()
-        if not has_mesh and not has_substep:
+        has_mesh = getattr(self, 'mesh_window', None) and (self.mesh_window.isVisible() or force)
+        has_substep = getattr(self, 'substep_window', None) and (self.substep_window.isVisible() or force)
+        has_plume = (
+            (getattr(self, 'plume_window', None) and (self.plume_window.isVisible() or force))
+            or (getattr(self, 'mesh_window', None) and getattr(self.mesh_window, '_plume_size_dialog', None) and (self.mesh_window._plume_size_dialog.isVisible() or force))
+        )
+        if not has_mesh and not has_substep and not has_plume:
             return
         if not hasattr(self, 'sim') or self.sim is None:
             return
@@ -2449,6 +2469,15 @@ class SweepMixin:
                 d_data = self._get_scenario_domain_data(scenario_idx)
 
             self._sync_sim_domain_from_scenario_data(d_data)
+
+            # Sync current iteration for the selected scenario
+            scen_iter = int(info.get("iter", info.get("steady_iterations", 0)))
+            if scen_iter > 0:
+                self.sim.iteration = scen_iter
+
+            # Sync zone_configs if present in info
+            if info.get("zone_configs"):
+                self.sim.zone_configs = info["zone_configs"]
 
             # Substep history
             subs_it = info.get("substep_history_iter")
@@ -2463,6 +2492,19 @@ class SweepMixin:
                 self.sim.substep_history_ion = []
                 self.sim.substep_history_e = []
 
+            # Plume cell size history
+            plume_it = info.get("plume_history_iterations")
+            plume_dx = info.get("plume_history_dx")
+            plume_tuple = info.get("plume_dx_history")
+            if plume_it is not None and len(plume_it) > 0:
+                self.sim.plume_history_iterations = list(plume_it)
+                self.sim.plume_history_dx = list(plume_dx) if plume_dx is not None else []
+                self.sim.plume_dx_history = list(plume_tuple) if plume_tuple is not None else []
+            elif not getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_current_idx', 0) + 1 != scenario_idx:
+                self.sim.plume_history_iterations = []
+                self.sim.plume_history_dx = []
+                self.sim.plume_dx_history = []
+
             param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
             param_val = info.get("parameter_value", "")
             param_str = f" ({param_id} = {param_val})" if param_val != "" else ""
@@ -2476,6 +2518,10 @@ class SweepMixin:
             if has_substep:
                 self.substep_window.setWindowTitle(f"Displacement Substeps Monitor — Scenario {scenario_idx}{param_str}")
                 self.substep_window.update_plot(self.sim)
+
+            if getattr(self, 'plume_window', None) and self.plume_window.isVisible():
+                self.plume_window.setWindowTitle(f"Plume Mesh Cell Size Monitor — Scenario {scenario_idx}{param_str}")
+                self.plume_window.update_plot(self.sim)
 
         except Exception as exc:
             print(f"[Mesh Window Warning] Error updating mesh plot for scenario {scenario_idx}: {exc}")
@@ -3223,6 +3269,10 @@ class SweepMixin:
             "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
             "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
             "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
+            "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
+            "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
+            "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+            "zone_configs": getattr(sim, 'zone_configs', None),
             "Lx": float(getattr(sim, 'Lx', 3.0)),
             "Ly": float(getattr(sim, 'Ly', 3.0)),
             "nx": int(getattr(sim, 'nx', 0)),
@@ -3313,12 +3363,33 @@ class SweepMixin:
         r_s = max(r_screen_mm * 1e-3, 1e-6)   # screen aperture radius in meters
         l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
 
-        # Cross-sectional injection / extraction area in m^2
-        last_area = getattr(sim, '_last_injection_area', None)
-        if last_area is not None and last_area > 0.0:
-            area = float(last_area)
+        # Physical screen grid extraction aperture open area in m^2:
+        # Theoretical Child-Langmuir space-charge limited current perveance limit (Goebel & Katz)
+        # MUST evaluate over the physical aperture open area through which ions are extracted (r_s),
+        # NEVER over the upstream simulation domain radius (R_domain / Ly), which would falsely inflate P_max
+        # and artificially halve or deflate the perveance fraction (fp).
+        is_axisymmetric = getattr(sim, 'is_axisymmetric', False)
+        geometry = getattr(sim, 'geometry', 'half_hole')
+        if not hasattr(sim, 'is_axisymmetric') and hasattr(self, 'inputs'):
+            is_axisymmetric = str(getattr(self.inputs.get('coordinate_system'), 'currentText', lambda: '')()).strip().lower() == 'axisymmetric'
+            geometry = str(getattr(self.inputs.get('geometry'), 'currentText', lambda: 'half_hole')()).strip().lower()
+
+        if is_axisymmetric:
+            # Full 3D circular aperture: Area = π * r_s^2
+            area = np.pi * (r_s ** 2)
         else:
-            area = max(r_screen_mm * 1e-3 * 1e-3, 1e-8)
+            # 2D Cartesian slab geometry with 1 mm unit depth (1e-3 m):
+            # In half_hole: extraction slit width = r_s
+            # In one_hole: full centered slit width = 2 * r_s
+            # In two_holes: two centered slits width = 4 * r_s
+            if geometry == 'one_hole':
+                slit_width_m = 2.0 * r_s
+            elif geometry == 'two_holes':
+                slit_width_m = 4.0 * r_s
+            else:
+                slit_width_m = r_s
+            _unit_depth_m = 1e-3
+            area = slit_width_m * _unit_depth_m
 
         p_max = float((4.0 * eps_0 / 9.0) * np.sqrt(2.0 * q / m_i) * (area / l_e_sq))
 

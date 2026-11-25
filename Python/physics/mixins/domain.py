@@ -197,14 +197,18 @@ class DomainMixin:
             total_grid_thickness = 0.0
 
         pitch   = params.get("pitch_mm", params.get("discharge_chamber", {}).get("pitch_mm", 0.0) if isinstance(params.get("discharge_chamber"), dict) else 0.0)
-        Te_up   = params.get('Te_up', 3.0)
+        Te_up   = float(params.get('Te_up', 3.0))
 
-        n0_n      = params.get("n0_plasma", 1e17)
+        n0_n    = float(params.get("n0_plasma", params.get("n0", 1e17)))
+        self.n0_plasma = n0_n
+        self.n0 = n0_n
+        self.Te_up = Te_up
         entire_bulk_plasma = params.get("entire_bulk_plasma", False)
 
         # Debye length is always needed for grid-spacing validation
         debye_length = np.sqrt(self.eps0 * Te_up / (self.q * n0_n * 0.61))
         debye_mm = debye_length * 1e3   # Debye length in mm
+        self.debye_length_mm = float(debye_mm)
 
         # Physics-based recommended upstream gap depending on simulation mode
         if entire_bulk_plasma:
@@ -487,6 +491,13 @@ class DomainMixin:
             self.entered_optics_step = 0.0
             self.first_grid_entry_iter = None
             self._last_neut_injected = 0
+            from ..mesh_utils import compute_plume_mean_dx
+            base_p_dx = compute_plume_mean_dx(self, zone_configs)
+            self.plume_history_iterations = [0]
+            self.plume_history_dx = [base_p_dx]
+            self.plume_dx_history = [(0, base_p_dx)]
+            far_z = next((z for z in zone_configs if z['name'] == 'Far_Plume'), None)
+            self._current_plume_factor = float(far_z['factor']) if far_z else 4.0
             self._domain_built = True
         else:
             # Ensure 2D spatial grid arrays match new (ny, nx) if mesh shape changed
@@ -521,7 +532,9 @@ class DomainMixin:
             self.injection_stop_time = None
             self.injection_enabled   = True
 
-        n0         = params.get('n0_plasma', 1e17)
+        n0 = float(params.get('n0_plasma', getattr(self, 'n0_plasma', 1e17)))
+        self.n0_plasma = n0
+        self.n0 = n0
         self.target_ppc = float(params.get('target_ppc', 40.0))
         entire_bulk_plasma = params.get('entire_bulk_plasma', False)
         bohm_factor = 1.0 if entire_bulk_plasma else 0.61
@@ -847,18 +860,52 @@ class DomainMixin:
         print(f"[Plume Reshape] Downstream plume truncated from {old_Lx:.3f} mm to {self.Lx:.3f} mm. Mesh now has {self.nx * self.ny:,} cells.")
         return True
 
-    def execute_stability_remesh(self, params=None, remesh_cfg=None):
+    def execute_plume_remesh(self, params=None, remesh_cfg=None, force=False):
         """
-        Execute an adaptive post-stability remeshing milestone:
-        1. Dynamically detects the plasma sheath / meniscus edge location x_meniscus.
-        2. Coarsens deep presheath and far plume to reduce Poisson solve overhead.
-        3. Refines the active sheath / meniscus region to sub-Debye resolution to accurately
-           capture curved Bohm sonic surface and eliminate artificial divergence narrowing.
-        4. Preserves particle coordinates and continuous subgrid surface states.
-        5. Bilinearly interpolates potential and thermal maps onto the adapted grid.
-        6. Re-deposits particle charge and performs 5-iteration Poisson relaxation.
+        Execute automatic adaptive plume remeshing:
+        - Automatically computes downstream plume coarsening factor based on live plume ion density
+          and Debye length expansion ratio.
+        - Keeps upstream presheath and inter-grid optics strictly at baseline resolution.
+        - If plume factor changes significantly (or force=True), rebuilds the domain,
+          interpolates fields, preserves particles, re-deposits charge, and relaxes potential.
+        - Records iteration and mean plume dx into plume cell size history.
         """
-        if getattr(self, '_has_stability_remeshed', False):
+        from ..mesh_utils import estimate_automatic_plume_mesh_zones, compute_plume_mean_dx
+
+        cfg = dict(getattr(self, '_last_params', {}))
+        if params:
+            cfg.update(params)
+
+        remesh_settings = remesh_cfg or cfg.get("adaptive_remesh_settings", {})
+        if not remesh_settings and isinstance(cfg.get("advanced_settings"), dict):
+            remesh_settings = cfg["advanced_settings"].get("adaptive_remesh_settings", {})
+        grids = cfg.get("grids", [])
+
+        new_zones = estimate_automatic_plume_mesh_zones(
+            sim=self,
+            grids=grids,
+            upstream_gap_mm=self.upstream_gap_mm,
+            Lx=self.Lx,
+            dx0=self.dx,
+            remesh_cfg=remesh_settings
+        )
+
+        far_zone = next((z for z in new_zones if z['name'] == 'Far_Plume'), None)
+        new_far_factor = far_zone['factor'] if far_zone else 4.0
+        old_far_factor = getattr(self, '_current_plume_factor', None)
+
+        # Check if rebuild is necessary
+        factor_diff = abs(new_far_factor - old_far_factor) if old_far_factor is not None else 999.0
+        if not force and old_far_factor is not None and factor_diff < 0.15:
+            current_dx = compute_plume_mean_dx(self)
+            if not hasattr(self, 'plume_history_iterations'):
+                self.plume_history_iterations = []
+                self.plume_history_dx = []
+                self.plume_dx_history = []
+            if not self.plume_history_iterations or self.plume_history_iterations[-1] != self.iteration:
+                self.plume_history_iterations.append(self.iteration)
+                self.plume_history_dx.append(current_dx)
+                self.plume_dx_history.append((self.iteration, current_dx))
             return False
 
         old_x = self.x_coords.copy()
@@ -876,23 +923,6 @@ class DomainMixin:
         old_p_vy = self.p_vy[:num_p].copy()
         old_p_vz = self.p_vz[:num_p].copy()
         old_isCEX = self.p_isCEX[:num_p].copy() if hasattr(self, 'p_isCEX') and self.p_isCEX is not None else None
-
-        from ..mesh_utils import estimate_stability_optimized_mesh_zones
-        cfg = dict(getattr(self, '_last_params', {}))
-        if params:
-            cfg.update(params)
-
-        remesh_settings = remesh_cfg or cfg.get("adaptive_remesh_settings", {})
-        grids = cfg.get("grids", [])
-
-        new_zones = estimate_stability_optimized_mesh_zones(
-            sim=self,
-            grids=grids,
-            upstream_gap_mm=self.upstream_gap_mm,
-            Lx=self.Lx,
-            dx0=self.dx,
-            remesh_cfg=remesh_settings
-        )
 
         cfg["zone_configs"] = new_zones
         cfg["use_json_mesh_zones"] = False
@@ -1015,7 +1045,23 @@ class DomainMixin:
         # Execute Picard relaxation steps to smoothly reconcile fields on the new mesh
         self.recalc_poisson(iterations=5, params=cfg)
 
+        self._current_plume_factor = new_far_factor
         self._has_stability_remeshed = True
         self._stability_remesh_iter = self.iteration
-        print(f"[Adaptive Remesh] Reshaped mesh at iter {self.iteration}: ({len(old_y)}x{len(old_x)}) -> ({self.ny}x{self.nx}).")
+
+        # Record plume cell size history
+        mean_plume_dx = compute_plume_mean_dx(self, new_zones)
+        if not hasattr(self, 'plume_history_iterations'):
+            self.plume_history_iterations = []
+            self.plume_history_dx = []
+            self.plume_dx_history = []
+        self.plume_history_iterations.append(self.iteration)
+        self.plume_history_dx.append(mean_plume_dx)
+        self.plume_dx_history.append((self.iteration, mean_plume_dx))
+
+        print(f"[Plume Remesh] Iter {self.iteration}: Adapted plume mesh (far factor {new_far_factor:.1f}x, mean Δx {mean_plume_dx:.4f} mm, grid {self.ny}x{self.nx}).")
         return True
+
+    def execute_stability_remesh(self, params=None, remesh_cfg=None):
+        """Backward-compatible alias for execute_plume_remesh."""
+        return self.execute_plume_remesh(params=params, remesh_cfg=remesh_cfg, force=True)

@@ -86,6 +86,11 @@ class ParallelSweepWorker(QThread):
         initial_sim_mode = self.base_params.get("sim_mode", "Both") if isinstance(self.base_params, dict) else "Both"
         self.set_sim_mode(str(initial_sim_mode))
 
+        self.processes_file = os.path.join(tempfile.gettempdir(), f"pybemcs_sweep_{worker_token}.processes")
+        initial_see = bool(self.base_params.get("enable_see", True)) if isinstance(self.base_params, dict) else True
+        initial_cex = bool(self.base_params.get("enable_cex", True)) if isinstance(self.base_params, dict) else True
+        self.set_processes(initial_see, initial_cex)
+
         # File-based state and pause tracking per scenario (fast, decoupled, zero-daemon)
         self.state_files = {}
         self.pause_files = {}
@@ -180,6 +185,10 @@ class ParallelSweepWorker(QThread):
                 "substep_history_iter": [],
                 "substep_history_ion": [],
                 "substep_history_e": [],
+                "plume_history_iterations": list(ex_hist.get("plume_history_iterations", [])),
+                "plume_history_dx": list(ex_hist.get("plume_history_dx", [])),
+                "plume_dx_history": list(ex_hist.get("plume_dx_history", [])),
+                "zone_configs": ex_hist.get("zone_configs", None),
                 "ion_current_exit_history": [],
                 "transmitted_ions_history": [],
                 "V": None,
@@ -342,6 +351,25 @@ class ParallelSweepWorker(QThread):
             except Exception:
                 pass
 
+    def set_processes(self, enable_see: bool, enable_cex: bool):
+        """Synchronize Secondary e- emissions and charge exchange flags across worker processes."""
+        self.enable_see = bool(enable_see)
+        self.enable_cex = bool(enable_cex)
+        if isinstance(self.base_params, dict):
+            self.base_params["enable_see"] = self.enable_see
+            self.base_params["enable_cex"] = self.enable_cex
+        for p in getattr(self, '_all_payloads_ref', []):
+            if isinstance(p.get("base_params"), dict):
+                p["base_params"]["enable_see"] = self.enable_see
+                p["base_params"]["enable_cex"] = self.enable_cex
+        pf = getattr(self, 'processes_file', None)
+        if pf:
+            try:
+                with open(pf, "w", encoding="utf-8") as f:
+                    f.write(f"{int(self.enable_see)},{int(self.enable_cex)}")
+            except Exception:
+                pass
+
     def get_scenario_tracking_buffer(self, scen_num: int) -> list:
         """Read and return recorded particle kinematics list for scen_num."""
         if not hasattr(self, 'final_tracking_buffers'):
@@ -425,6 +453,11 @@ class ParallelSweepWorker(QThread):
                 os.remove(self.sim_mode_file)
             except Exception:
                 pass
+        if hasattr(self, 'processes_file') and os.path.exists(self.processes_file):
+            try:
+                os.remove(self.processes_file)
+            except Exception:
+                pass
 
     def _kill_worker_processes(self):
         """Forcibly and immediately terminate all worker OS processes."""
@@ -500,6 +533,7 @@ class ParallelSweepWorker(QThread):
                 "trk_file": self.trk_files.get(scen_idx),
                 "track_ptcls_file": getattr(self, 'track_ptcls_file', None),
                 "sim_mode_file": getattr(self, 'sim_mode_file', None),
+                "processes_file": getattr(self, 'processes_file', None),
                 "track_particles": bool(getattr(self, 'track_particles_enabled', False)),
                 "active_view_file": self.active_view_file,
                 "scatter_limit": getattr(self, 'scatter_limit', 2000),
@@ -655,7 +689,9 @@ class ParallelSweepWorker(QThread):
                                     "iter_history", "time_history", "div_history", "div_mid_history",
                                     "ebs_history", "transparency_history", "ion_current_exit_history",
                                     "ion_current_exit_avg_history", "transmitted_ions_history",
-                                    "active_cells_history", "low_ppc_cells_history", "T_histories"
+                                    "active_cells_history", "low_ppc_cells_history", "T_histories",
+                                    "plume_history_iterations", "plume_history_dx", "plume_dx_history",
+                                    "zone_configs",
                                 )
                                 for hk in hist_keys:
                                     if hk in self.final_status_dict[s_idx] and hk not in row:

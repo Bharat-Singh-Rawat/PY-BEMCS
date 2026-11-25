@@ -779,6 +779,41 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         self.assertAlmostEqual(perv_frac, expected_frac, places=6)
         self.assertTrue(0.0 < perv_frac < 1.0)
 
+    def test_perveance_computation_radial_mode(self):
+        """Verify that in axisymmetric radial mode, P_max uses circular aperture area pi * r_s^2,
+        and is invariant to whether _last_injection_area spans the full domain Ly."""
+        self.win.sim.grids = [
+            {'V': 1100.0, 't': 0.5, 'gap': 1.0, 'r': 1.0, 'cham': 0.0},
+            {'V': -200.0, 't': 0.5, 'gap': 1.0, 'r': 0.6, 'cham': 0.0},
+        ]
+        self.win.sim.is_axisymmetric = True
+        self.win.sim.q_ion = 1.602e-19
+        self.win.sim.m_ion = 131.293 * 1.6605e-27
+
+        # Set _last_injection_area to 10 mm^2 (simulating a domain with Ly = sqrt(10)*r_s)
+        self.win.sim._last_injection_area = 10.0e-6
+
+        i_exit = 1.5e-4  # 0.15 mA
+        p_eff, p_max, perv_frac = self.win._compute_perveance_metrics(i_exit)
+
+        v_tot = 1300.0
+        expected_p_eff = 1.5e-4 / (v_tot ** 1.5)
+        eps_0 = 8.8541878128e-12
+        l_e_sq = (1.0e-3 + 0.5e-3) ** 2 + (1.0e-3) ** 2
+        # True circular aperture area: pi * r_s^2 = pi * (1 mm)^2 = pi * 1e-6 m^2
+        expected_area = np.pi * (1.0e-3 ** 2)
+        expected_p_max = (4.0 * eps_0 / 9.0) * np.sqrt(2.0 * self.win.sim.q_ion / self.win.sim.m_ion) * (expected_area / l_e_sq)
+        expected_frac = expected_p_eff / expected_p_max
+
+        self.assertAlmostEqual(p_eff, expected_p_eff, places=12)
+        self.assertAlmostEqual(p_max, expected_p_max, places=12)
+        self.assertAlmostEqual(perv_frac, expected_frac, places=6)
+        # Ensure P_max was NOT inflated by 10x
+        self.assertLess(p_max, expected_p_max * 1.05)
+
+        # Clean up
+        self.win.sim.is_axisymmetric = False
+
     def test_perveance_edge_cases(self):
         self.win.sim.grids = [
             {'V': 100.0, 'gap': 1.0, 'r': 1.0},

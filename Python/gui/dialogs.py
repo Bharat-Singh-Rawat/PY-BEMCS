@@ -291,27 +291,20 @@ class AdvancedSettingsDialog(QDialog):
         )
         layout.addWidget(self.chk_efield_limit)
 
-        # —- Stability-Triggered Adaptive Remeshing Group —-
+        # —- Adaptive Plume Remeshing Group —-
         remesh_cfg = current_params.get("adaptive_remesh_settings", {})
-        remesh_enabled = bool(remesh_cfg.get("enabled", current_params.get("adaptive_remesh_enabled", False)))
-        remesh_min_iters = int(remesh_cfg.get("min_iterations", current_params.get("remesh_min_iters", 500)))
-        coarsen_presheath = float(remesh_cfg.get("coarsen_presheath_bulk", remesh_cfg.get("coarsen_presheath", 1.5)))
-        refine_meniscus = float(remesh_cfg.get("refine_meniscus_zone", remesh_cfg.get("refine_meniscus", 0.8)))
-        coarsen_plume = float(remesh_cfg.get("coarsen_far_plume", remesh_cfg.get("coarsen_plume", 4.0)))
+        remesh_enabled = bool(remesh_cfg.get("enabled", current_params.get("adaptive_remesh_enabled", True)))
+        interval_iters = int(remesh_cfg.get("interval_iterations", current_params.get("remesh_interval_iterations", 150)))
 
-        grp_remesh = QGroupBox("Stability-Triggered Adaptive Remeshing")
+        grp_remesh = QGroupBox("Adaptive Plume Remeshing")
         layout_remesh = QVBoxLayout(grp_remesh)
 
-        self.chk_adaptive_remesh = QCheckBox("Enable Stability-Triggered Adaptive Remeshing")
+        self.chk_adaptive_remesh = QCheckBox("Enable Adaptive Plume Remeshing")
         self.chk_adaptive_remesh.setChecked(remesh_enabled)
         self.chk_adaptive_remesh.setToolTip(
-            "When checked: upon achieving multi-metric stationarity (<= 1.0% variation over 100 iterations),\n"
-            "PY-BEMCS detects the plasma sheath / meniscus boundary along the centerline and dynamically\n"
-            "adapts the axial mesh:\n"
-            "  • Coarsens the deep quiescent presheath [0, x_meniscus - 2*lambda_D] to reduce solver cost.\n"
-            "  • Refines the active meniscus/sheath region [x_meniscus - 2*lambda_D, upstream_gap] to sub-Debye resolution,\n"
-            "    preventing artificial divergence narrowing and accurately resolving the 2D Bohm sonic surface.\n"
-            "  • Coarsens the dilute plume."
+            "When checked: PY-BEMCS automatically re-evaluates and adapts the plume mesh cell size\n"
+            "every N iterations during the simulation based on local plume ion density and Debye length.\n"
+            "Upstream presheath and inter-grid optics remain strictly at baseline resolution."
         )
         layout_remesh.addWidget(self.chk_adaptive_remesh)
 
@@ -319,36 +312,12 @@ class AdvancedSettingsDialog(QDialog):
         form_remesh = QFormLayout(self.remesh_sub_widget)
         form_remesh.setContentsMargins(0, 4, 0, 0)
 
-        self.spin_remesh_min_iters = QSpinBox()
-        self.spin_remesh_min_iters.setRange(100, 50000)
-        self.spin_remesh_min_iters.setSingleStep(50)
-        self.spin_remesh_min_iters.setValue(remesh_min_iters)
-        self.spin_remesh_min_iters.setToolTip("Minimum number of iterations before adaptive remeshing can trigger (default: 500).")
-        form_remesh.addRow("Min Iterations:", self.spin_remesh_min_iters)
-
-        self.spin_remesh_coarsen_presheath = QDoubleSpinBox()
-        self.spin_remesh_coarsen_presheath.setRange(1.0, 5.0)
-        self.spin_remesh_coarsen_presheath.setDecimals(2)
-        self.spin_remesh_coarsen_presheath.setSingleStep(0.1)
-        self.spin_remesh_coarsen_presheath.setValue(coarsen_presheath)
-        self.spin_remesh_coarsen_presheath.setToolTip("Coarsening factor for deep presheath [0, x_meniscus - 2*lambda_D].")
-        form_remesh.addRow("Presheath Coarsen Factor:", self.spin_remesh_coarsen_presheath)
-
-        self.spin_remesh_refine_meniscus = QDoubleSpinBox()
-        self.spin_remesh_refine_meniscus.setRange(0.2, 1.5)
-        self.spin_remesh_refine_meniscus.setDecimals(2)
-        self.spin_remesh_refine_meniscus.setSingleStep(0.05)
-        self.spin_remesh_refine_meniscus.setValue(refine_meniscus)
-        self.spin_remesh_refine_meniscus.setToolTip("Refinement factor for active meniscus/sheath zone (factor < 1.0 refines cells).")
-        form_remesh.addRow("Meniscus Refine Factor:", self.spin_remesh_refine_meniscus)
-
-        self.spin_remesh_coarsen_plume = QDoubleSpinBox()
-        self.spin_remesh_coarsen_plume.setRange(1.0, 10.0)
-        self.spin_remesh_coarsen_plume.setDecimals(1)
-        self.spin_remesh_coarsen_plume.setSingleStep(0.5)
-        self.spin_remesh_coarsen_plume.setValue(coarsen_plume)
-        self.spin_remesh_coarsen_plume.setToolTip("Coarsening factor for far downstream plume.")
-        form_remesh.addRow("Far Plume Coarsen Factor:", self.spin_remesh_coarsen_plume)
+        self.spin_remesh_interval = QSpinBox()
+        self.spin_remesh_interval.setRange(10, 50000)
+        self.spin_remesh_interval.setSingleStep(10)
+        self.spin_remesh_interval.setValue(interval_iters)
+        self.spin_remesh_interval.setToolTip("Number of simulation iterations every which the plume mesh is automatically re-evaluated and adapted (default: 150).")
+        form_remesh.addRow("Remesh Interval (iterations):", self.spin_remesh_interval)
 
         layout_remesh.addWidget(self.remesh_sub_widget)
 
@@ -379,13 +348,10 @@ class AdvancedSettingsDialog(QDialog):
         result["enforce_efield_mesh_limit"] = self.chk_efield_limit.isChecked()
         result["adaptive_remesh_settings"] = {
             "enabled": self.chk_adaptive_remesh.isChecked(),
-            "min_iterations": int(self.spin_remesh_min_iters.value()),
-            "coarsen_presheath_bulk": float(self.spin_remesh_coarsen_presheath.value()),
-            "refine_meniscus_zone": float(self.spin_remesh_refine_meniscus.value()),
-            "coarsen_far_plume": float(self.spin_remesh_coarsen_plume.value()),
+            "interval_iterations": int(self.spin_remesh_interval.value()),
         }
         result["adaptive_remesh_enabled"] = self.chk_adaptive_remesh.isChecked()
-        result["remesh_min_iters"] = int(self.spin_remesh_min_iters.value())
+        result["remesh_interval_iterations"] = int(self.spin_remesh_interval.value())
         if "max_efield_jump" in result:
             result["max_efield_jump"] = result["max_efield_jump"] / 100.0
         if "dx_over_debye" in result:

@@ -268,8 +268,9 @@ def step_ion_interactions(sim, ctx: StepContext):
                 np.add.at(sim.Tmap, (impact_iy[valid_thermal_hit], impact_ix[valid_thermal_hit]), dT_heat)
                 sim._thermal_heat_added = True
 
+            enable_see = bool(params.get('enable_see', getattr(sim, 'enable_see', True)))
             valid_see_hit = hit_grid_mask & (p_x > 0.25)
-            if np.any(valid_see_hit):
+            if enable_see and np.any(valid_see_hit):
                 v_mag_sq = (
                     p_vx[valid_see_hit] ** 2 +
                     p_vy[valid_see_hit] ** 2 +
@@ -481,8 +482,9 @@ def step_ion_interactions(sim, ctx: StepContext):
         np.add.at(sim.Tmap, (impact_iy[valid_thermal_hit], impact_ix[valid_thermal_hit]), dT_heat)
         sim._thermal_heat_added = True
 
+    enable_see = bool(params.get('enable_see', getattr(sim, 'enable_see', True)))
     valid_see_hit = hit_grid & (p_x > 0.25)
-    if np.any(valid_see_hit):
+    if enable_see and np.any(valid_see_hit):
         v_mag_sq = (
             p_vx[valid_see_hit] ** 2 +
             p_vy[valid_see_hit] ** 2 +

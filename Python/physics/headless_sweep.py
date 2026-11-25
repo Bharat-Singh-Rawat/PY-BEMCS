@@ -104,10 +104,23 @@ def apply_sweep_param_to_dict(base_params: dict, param_id: str, value: float, sw
     return params
 
 
-def compute_perveance_metrics_static(grids: list, i_exit: float, q_ion: float = 1.602e-19, m_ion: float = 131.293 * 1.6605e-27, injection_area: float = None) -> tuple:
+def compute_perveance_metrics_static(
+    grids: list,
+    i_exit: float,
+    q_ion: float = 1.602e-19,
+    m_ion: float = 131.293 * 1.6605e-27,
+    is_axisymmetric: bool = False,
+    geometry: str = 'half_hole',
+    aperture_area: float = None,
+    injection_area: float = None,
+) -> tuple:
     """
     Calculates effective perveance, maximum Child-Langmuir perveance (Goebel-Katz),
     and perveance fraction.
+
+    Child-Langmuir space-charge limited current perveance limit (Goebel & Katz)
+    MUST evaluate over the physical aperture open area through which ions are extracted (r_s),
+    NEVER over the upstream simulation domain radius (R_domain / Ly).
     """
     if not np.isfinite(i_exit) or i_exit < 0.0:
         i_exit = 0.0
@@ -144,10 +157,22 @@ def compute_perveance_metrics_static(grids: list, i_exit: float, q_ion: float = 
     r_s = max(r_screen_mm * 1e-3, 1e-6)
     l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
 
-    if injection_area is not None and injection_area > 0.0:
-        area = float(injection_area)
+    # Physical screen grid extraction aperture open area in m^2:
+    if aperture_area is not None and aperture_area > 0.0:
+        area = float(aperture_area)
+    elif is_axisymmetric:
+        # Full 3D circular aperture: A = π * r_s^2
+        area = np.pi * (r_s ** 2)
     else:
-        area = max(r_screen_mm * 1e-3 * 1e-3, 1e-8)
+        # 2D Cartesian slab geometry with 1 mm unit depth (1e-3 m):
+        if geometry == 'one_hole':
+            slit_width_m = 2.0 * r_s
+        elif geometry == 'two_holes':
+            slit_width_m = 4.0 * r_s
+        else:
+            slit_width_m = r_s
+        _unit_depth_m = 1e-3
+        area = slit_width_m * _unit_depth_m
 
     p_max = float((4.0 * eps_0 / 9.0) * np.sqrt(2.0 * q_ion / m_ion) * (area / l_e_sq))
 
@@ -257,6 +282,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
     active_view_file = payload.get("active_view_file")
     track_ptcls_file = payload.get("track_ptcls_file")
     sim_mode_file = payload.get("sim_mode_file")
+    processes_file = payload.get("processes_file")
     trk_file = payload.get("trk_file")
     initial_track_ptcls = bool(payload.get("track_particles", False))
     status_dict = payload.get("status_dict")
@@ -275,6 +301,15 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                     m = f.read().strip()
                 if m in ("Both", "Thermal", "Erosion", "Trajectories"):
                     params_dict["sim_mode"] = m
+            except Exception:
+                pass
+        if processes_file is not None and os.path.exists(processes_file):
+            try:
+                with open(processes_file, "r", encoding="utf-8") as f:
+                    parts = f.read().strip().split(",")
+                if len(parts) == 2:
+                    params_dict["enable_see"] = bool(int(parts[0]))
+                    params_dict["enable_cex"] = bool(int(parts[1]))
             except Exception:
                 pass
         return str(params_dict.get("sim_mode", "Both"))
@@ -360,6 +395,13 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "transmitted_ions_history": [],
         "active_cells_history": [],
         "low_ppc_cells_history": [],
+        "substep_history_iter": [],
+        "substep_history_ion": [],
+        "substep_history_e": [],
+        "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [0])),
+        "plume_history_dx": list(getattr(sim, 'plume_history_dx', [float(getattr(sim, 'dx', 0.04))])),
+        "plume_dx_history": list(getattr(sim, 'plume_dx_history', [(0, float(getattr(sim, 'dx', 0.04)))])),
+        "zone_configs": getattr(sim, 'zone_configs', None),
         "T_histories": {i: [] for i in range(n_grids)},
         "T_grids": [float(t) for t in getattr(sim, 'T_grids', [300.0] * n_grids)],
         "Tmap": sim.Tmap.copy() if getattr(sim, 'Tmap', None) is not None else None,
@@ -579,6 +621,10 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
                 "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
                 "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
+                "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
+                "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
+                "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+                "zone_configs": getattr(sim, 'zone_configs', None),
                 "Lx": float(getattr(sim, 'Lx', 3.0)),
                 "Ly": float(getattr(sim, 'Ly', 3.0)),
                 "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),
@@ -692,7 +738,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         i_exit=i_exit,
         q_ion=getattr(sim, 'q_ion', 1.602e-19),
         m_ion=getattr(sim, 'm_ion', 131.293 * 1.6605e-27),
-        injection_area=getattr(sim, '_last_injection_area', None)
+        is_axisymmetric=getattr(sim, 'is_axisymmetric', False),
+        geometry=getattr(sim, 'geometry', 'half_hole'),
     )
 
     t_grids_final_K = [float(t) for t in getattr(sim, 'T_grids', [])]
@@ -800,6 +847,10 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "substep_history_iter": list(getattr(sim, 'substep_history_iter', [])),
         "substep_history_ion": list(getattr(sim, 'substep_history_ion', [])),
         "substep_history_e": list(getattr(sim, 'substep_history_e', [])),
+        "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
+        "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
+        "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+        "zone_configs": getattr(sim, 'zone_configs', None),
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
         "truncate_downstream_plume": bool(scenario_params.get("truncate_downstream_plume", getattr(sim, "truncate_downstream_plume", False))),

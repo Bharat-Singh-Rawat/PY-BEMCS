@@ -4,8 +4,9 @@ import pytest
 import numpy as np
 
 from physics.simulator import DigitalTwinSimulator as Simulator
-from physics.mesh_utils import estimate_stability_optimized_mesh_zones
+from physics.mesh_utils import estimate_automatic_plume_mesh_zones, compute_plume_mean_dx
 from gui.dialogs import AdvancedSettingsDialog
+from diagnostics.mesh_window import PlumeMeshSizeGraphWidget, MeshWindow
 from PyQt5.QtWidgets import QApplication
 
 # Ensure QApplication exists for GUI dialog tests
@@ -37,58 +38,45 @@ def get_base_params():
         "adaptive_remesh_enabled": True,
         "adaptive_remesh_settings": {
             "enabled": True,
-            "min_iterations": 100,
-            "coarsen_presheath_bulk": 1.5,
-            "refine_meniscus_zone": 0.8,
-            "coarsen_far_plume": 4.0,
+            "interval_iterations": 150,
         }
     }
 
 
-def test_estimate_stability_optimized_mesh_zones():
-    """Verify zone construction around detected meniscus and preservation of optics bounds."""
+def test_estimate_automatic_plume_mesh_zones():
+    """Verify zone construction preserves presheath and optics at baseline while adapting only plume."""
     sim = Simulator()
     params = get_base_params()
     sim.build_domain(params)
 
-    # Fake a potential field where sheath forms at x ~ 0.4 mm
-    # Plasma potential is ~1020 V, sheath is ~1018 V
-    sim.V.fill(1020.0)
-    # Beyond x = 0.4, potential drops
-    idx_drop = np.where(sim.x_coords >= 0.4)[0]
-    if len(idx_drop) > 0:
-        sim.V[:, idx_drop] = 500.0
-
-    remesh_cfg = {
-        "coarsen_presheath_bulk": 1.8,
-        "refine_meniscus_zone": 0.75,
-        "coarsen_far_plume": 4.0
-    }
-
-    zones = estimate_stability_optimized_mesh_zones(
+    zones = estimate_automatic_plume_mesh_zones(
         sim=sim,
         grids=params["grids"],
         upstream_gap_mm=sim.upstream_gap_mm,
         Lx=sim.Lx,
         dx0=sim.dx,
-        remesh_cfg=remesh_cfg
     )
 
     zone_names = [z['name'] for z in zones]
-    assert any('Presheath_Deep' in z for z in zone_names)
-    assert any('Presheath_Meniscus' in z for z in zone_names)
+    # Presheath must be standard single baseline zone (factor = 1.0)
+    assert 'Presheath' in zone_names
+    assert not any('Presheath_Deep' in z for z in zone_names)
+    assert not any('Presheath_Meniscus' in z for z in zone_names)
+
+    # Optics must maintain baseline resolution
     assert any('Grid_1_barrel' in z for z in zone_names)
     assert any('Gap_1_2' in z for z in zone_names)
+    assert any('Grid_2_barrel' in z for z in zone_names)
 
-    # Check factors
-    deep_zone = [z for z in zones if z['name'] == 'Presheath_Deep'][0]
-    meniscus_zone = [z for z in zones if z['name'] == 'Presheath_Meniscus'][0]
-    assert deep_zone['factor'] == 1.8
-    assert meniscus_zone['factor'] == 0.75
+    # Plume must have near and far plume
+    assert any('Far_Plume' in z for z in zone_names)
+
+    presheath_zone = [z for z in zones if z['name'] == 'Presheath'][0]
+    assert presheath_zone['factor'] == 1.0
 
 
-def test_execute_stability_remesh_preserves_particles_and_surface():
-    """Verify execute_stability_remesh preserves particle coordinates, velocities, and subgrid surface states."""
+def test_execute_plume_remesh_preserves_particles_and_surface():
+    """Verify execute_plume_remesh preserves particle coordinates, velocities, and subgrid surface states."""
     sim = Simulator()
     params = get_base_params()
     sim.build_domain(params)
@@ -112,17 +100,8 @@ def test_execute_stability_remesh_preserves_particles_and_surface():
     assert hasattr(sim, 'subgrid_manager')
     assert sim.subgrid_manager is not None
 
-    # Record old grid dimensions
-    old_nx = sim.nx
-    old_ny = sim.ny
-
-    # Execute adaptive remesh
-    remesh_cfg = {
-        "coarsen_presheath_bulk": 1.5,
-        "refine_meniscus_zone": 0.8,
-        "coarsen_far_plume": 4.0
-    }
-    success = sim.execute_stability_remesh(params=params, remesh_cfg=remesh_cfg)
+    # Execute adaptive plume remesh
+    success = sim.execute_plume_remesh(params=params, force=True)
     assert success is True
     assert sim._has_stability_remeshed is True
 
@@ -141,75 +120,129 @@ def test_execute_stability_remesh_preserves_particles_and_surface():
     if hasattr(sim, 'Tmap') and sim.Tmap is not None:
         assert not np.isnan(sim.Tmap).any()
 
-    # Second call must be a no-op (remesh triggers only once per steady state milestone)
-    second_call = sim.execute_stability_remesh(params=params, remesh_cfg=remesh_cfg)
-    assert second_call is False
+    # Plume cell size history must be tracked
+    assert len(sim.plume_history_iterations) > 0
+    assert len(sim.plume_history_dx) > 0
 
 
-def test_stability_triggered_remesh_in_step():
-    """Verify that sim.step() automatically triggers adaptive remesh upon multi-metric stationarity."""
+def test_periodic_plume_remesh_in_step():
+    """Verify that sim.step() automatically triggers plume remeshing periodically every N iterations."""
     sim = Simulator()
     params = get_base_params()
-    params["adaptive_remesh_settings"]["min_iterations"] = 105
+    params["adaptive_remesh_settings"] = {
+        "enabled": True,
+        "interval_iterations": 10
+    }
     sim.build_domain(params)
-
     sim.adaptive_remesh_enabled = True
-    sim.remesh_min_iters = 105
-    sim.remesh_window = 20
-    sim.remesh_threshold = 1.0
+    sim.remesh_interval_iterations = 10
 
-    # Execute one step to get realistic physical baseline values
+    # Advance to iter 9
+    sim.iteration = 9
     sim.step(params)
-    pot_val = sim.potential_history[-1]
-    curr_val = sim.ion_current_history[-1]
-    e_val = sim.energy_history_tot[-1] if sim.energy_history_tot else 1.0
-    q_val = sim.charge_history_q_net[-1] if sim.charge_history_q_net else 1e-12
-
-    # Prefill stationary histories with small fluctuations (< 0.1% variation)
-    sim.energy_history_tot = [e_val * (1.0 + 0.0001 * np.sin(i)) for i in range(60)]
-    sim.charge_history_q_net = [q_val * (1.0 + 0.0001 * np.cos(i)) for i in range(60)]
-    sim.potential_history = [pot_val * (1.0 + 0.0001 * np.sin(i)) for i in range(60)]
-    sim.ion_current_history = [curr_val] * 60
-
-    # Advance to iteration 100 (< min_iters 105)
-    sim.iteration = 100
-    sim.step(params)
-    assert not sim._has_stability_remeshed
-
-    # Set iteration to 104 so the next step reaches 105 (multiple of 5, >= min_iters 105)
-    sim.iteration = 104
-    sim.step(params)
-    assert sim._has_stability_remeshed
-    assert sim._stability_remesh_iter == 105
+    # At iter 10, remesh triggers
+    assert sim.iteration == 10
+    assert len(sim.plume_history_iterations) > 0
+    assert 10 in sim.plume_history_iterations
 
 
 def test_advanced_settings_dialog_remesh_controls():
-    """Verify that AdvancedSettingsDialog exposes and persists adaptive remeshing controls."""
+    """Verify that AdvancedSettingsDialog exposes single interval parameter defaulting to 150 and checked."""
     current_params = {
         "V_plasma_offset": 20.0,
         "m_e_ratio": 1000.0,
         "adaptive_remesh_settings": {
             "enabled": True,
-            "min_iterations": 600,
-            "coarsen_presheath_bulk": 1.7,
-            "refine_meniscus_zone": 0.75,
-            "coarsen_far_plume": 4.5,
+            "interval_iterations": 150,
         }
     }
     dlg = AdvancedSettingsDialog(current_params)
     assert dlg.chk_adaptive_remesh.isChecked() is True
-    assert dlg.spin_remesh_min_iters.value() == 600
-    assert abs(dlg.spin_remesh_coarsen_presheath.value() - 1.7) < 1e-3
-    assert abs(dlg.spin_remesh_refine_meniscus.value() - 0.75) < 1e-3
-    assert abs(dlg.spin_remesh_coarsen_plume.value() - 4.5) < 1e-3
+    assert dlg.spin_remesh_interval.value() == 150
 
-    # Toggle values
+    # Modify interval and toggle
     dlg.chk_adaptive_remesh.setChecked(False)
-    dlg.spin_remesh_min_iters.setValue(800)
-    dlg.spin_remesh_coarsen_presheath.setValue(2.0)
+    dlg.spin_remesh_interval.setValue(200)
 
     vals = dlg.get_values()
     assert vals["adaptive_remesh_enabled"] is False
     assert vals["adaptive_remesh_settings"]["enabled"] is False
-    assert vals["adaptive_remesh_settings"]["min_iterations"] == 800
-    assert vals["adaptive_remesh_settings"]["coarsen_presheath_bulk"] == 2.0
+    assert vals["adaptive_remesh_settings"]["interval_iterations"] == 200
+
+
+def test_plume_mesh_size_widget_and_window():
+    """Verify that PlumeMeshSizeGraphWidget plots history without errors."""
+    sim = Simulator()
+    params = get_base_params()
+    sim.build_domain(params)
+
+    # Populate some plume history
+    sim.plume_history_iterations = [0, 150, 300]
+    sim.plume_history_dx = [0.04, 0.08, 0.12]
+    sim.iteration = 300
+
+    widget = PlumeMeshSizeGraphWidget()
+    widget.update_plot(sim)
+
+    assert "300" in widget.lbl_curr_iter.text()
+    assert "0.1200" in widget.lbl_curr_dx.text()
+
+    # Check MeshWindow tabs and dynamic live updating
+    mesh_win = MeshWindow()
+    assert mesh_win.tabs.count() >= 3
+    mesh_win.update_plot(sim, params=params)
+
+    # Verify Tab 1 displays updated mesh analytics
+    assert "mm" in mesh_win.lbl_dx_nominal.text()
+    assert "Total Mesh Cells" in mesh_win.lbl_grid_cells.text()
+
+    # Trigger remesh and verify Tab 1 re-renders accurately on the adapted mesh
+    sim.execute_plume_remesh(params=params, force=True)
+    mesh_win.update_plot(sim, params=params)
+    assert mesh_win.ax.get_xlim() == (0, sim.Lx)
+
+
+def test_sweep_scenario_mesh_window_history():
+    """Verify that MeshWindow correctly displays full multi-thousand iteration plume history in sweep scenarios."""
+    from gui.app.sweep_mixin import SweepMixin
+
+    class DummyApp(SweepMixin):
+        def __init__(self, sim, mesh_win):
+            self.sim = sim
+            self.mesh_window = mesh_win
+            self.substep_window = None
+            self.plume_window = None
+            self.sweep_config = {"param_id": "Te_up"}
+            self._scenario_domain_cache = {}
+
+    sim = Simulator()
+    params = get_base_params()
+    sim.build_domain(params)
+
+    mesh_win = MeshWindow()
+    app_dummy = DummyApp(sim, mesh_win)
+
+    # Mock scenario info at 1500 iterations with remeshing every 150 iterations
+    scenario_info = {
+        "status": "done",
+        "iter": 1500,
+        "steady_iterations": 1500,
+        "parameter_value": 4.0,
+        "substep_history_iter": list(range(1, 1501)),
+        "substep_history_ion": [1] * 1500,
+        "substep_history_e": [1] * 1500,
+        "plume_history_iterations": [0, 150, 300, 450, 600, 750, 900, 1050, 1200, 1350, 1500],
+        "plume_history_dx": [0.04, 0.08, 0.08, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12],
+        "zone_configs": sim.zone_configs,
+    }
+
+    # Simulate selecting scenario 1 in the sweep GUI
+    app_dummy._update_mesh_window_for_scenario(1, scenario_info, d_data={"params": params}, force=True)
+
+    assert sim.iteration == 1500
+    assert len(sim.plume_history_iterations) == 11
+    assert 1500 in sim.plume_history_iterations
+
+    # Verify widget displays 1500 iterations
+    assert "1500" in mesh_win.plume_mesh_widget.lbl_curr_iter.text()
+    assert mesh_win.plume_mesh_widget.ax.get_xlim()[1] >= 1500
