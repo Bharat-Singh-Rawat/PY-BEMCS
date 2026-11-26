@@ -372,13 +372,13 @@ class SubstepGraphWidget(QWidget):
         self.canvas.draw_idle()
 
 
-class DisplacementSubstepsWindow(QDialog):
+class DisplacementSubstepsWindow(QWidget):
     """
     Dedicated second window displaying the displacement substeps diagnostic graph
     (Iterations on x-axis, Required Substeps on y-axis, highlight green dots for electrons, red dots for ions).
     """
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__()
         self.parent_app = parent
         self.setWindowTitle("Displacement Substeps Monitor — (Iterations vs Required Substeps)")
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
@@ -497,31 +497,68 @@ class PlumeMeshSizeGraphWidget(QWidget):
                 self._cached_sim.plume_history_dx.clear()
             if hasattr(self._cached_sim, 'plume_dx_history'):
                 self._cached_sim.plume_dx_history.clear()
+            if hasattr(self._cached_sim, 'zone_history_dx') and isinstance(self._cached_sim.zone_history_dx, dict):
+                self._cached_sim.zone_history_dx.clear()
         self.update_plot(self._cached_sim)
 
     def _on_export_clicked(self):
         sim = self._cached_sim
         iters = getattr(sim, 'plume_history_iterations', [])
         dxs = getattr(sim, 'plume_history_dx', [])
+        zone_hist = getattr(sim, 'zone_history_dx', {}) or {}
         if not iters or len(iters) == 0:
             QMessageBox.information(self, "Export CSV", "No plume cell size history to export.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Save Plume Cell Size History", "plume_cell_size_history.csv", "CSV Files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save Domain & Plume Cell Size History", "plume_cell_size_history.csv", "CSV Files (*.csv)")
         if not path:
             return
 
         dx0 = getattr(sim, 'dx', 0.04)
+        zone_names = list(zone_hist.keys())
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["Iteration", "Plume_dx_mm", "Plume_dx_um", "Nominal_dx0_mm", "Coarsening_Factor"])
-                for it, val in zip(iters, dxs):
+                header = ["Iteration", "Plume_Mean_dx_mm", "Plume_Mean_dx_um", "Nominal_dx0_mm", "Plume_Mean_Factor"]
+                for zn in zone_names:
+                    header.extend([f"{zn}_dx_mm", f"{zn}_factor"])
+                writer.writerow(header)
+                for idx_r, (it, val) in enumerate(zip(iters, dxs)):
                     fac = val / dx0 if dx0 > 0 else 1.0
-                    writer.writerow([it, f"{val:.6f}", f"{val * 1e3:.3f}", f"{dx0:.6f}", f"{fac:.2f}"])
+                    row = [it, f"{val:.6f}", f"{val * 1e3:.3f}", f"{dx0:.6f}", f"{fac:.2f}"]
+                    for zn in zone_names:
+                        z_vals = zone_hist.get(zn, [])
+                        z_val = z_vals[idx_r] if idx_r < len(z_vals) else (z_vals[-1] if z_vals else dx0)
+                        z_fac = z_val / dx0 if dx0 > 0 else 1.0
+                        row.extend([f"{z_val:.6f}", f"{z_fac:.2f}"])
+                    writer.writerow(row)
             QMessageBox.information(self, "Export CSV", f"Successfully exported {len(iters)} records to {path}.")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export CSV: {e}")
+
+    def _get_zone_color(self, z_name: str, idx: int) -> str:
+        """Assign distinct high-contrast colors for each section of the domain."""
+        z_low = z_name.lower()
+        if "presheath" in z_low:
+            return "#0d9488"  # Teal
+        if "meniscus" in z_low:
+            return "#06b6d4"  # Cyan
+        if z_name == "Grid_1_barrel":
+            return "#d97706"  # Amber
+        if z_name == "Gap_1_2":
+            return "#e11d48"  # Crimson / Rose
+        if z_name == "Grid_2_barrel":
+            return "#7c3aed"  # Violet
+        if z_name == "Gap_2_3":
+            return "#db2777"  # Pink
+        if z_name == "Grid_3_barrel":
+            return "#4f46e5"  # Indigo
+        if z_name == "Near_Plume":
+            return "#16a34a"  # Green
+        if z_name == "Far_Plume" or z_name == "Plume":
+            return "#2563eb"  # Royal Blue
+        palette = ["#0d9488", "#d97706", "#e11d48", "#7c3aed", "#16a34a", "#2563eb", "#db2777", "#4f46e5"]
+        return palette[idx % len(palette)]
 
     def update_plot(self, sim=None):
         self._cached_sim = sim
@@ -532,6 +569,7 @@ class PlumeMeshSizeGraphWidget(QWidget):
         dx0 = float(getattr(sim, 'dx', 0.04))
         iters = getattr(sim, 'plume_history_iterations', [])
         dxs = getattr(sim, 'plume_history_dx', [])
+        zone_configs = getattr(sim, 'zone_configs', None) or []
 
         # Auto-seed initial baseline if history is empty
         if len(iters) == 0:
@@ -546,99 +584,168 @@ class PlumeMeshSizeGraphWidget(QWidget):
             iters = sim.plume_history_iterations
             dxs = sim.plume_history_dx
 
+        zone_hist = getattr(sim, 'zone_history_dx', None)
+        if not isinstance(zone_hist, dict) or len(zone_hist) == 0:
+            zone_hist = {}
+            for z in zone_configs:
+                zn = str(z.get('name', 'Zone'))
+                z_dx = float(dx0 * float(z.get('factor', 1.0)))
+                zone_hist[zn] = [z_dx] * max(1, len(iters))
+            sim.zone_history_dx = zone_hist
+
         self.ax.clear()
 
         n_pts = min(len(iters), len(dxs))
         if n_pts == 0:
             self.ax.text(
                 0.5, 0.5,
-                "No plume remesh history recorded yet.\nStart simulation to view adaptive plume cell size evolution.",
+                "No remesh history recorded yet.\nStart simulation to view adaptive cell size evolution across domain sections.",
                 ha="center", va="center", transform=self.ax.transAxes,
                 fontsize=11, color="#64748b"
             )
             self.ax.set_xticks([])
             self.ax.set_yticks([])
             self.lbl_curr_iter.setText("Current Iteration: —")
-            self.lbl_curr_dx.setText("Plume Cell Size Δx: —")
-            self.lbl_curr_factor.setText("Plume Factor: —")
+            self.lbl_curr_dx.setText("Plume Mean Δx: —")
+            self.lbl_curr_factor.setText("Far Plume Factor: —")
             self.lbl_base_dx.setText(f"Nominal Δx₀: <b>{dx0:.4f} mm</b>")
             self.lbl_total_remeshes.setText("Remesh Events: 0")
             self.canvas.draw_idle()
             return
 
         x = np.asarray(iters[:n_pts], dtype=int)
-        y = np.asarray(dxs[:n_pts], dtype=float)
+        y_plume_mean = np.asarray(dxs[:n_pts], dtype=float)
 
         curr_it = getattr(sim, 'iteration', x[-1])
-        curr_val = y[-1]
-        curr_fac = curr_val / dx0 if dx0 > 0 else 1.0
+        curr_val = y_plume_mean[-1]
+        far_dx_list = zone_hist.get('Far_Plume', y_plume_mean)
+        curr_far_dx = float(far_dx_list[-1]) if len(far_dx_list) > 0 else curr_val
+        curr_fac = curr_far_dx / dx0 if dx0 > 0 else 1.0
 
         self.lbl_curr_iter.setText(f"Current Iteration: <b>{curr_it}</b>")
-        self.lbl_curr_dx.setText(f"Plume Cell Size Δx: <b>{curr_val:.4f} mm</b> ({curr_val * 1e3:.1f} µm)")
-        self.lbl_curr_factor.setText(f"Plume Factor: <b>{curr_fac:.2f}×</b>")
+        self.lbl_curr_dx.setText(f"Plume Mean Δx: <b>{curr_val:.4f} mm</b> ({curr_val * 1e3:.1f} µm)")
+        self.lbl_curr_factor.setText(f"Far Plume: <b>{curr_fac:.1f}×</b> ({curr_far_dx:.4f} mm)")
         self.lbl_base_dx.setText(f"Nominal Δx₀: <b>{dx0:.4f} mm</b> ({dx0 * 1e3:.1f} µm)")
         self.lbl_total_remeshes.setText(f"Remesh Events: <b>{n_pts:,}</b>")
 
         # Baseline reference line at nominal dx0
         if self.chk_baseline.isChecked():
-            self.ax.axhline(dx0, color="#94a3b8", linestyle="--", linewidth=1.2, alpha=0.85, zorder=2, label=f"Baseline Nominal Δx₀ ({dx0:.4f} mm)")
-
-        # Step line showing evolution across iterations
-        if len(x) > 0 and x[0] > 0:
-            x_line_start = np.insert(x, 0, 0)
-            y_line_start = np.insert(y, 0, dx0)
-        else:
-            x_line_start = x
-            y_line_start = y
-
-        if self.chk_lines.isChecked():
-            if curr_it > x_line_start[-1]:
-                x_line = np.append(x_line_start, curr_it)
-                y_line = np.append(y_line_start, y_line_start[-1])
-            else:
-                x_line = x_line_start
-                y_line = y_line_start
-            self.ax.step(x_line, y_line, where='post', color="#2563eb", linewidth=1.8, alpha=0.9, zorder=4, label="Plume Δx(t)")
-
-        # Data point markers at each remesh event
-        if self.chk_points.isChecked():
-            self.ax.scatter(
-                x, y,
-                s=40, c="#2563eb", edgecolors="#1e3a8a", linewidths=0.9,
-                alpha=0.95, zorder=6, label=f"Remesh Milestones ({n_pts})"
+            self.ax.axhline(
+                dx0, color="#94a3b8", linestyle="--", linewidth=1.2, alpha=0.85, zorder=2,
+                label=f"Baseline Nominal Δx₀ ({dx0:.4f} mm)"
             )
 
-        x_max = max(np.max(x), curr_it)
+        # Order zone names according to current zone_configs if possible
+        ordered_zone_names = [str(z.get('name')) for z in zone_configs if str(z.get('name')) in zone_hist]
+        for zn in zone_hist.keys():
+            if zn not in ordered_zone_names:
+                ordered_zone_names.append(zn)
+
+        all_y_vals = [dx0]
+
+        if ordered_zone_names:
+            for idx_z, zn in enumerate(ordered_zone_names):
+                raw_zy = zone_hist.get(zn, [])
+                if not raw_zy:
+                    continue
+                if len(raw_zy) < n_pts:
+                    zy = np.asarray(list(raw_zy) + [raw_zy[-1]] * (n_pts - len(raw_zy)), dtype=float)
+                else:
+                    zy = np.asarray(raw_zy[:n_pts], dtype=float)
+
+                all_y_vals.extend(zy.tolist())
+                color = self._get_zone_color(zn, idx_z)
+                cur_z_dx = float(zy[-1])
+                cur_z_fac = cur_z_dx / dx0 if dx0 > 0 else 1.0
+                disp_name = zn.replace("_", " ")
+                line_label = f"{disp_name} ({cur_z_fac:.1f}×, {cur_z_dx:.4f} mm)"
+
+                if len(x) > 0 and x[0] > 0:
+                    x_line_start = np.insert(x, 0, 0)
+                    y_line_start = np.insert(zy, 0, zy[0])
+                else:
+                    x_line_start = x
+                    y_line_start = zy
+
+                if self.chk_lines.isChecked():
+                    if curr_it > x_line_start[-1]:
+                        x_line = np.append(x_line_start, curr_it)
+                        y_line = np.append(y_line_start, y_line_start[-1])
+                    else:
+                        x_line = x_line_start
+                        y_line = y_line_start
+                    self.ax.step(
+                        x_line, y_line, where='post', color=color,
+                        linewidth=1.8, alpha=0.92, zorder=4 + idx_z, label=line_label
+                    )
+
+                if self.chk_points.isChecked():
+                    pt_label = line_label if not self.chk_lines.isChecked() else None
+                    self.ax.scatter(
+                        x, zy,
+                        s=34, c=color, edgecolors="#0f172a", linewidths=0.7,
+                        alpha=0.95, zorder=10 + idx_z, label=pt_label
+                    )
+        else:
+            # Fallback if no zone dictionary is available
+            all_y_vals.extend(y_plume_mean.tolist())
+            if len(x) > 0 and x[0] > 0:
+                x_line_start = np.insert(x, 0, 0)
+                y_line_start = np.insert(y_plume_mean, 0, dx0)
+            else:
+                x_line_start = x
+                y_line_start = y_plume_mean
+
+            if self.chk_lines.isChecked():
+                if curr_it > x_line_start[-1]:
+                    x_line = np.append(x_line_start, curr_it)
+                    y_line = np.append(y_line_start, y_line_start[-1])
+                else:
+                    x_line = x_line_start
+                    y_line = y_line_start
+                self.ax.step(x_line, y_line, where='post', color="#2563eb", linewidth=1.8, alpha=0.9, zorder=4, label="Plume Δx(t)")
+
+            if self.chk_points.isChecked():
+                self.ax.scatter(
+                    x, y_plume_mean,
+                    s=40, c="#2563eb", edgecolors="#1e3a8a", linewidths=0.9,
+                    alpha=0.95, zorder=6, label=f"Remesh Milestones ({n_pts})"
+                )
+
+        x_max = max(int(np.max(x)), int(curr_it))
         pad_x = max(10, int(x_max * 0.05)) if x_max > 0 else 150
         self.ax.set_xlim(0, x_max + pad_x)
 
-        y_min = min(dx0, np.min(y)) * 0.85
-        y_max = max(dx0, np.max(y)) * 1.15
+        y_min = min(all_y_vals) * 0.85
+        y_max = max(all_y_vals) * 1.15
+        if y_max <= y_min:
+            y_max = y_min + max(0.01, dx0 * 0.5)
         self.ax.set_ylim(max(0.0, y_min), y_max)
 
         self.ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         self.ax.set_xlabel("Simulation Iteration", fontsize=9.5, fontweight="bold")
-        self.ax.set_ylabel("Plume Mesh Cell Size Δx [mm]", fontsize=9.5, fontweight="bold")
-        self.ax.set_title("Adaptive Plume Mesh Cell Size vs. Simulation Iteration", fontsize=10.5, fontweight="bold", pad=28)
+        self.ax.set_ylabel("Section Cell Size Δx [mm]", fontsize=9.5, fontweight="bold")
+        self.ax.set_title("Adaptive Mesh Cell Size Δx per Domain Section vs. Simulation Iteration", fontsize=10.5, fontweight="bold", pad=34)
         self.ax.grid(True, linestyle=":", alpha=0.5, color="#cbd5e1")
+        n_leg_cols = min(4, max(2, (len(ordered_zone_names) + 2) // 2))
         self.ax.legend(
             loc="lower center",
-            bbox_to_anchor=(0.5, 1.02),
-            ncol=3,
+            bbox_to_anchor=(0.5, 1.01),
+            ncol=n_leg_cols,
             framealpha=0.95,
-            fontsize=8.5
+            fontsize=8.0
         )
 
         self.canvas.draw_idle()
 
 
-class PlumeMeshSizeWindow(QDialog):
+class PlumeMeshSizeWindow(QWidget):
     """
     Dedicated second window displaying the Plume Mesh Cell Size diagnostic graph
     (Iterations on x-axis, Plume Cell Size Delta x [mm] on y-axis).
     """
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__()
         self.parent_app = parent
         self.setWindowTitle("Plume Mesh Cell Size Monitor — (Iterations vs Plume Δx)")
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
@@ -654,14 +761,14 @@ class PlumeMeshSizeWindow(QDialog):
         self.plume_widget.update_plot(sim)
 
 
-class MeshWindow(QDialog):
+class MeshWindow(QWidget):
     """
     Popup window displaying the computational domain and mesh grid with
     spatial resolution, Debye length, and mesh dimension analytics,
     along with a second tab/window for Courant/Boris displacement substeps.
     """
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__()
         self.parent_app = parent
         self.setWindowTitle("Computational Domain & Mesh Grid Inspector")
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
@@ -870,6 +977,10 @@ class MeshWindow(QDialog):
         """Open or focus the separate Displacement Substeps Monitor window."""
         if getattr(self, '_substeps_dialog', None) is None:
             self._substeps_dialog = DisplacementSubstepsWindow(parent=self.parent_app or self)
+        self._substeps_dialog.setWindowState(
+            (self._substeps_dialog.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive
+        )
+        self._substeps_dialog.showNormal()
         self._substeps_dialog.show()
         self._substeps_dialog.raise_()
         self._substeps_dialog.activateWindow()
@@ -883,6 +994,10 @@ class MeshWindow(QDialog):
         """Open or focus the separate Plume Mesh Cell Size Monitor window."""
         if getattr(self, '_plume_size_dialog', None) is None:
             self._plume_size_dialog = PlumeMeshSizeWindow(parent=self.parent_app or self)
+        self._plume_size_dialog.setWindowState(
+            (self._plume_size_dialog.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive
+        )
+        self._plume_size_dialog.showNormal()
         self._plume_size_dialog.show()
         self._plume_size_dialog.raise_()
         self._plume_size_dialog.activateWindow()
@@ -970,28 +1085,68 @@ class MeshWindow(QDialog):
             self.canvas.draw_idle()
             return
 
-        Lx = getattr(sim, 'Lx', 10.0)
-        Ly = getattr(sim, 'Ly', 3.0)
-        dx = getattr(sim, 'dx', 0.04)
-        dy = getattr(sim, 'dy', 0.04)
-        nx = getattr(sim, 'nx', len(getattr(sim, 'x_coords', [])))
-        ny = getattr(sim, 'ny', len(getattr(sim, 'y_coords', [])))
+        Lx = float(getattr(sim, 'Lx', 10.0))
+        Ly = float(getattr(sim, 'Ly', 3.0))
+        dx = float(getattr(sim, 'dx', 0.04))
+        dy = float(getattr(sim, 'dy', 0.04))
+        nx = int(getattr(sim, 'nx', len(getattr(sim, 'x_coords', []))))
+        ny = int(getattr(sim, 'ny', len(getattr(sim, 'y_coords', []))))
+
+        zone_configs = getattr(sim, 'zone_configs', None)
+        if isinstance(zone_configs, list) and len(zone_configs) > 0:
+            last_z_end = float(zone_configs[-1].get('x_end', Lx))
+            if abs(last_z_end - Lx) > 1e-2 and hasattr(sim, 'grids') and sim.grids:
+                from physics.mesh_utils import estimate_automatic_mesh_zones
+                zone_configs = estimate_automatic_mesh_zones(
+                    grids=sim.grids,
+                    upstream_gap_mm=float(getattr(sim, 'upstream_gap_mm', 0.8)),
+                    Lx=Lx,
+                    dx0=dx,
+                )
+                sim.zone_configs = zone_configs
 
         x_coords = getattr(sim, 'x_coords', getattr(sim, 'xpts', None))
         y_coords = getattr(sim, 'y_coords', getattr(sim, 'ypts', None))
-        if x_coords is None:
-            x_coords = np.linspace(0, Lx, nx)
-        if y_coords is None:
-            y_coords = np.linspace(0, Ly, ny)
+        if (
+            x_coords is None
+            or len(x_coords) != nx
+            or (len(x_coords) > 0 and abs(float(x_coords[-1]) - Lx) > 1e-2)
+        ):
+            if getattr(sim, 'X', None) is not None and sim.X.shape[1] == nx and abs(float(sim.X[0, -1]) - Lx) <= 1e-2:
+                x_coords = sim.X[0, :].copy()
+            elif zone_configs and hasattr(sim, '_build_nonuniform_x_coords'):
+                try:
+                    xc, _, _, _ = sim._build_nonuniform_x_coords(zone_configs, Lx, dx)
+                    x_coords = xc if len(xc) == nx else np.linspace(0, Lx, nx)
+                except Exception:
+                    x_coords = np.linspace(0, Lx, nx)
+            else:
+                x_coords = np.linspace(0, Lx, nx)
+            sim.x_coords = x_coords
+
+        if (
+            y_coords is None
+            or len(y_coords) != ny
+            or (len(y_coords) > 0 and abs(float(y_coords[-1]) - Ly) > 1e-2)
+        ):
+            if getattr(sim, 'Y', None) is not None and sim.Y.shape[0] == ny and abs(float(sim.Y[-1, 0]) - Ly) <= 1e-2:
+                y_coords = sim.Y[:, 0].copy()
+            else:
+                y_coords = np.linspace(0, Ly, ny)
+            sim.y_coords = y_coords
 
         # ── 1. Potential field background ─────────────────────────────
         if self.chk_potential.isChecked() and hasattr(sim, 'V') and sim.V is not None:
             try:
                 V = sim.V
                 if V.shape == (len(y_coords), len(x_coords)):
+                    X_plot, Y_plot = (
+                        (sim.X, sim.Y)
+                        if (getattr(sim, 'X', None) is not None and getattr(sim, 'Y', None) is not None and sim.X.shape == V.shape and abs(float(sim.X[0, -1]) - Lx) <= 1e-2)
+                        else np.meshgrid(x_coords, y_coords)
+                    )
                     self.ax.contourf(
-                        sim.X if hasattr(sim, 'X') else x_coords,
-                        sim.Y if hasattr(sim, 'Y') else y_coords,
+                        X_plot, Y_plot,
                         V, levels=25, cmap="viridis", alpha=0.35, zorder=1
                     )
             except Exception:
@@ -1089,10 +1244,10 @@ class MeshWindow(QDialog):
         lambda_D_bohm_mm = lambda_D_bohm_m * 1e3
         lambda_D_bohm_um = lambda_D_bohm_m * 1e6
 
-        dx_cells = getattr(sim, 'dx_cells', np.diff(x_coords) if len(x_coords) > 1 else np.array([dx]))
+        dx_cells = np.diff(x_coords) if len(x_coords) > 1 else np.array([dx])
         dx_min = float(np.min(dx_cells)) if len(dx_cells) > 0 else dx
         dx_max = float(np.max(dx_cells)) if len(dx_cells) > 0 else dx
-        dy_cells = getattr(sim, 'dy_cells', np.diff(y_coords) if len(y_coords) > 1 else np.array([dy]))
+        dy_cells = np.diff(y_coords) if len(y_coords) > 1 else np.array([dy])
         dy_val = float(np.mean(dy_cells)) if len(dy_cells) > 0 else dy
 
         ratio_dx_debye = (dx * 1e-3) / lambda_D_m if lambda_D_m > 0 else 0.0

@@ -2,6 +2,7 @@
 Dialog launcher mixin for DigitalTwinApp.
 Manages popup dialogs and secondary diagnostics windows.
 """
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QDialog, QMessageBox
 
 from ..dialogs import (
@@ -162,13 +163,22 @@ class DialogsMixin:
                 f"Click '1. BUILD DOMAIN' to apply."
             )
 
+    @staticmethod
+    def _present_diagnostic_window(win):
+        """Ensure a diagnostic window is un-minimized, shown, raised, and focused."""
+        if win is None:
+            return
+        win.setWindowState((win.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+        win.showNormal()
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
     def open_iedf_window(self):
         """Open Ion and Electron Energy Distribution Function window."""
         if self.iedf_window is None:
             self.iedf_window = IEDFWindow()
-        self.iedf_window.show()
-        self.iedf_window.raise_()
-        self.iedf_window.activateWindow()
+        self._present_diagnostic_window(self.iedf_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -186,9 +196,7 @@ class DialogsMixin:
         """Open Particles-Per-Cell monitor window."""
         if self.ppc_window is None:
             self.ppc_window = PPCWindow(self)
-        self.ppc_window.show()
-        self.ppc_window.raise_()
-        self.ppc_window.activateWindow()
+        self._present_diagnostic_window(self.ppc_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -204,9 +212,7 @@ class DialogsMixin:
         """Open Plasma & Particle Density Diagnostics window."""
         if getattr(self, 'density_window', None) is None:
             self.density_window = DensityWindow(self)
-        self.density_window.show()
-        self.density_window.raise_()
-        self.density_window.activateWindow()
+        self._present_diagnostic_window(self.density_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -222,9 +228,7 @@ class DialogsMixin:
         """Open Total Energy and Physical Constraints monitor window."""
         if self.phys_window is None:
             self.phys_window = PhysicalConstraintsWindow(self)
-        self.phys_window.show()
-        self.phys_window.raise_()
-        self.phys_window.activateWindow()
+        self._present_diagnostic_window(self.phys_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -240,9 +244,7 @@ class DialogsMixin:
         """Open Total Charge Conservation window."""
         if self.charge_window is None:
             self.charge_window = TotalChargeMonitorWindow(self)
-        self.charge_window.show()
-        self.charge_window.raise_()
-        self.charge_window.activateWindow()
+        self._present_diagnostic_window(self.charge_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -258,9 +260,7 @@ class DialogsMixin:
         """Open Performance and Execution Profiling window."""
         if self.perf_window is None:
             self.perf_window = PerformanceMonitorWindow(self)
-        self.perf_window.show()
-        self.perf_window.raise_()
-        self.perf_window.activateWindow()
+        self._present_diagnostic_window(self.perf_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -276,9 +276,7 @@ class DialogsMixin:
         """Open Computational Domain & Mesh Grid Inspector window."""
         if getattr(self, 'mesh_window', None) is None:
             self.mesh_window = MeshWindow(self)
-        self.mesh_window.show()
-        self.mesh_window.raise_()
-        self.mesh_window.activateWindow()
+        self._present_diagnostic_window(self.mesh_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -295,9 +293,7 @@ class DialogsMixin:
         """Open Displacement Substeps monitor window."""
         if getattr(self, 'substep_window', None) is None:
             self.substep_window = DisplacementSubstepsWindow(self)
-        self.substep_window.show()
-        self.substep_window.raise_()
-        self.substep_window.activateWindow()
+        self._present_diagnostic_window(self.substep_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -314,9 +310,7 @@ class DialogsMixin:
         from diagnostics.mesh_window import PlumeMeshSizeWindow
         if getattr(self, 'plume_window', None) is None:
             self.plume_window = PlumeMeshSizeWindow(self)
-        self.plume_window.show()
-        self.plume_window.raise_()
-        self.plume_window.activateWindow()
+        self._present_diagnostic_window(self.plume_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -332,9 +326,7 @@ class DialogsMixin:
         """Open Electric Field & Potential Diagnostics window."""
         if getattr(self, 'field_window', None) is None:
             self.field_window = FieldDiagnosticWindow(self)
-        self.field_window.show()
-        self.field_window.raise_()
-        self.field_window.activateWindow()
+        self._present_diagnostic_window(self.field_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:
@@ -355,9 +347,7 @@ class DialogsMixin:
                 self.steady_state_window.spin_window.setValue(int(self.sweep_config["window"]))
             if "threshold" in self.sweep_config and hasattr(self.steady_state_window, 'spin_thresh'):
                 self.steady_state_window.spin_thresh.setValue(float(self.sweep_config["threshold"]))
-        self.steady_state_window.show()
-        self.steady_state_window.raise_()
-        self.steady_state_window.activateWindow()
+        self._present_diagnostic_window(self.steady_state_window)
 
         is_sweep = getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_mode_armed', False) or (hasattr(self, 'sweep_config') and self.sweep_config is not None)
         if is_sweep and hasattr(self, 'combo_sweep_scenario') and self.combo_sweep_scenario.count() > 0:

@@ -21,7 +21,7 @@ except Exception:
         NavigationToolbar = None
 
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
     QPushButton, QGroupBox, QFrame, QComboBox, QSpinBox,
     QDoubleSpinBox
 )
@@ -30,7 +30,7 @@ from PyQt5.QtCore import Qt
 from .metrics import compute_rolling_variation
 
 
-class SteadyStateWindow(QDialog):
+class SteadyStateWindow(QWidget):
     """
     Pop-up window analyzing whether the simulation has reached stationary (steady-state) conditions.
 
@@ -55,7 +55,7 @@ class SteadyStateWindow(QDialog):
     ]
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__()
         self.parent_app = parent
         self.setWindowTitle("Steady State Diagnostics — 100-Iteration Variation")
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)

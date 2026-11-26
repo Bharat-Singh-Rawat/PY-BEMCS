@@ -317,14 +317,15 @@ def estimate_automatic_mesh_zones(
     is_axisymmetric: bool = False,
 ):
     """
-    Automatically partition the domain into physical axial zones and pre-size
-    physically-grounded coarsening factors across all sections (Option B):
-      - Far Presheath & Sheath/Meniscus (or unified Presheath if gap is short)
-      - Grid Barrels (resolving aperture thickness >= 12 cells without sub-dx0 over-refinement)
-      - Inter-Grid Acceleration/Deceleration Gaps (local continuity Debye length & E-field jump bound,
-        preventing 0.5x hyper-refinement that triggers unnecessary Boris substepping)
-      - Near Plume & Far Plume (pre-sized from 1D continuity ion velocity/density drop and local
-        Debye length expansion, bounded by aperture geometry)
+    Generate the clean initial baseline axial mesh zones when building the domain (Iteration 0):
+      - Presheath: factor = 1.0 (uncalibrated baseline)
+      - Grid Barrels: factor in [0.8, 1.5] resolving grid thickness
+      - Inter-Grid Gaps: factor in [0.8, 1.0] (never hyper-refining to 0.5x)
+      - Near Plume: factor = 2.0 (initial transition assumption)
+      - Far Plume: factor = 4.0 (initial far-plume assumption)
+
+    During the simulation run, `estimate_automatic_plume_mesh_zones()` dynamically calibrates
+    every axial zone using the live particle distribution and local Debye length.
     """
     if not grids:
         return [
@@ -333,58 +334,19 @@ def estimate_automatic_mesh_zones(
             {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': 4.0},
         ]
 
-    eps0 = 8.854e-12
-    q_e = 1.602e-19
-    n0_safe = max(float(n0), 1e10)
-    Te_safe = max(float(Te_up), 0.1)
-    m_i_safe = max(float(m_ion), 1e-30)
-    q_i_safe = max(float(q_ion), 1e-22)
     dx0_safe = max(float(dx0), 1e-6)
-    r_deb = float(ratio_debye) if (ratio_debye is not None and float(ratio_debye) > 0.0) else 0.8
-    bohm_fac = 1.0 if entire_bulk_plasma else 0.61
-
-    # Upstream Debye length [mm] and Bohm velocity [m/s]
-    debye_bohm_mm = math.sqrt(eps0 * Te_safe / (q_e * n0_safe * bohm_fac)) * 1e3
-    debye_unscreened_mm = math.sqrt(eps0 * Te_safe / (q_e * n0_safe)) * 1e3
-    v_bohm = math.sqrt(q_i_safe * Te_safe / m_i_safe)
-    v_Screen0 = float(grids[0].get('V', 1000.0))
-    V_plasma = v_Screen0 + float(V_plasma_offset)
-
     zones = []
     x_curr = 0.0
     up_gap = min(float(upstream_gap_mm), Lx)
 
-    # 1. Presheath Zone(s): Split into Far_Presheath and Sheath_Meniscus if upstream gap is long enough
+    # 1. Presheath Zone (strictly 1.0x initial baseline before live particle calibration)
     if up_gap > 1e-5:
-        r_screen = float(grids[0].get('r', 0.8))
-        meniscus_len = min(0.55 * up_gap, max(6.0 * debye_bohm_mm, 0.35 * r_screen, 6.0 * dx0_safe))
-        far_pre_len = up_gap - meniscus_len
-
-        # Only split if Far_Presheath has at least 8 cells and allows meaningful coarsening (>= 1.2x)
-        dx_far_pre_max = min(max(r_deb, 1.0) * debye_unscreened_mm, far_pre_len / 8.0) if far_pre_len > 0 else dx0_safe
-        f_far_pre = round(min(1.5, max(1.0, dx_far_pre_max / dx0_safe)), 1)
-
-        if far_pre_len >= 8.0 * dx0_safe and f_far_pre >= 1.2:
-            x_split = round(far_pre_len, 5)
-            zones.append({
-                'name': 'Far_Presheath',
-                'x_start': round(x_curr, 5),
-                'x_end': x_split,
-                'factor': f_far_pre
-            })
-            zones.append({
-                'name': 'Sheath_Meniscus',
-                'x_start': x_split,
-                'x_end': round(up_gap, 5),
-                'factor': 1.0
-            })
-        else:
-            zones.append({
-                'name': 'Presheath',
-                'x_start': round(x_curr, 5),
-                'x_end': round(up_gap, 5),
-                'factor': 1.0
-            })
+        zones.append({
+            'name': 'Presheath',
+            'x_start': round(x_curr, 5),
+            'x_end': round(up_gap, 5),
+            'factor': 1.0
+        })
         x_curr = up_gap
 
     # 2. Grid Barrels and Inter-Grid Gaps
@@ -393,13 +355,10 @@ def estimate_automatic_mesh_zones(
         t_grid = float(g.get('t', 0.5))
         gap = float(g.get('gap', 1.0))
 
-        # Grid barrel: decoupled SubgridManager resolves 5-10 um surface normals/erosion,
-        # so Eulerian grid needs >= 10-12 cells across thickness without sub-1.0x over-refinement
-        # unless the grid is very thin compared to dx0.
         if x_curr < Lx:
             x_next = min(x_curr + t_grid, Lx)
             if x_next - x_curr > 1e-5:
-                f_t = min(1.5, max(0.8, round((t_grid / 12.0) / dx0_safe, 1)))
+                f_t = min(1.5, max(0.8, round((t_grid / 15.0) / dx0_safe, 1)))
                 zones.append({
                     'name': f'Grid_{i+1}_barrel',
                     'x_start': round(x_curr, 5),
@@ -408,26 +367,10 @@ def estimate_automatic_mesh_zones(
                 })
                 x_curr = x_next
 
-        # Internal inter-grid gap: size via local continuity ion density & E-field jump limit
         if i < num_grids - 1 and x_curr < Lx:
             x_next = min(x_curr + gap, Lx)
             if x_next - x_curr > 1e-5:
-                v_g1 = float(g.get('V', 1000.0))
-                v_g2 = float(grids[i + 1].get('V', -200.0))
-                v_mid = 0.5 * (v_g1 + v_g2)
-                dV_mid = max(Te_safe, V_plasma - v_mid)
-                v_ion_gap = math.sqrt(v_bohm**2 + 2.0 * q_i_safe * dV_mid / m_i_safe)
-                n_gap = max(1e12, bohm_fac * n0_safe * (v_bohm / max(v_ion_gap, v_bohm)))
-                lambda_D_gap_mm = math.sqrt(eps0 * Te_safe / (q_e * n_gap)) * 1e3
-
-                # Bound gap cell size by local Debye length, E-field relative jump limit, and >= 16 cells across gap
-                dx_gap_max = min(
-                    r_deb * lambda_D_gap_mm,
-                    float(max_rel_jump) * gap,
-                    gap / 16.0
-                )
-                # Never hyper-refine below 0.8x (prevents 0.5x Boris substep explosion); allow up to 1.2x at ultra-high n0
-                f_gap = min(1.2, max(0.8, round(dx_gap_max / dx0_safe, 1)))
+                f_gap = min(1.0, max(0.8, round((gap / 20.0) / dx0_safe, 1)))
                 zones.append({
                     'name': f'Gap_{i+1}_{i+2}',
                     'x_start': round(x_curr, 5),
@@ -436,52 +379,26 @@ def estimate_automatic_mesh_zones(
                 })
                 x_curr = x_next
 
-    # 3. Plume Zones (Near Plume and Far Plume): Analytical continuity & local Debye pre-sizing
+    # 3. Plume Zones (Near Plume = 2.0x, Far Plume = 4.0x initial baseline before live calibration)
     plume_remaining = Lx - x_curr
     if plume_remaining > 1e-5:
-        r_screen = max(float(grids[0].get('r', 0.8)), 0.1)
-        r_last = max(float(grids[-1].get('r', r_screen)), 0.1)
-        v_last = float(grids[-1].get('V', -180.0))
-        dV_exit = max(50.0, V_plasma - max(v_last, -500.0))
-        v_exit = math.sqrt(v_bohm**2 + 2.0 * q_i_safe * dV_exit / m_i_safe)
-
-        # Geometric expansion factor in plume (conservative core radius ~ max(r_last, 0.85 * r_screen))
-        r_core_est = max(r_last, 0.85 * r_screen)
-        area_ratio = (r_screen / r_core_est)**2 if is_axisymmetric else (r_screen / r_core_est)
-        T_opt_est = 0.85
-
-        # Expected steady-state beam core ion density [m^-3] and local plume Debye length [mm]
-        n_plume_est = max(1e12, bohm_fac * n0_safe * T_opt_est * (v_bohm / max(v_exit, v_bohm)) * area_ratio)
-        lambda_D_plume_mm = math.sqrt(eps0 * Te_safe / (q_e * n_plume_est)) * 1e3
-
         near_plume_len = min(1.0, 0.3 * plume_remaining)
-        far_plume_len = max(0.2, plume_remaining - near_plume_len)
-
-        dx_far_debye = r_deb * lambda_D_plume_mm
-        dx_far_geom = min(0.45 * r_last, far_plume_len / 10.0)
-        dx_far_target = min(dx_far_debye, dx_far_geom)
-
-        f_far = max(2.0, min(8.0, round(dx_far_target / dx0_safe, 1)))
-        f_near = round(min(3.5, max(1.5, 0.5 * (1.0 + f_far))), 1)
-
-        # Near Plume
         if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
             x_next = round(x_curr + near_plume_len, 5)
             zones.append({
                 'name': 'Near_Plume',
                 'x_start': round(x_curr, 5),
                 'x_end': x_next,
-                'factor': f_near
+                'factor': 2.0
             })
             x_curr = x_next
 
-        # Far Plume
         if Lx - x_curr > 1e-5:
             zones.append({
                 'name': 'Far_Plume',
                 'x_start': round(x_curr, 5),
                 'x_end': round(Lx, 5),
-                'factor': f_far
+                'factor': 4.0
             })
 
     return zones
@@ -497,144 +414,168 @@ def estimate_automatic_plume_mesh_zones(
     max_rel_jump: float = 0.10,
 ) -> list:
     """
-    Generate an adapted non-uniform axial mesh partitioned dynamically where:
-    - Upstream presheath strictly maintains baseline factor = 1.0 (no coarsening, no meniscus refining).
-    - Grid barrels and inter-grid optics gaps strictly maintain baseline resolution.
-    - Plume zones (Near Plume and Far Plume) are automatically adapted based on local
-      plume ion density, Debye length expansion, and beam kinematics.
+    Dynamically calibrate the non-uniform axial mesh across ALL domain sections
+    (Presheath, Grid Barrels, Inter-Grid Gaps, Near Plume, and Far Plume) using the
+    same live-particle-density and local-Debye-length criteria once the ion beam has
+    populated the domain:
+      1. Live beam-core ion density in zone z:
+           n_core,z = (N_p,z * W_macro) / V_core,z
+      2. Empirical local Debye length in zone z:
+           lambda_D,z = sqrt(eps0 * Te_up / (q * n_core,z))
+      3. Target cell spacing in zone z bounded by local Debye resolution and
+         zone-specific geometric / E-field smoothness limits:
+           dx_target,z = min(ratio_debye * lambda_D,z, dx_geom_limit,z)
     """
-    if not grids:
-        return [
-            {'name': 'Presheath', 'x_start': 0.0, 'x_end': min(Lx / 3.0, Lx), 'factor': 1.0},
-            {'name': 'Optics',    'x_start': min(Lx / 3.0, Lx), 'x_end': min(2.0 * Lx / 3.0, Lx), 'factor': 1.0},
-            {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': 4.0},
-        ]
-
-    zones = []
-    x_curr = 0.0
-    up_gap = min(float(upstream_gap_mm), Lx)
-
-    # Preserve upstream presheath and optics zones from existing zone_configs if available
-    existing_zones = getattr(sim, 'zone_configs', None) if sim is not None else None
-    x_exit_expected = up_gap + (sum(float(g.get('t', 0.5)) + float(g.get('gap', 1.0)) for g in grids) - float(grids[-1].get('gap', 1.0)))
-    x_exit_expected = min(x_exit_expected, Lx)
-
-    non_plume_existing = (
-        [dict(z) for z in existing_zones if 'plume' not in z.get('name', '').lower()]
-        if isinstance(existing_zones, list) and len(existing_zones) > 0
-        else []
+    base_zones = estimate_automatic_mesh_zones(
+        grids=grids,
+        upstream_gap_mm=upstream_gap_mm,
+        Lx=Lx,
+        dx0=dx0,
+        max_rel_jump=max_rel_jump,
     )
+    if not grids or sim is None or getattr(sim, 'num_p', 0) <= 5:
+        return base_zones
 
-    if non_plume_existing and abs(float(non_plume_existing[-1].get('x_end', 0.0)) - x_exit_expected) <= 1e-3:
-        zones.extend(non_plume_existing)
-        x_curr = float(non_plume_existing[-1]['x_end'])
-    else:
-        # Fallback: compute upstream and optics zones via estimate_automatic_mesh_zones
-        base_zones = estimate_automatic_mesh_zones(
-            grids=grids,
-            upstream_gap_mm=upstream_gap_mm,
-            Lx=Lx,
-            dx0=dx0,
-            max_rel_jump=max_rel_jump,
-            n0=float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))) if sim is not None else 1e17,
-            Te_up=float(getattr(sim, 'Te_up', 3.0)) if sim is not None else 3.0,
-            m_ion=float(getattr(sim, 'm_ion', 131.293 * 1.6605e-27)) if sim is not None else 131.293 * 1.6605e-27,
-            q_ion=float(getattr(sim, 'q_ion', 1.602e-19)) if sim is not None else 1.602e-19,
-            is_axisymmetric=bool(getattr(sim, 'is_axisymmetric', False)) if sim is not None else False,
+    dx0_safe = max(float(dx0), 1e-6)
+    up_gap = min(float(upstream_gap_mm), Lx)
+    x_exit = up_gap + (
+        sum(float(g.get('t', 0.5)) + float(g.get('gap', 1.0)) for g in grids)
+        - float(grids[-1].get('gap', 1.0))
+    )
+    x_exit = min(x_exit, Lx)
+
+    try:
+        num_p = int(sim.num_p)
+        p_x = sim.p_x[:num_p]
+        p_y = sim.p_y[:num_p]
+
+        plume_mask = (p_x >= x_exit) & (p_x <= Lx)
+        n_in_plume = int(np.sum(plume_mask))
+        plume_span_mm = max(1e-4, Lx - x_exit)
+        max_px_plume = float(np.max(p_x[plume_mask])) if n_in_plume > 0 else x_exit
+        plume_fill_frac = (max_px_plume - x_exit) / plume_span_mm
+
+        # Defer all-zone calibration until ions have crossed >= 60% of the plume
+        if n_in_plume < 15 or plume_fill_frac < 0.60:
+            sim._plume_remesh_deferred = True
+            existing = getattr(sim, 'zone_configs', None)
+            return [dict(z) for z in existing] if isinstance(existing, list) and existing else base_zones
+
+        sim._plume_remesh_deferred = False
+
+        eps0 = 8.854e-12
+        q_e = 1.602e-19
+        Te_up = max(float(getattr(sim, 'Te_up', 3.0)), 0.1)
+        macro_weight = float(getattr(sim, 'macro_weight', 1.0))
+        Ly = float(getattr(sim, 'Ly', 1.5))
+        is_axi = bool(getattr(sim, 'is_axisymmetric', False))
+        ratio_debye = (
+            float(remesh_cfg.get("dx_over_debye", 0.8))
+            if isinstance(remesh_cfg, dict) and remesh_cfg.get("dx_over_debye") is not None
+            else 0.8
         )
-        for z in base_zones:
-            if 'plume' not in z.get('name', '').lower():
-                zones.append(z)
-                x_curr = float(z['x_end'])
+        r_screen = float(grids[0].get('r', 0.8))
+        r_last = float(grids[-1].get('r', r_screen))
 
-    # 3. Plume Zones: Automatic determination based on local beam core density / Debye ratio
-    x_exit = x_curr
-    f_far = getattr(sim, '_current_plume_factor', 4.0) if sim is not None else 4.0
-    if sim is not None and getattr(sim, 'num_p', 0) > 5:
-        try:
-            num_p = sim.num_p
-            p_x = sim.p_x[:num_p]
-            plume_mask = (p_x >= x_exit) & (p_x <= Lx)
-            n_in_plume = int(np.sum(plume_mask))
-
-            # Wait until ions have populated at least 60% of the plume length before adapting
-            plume_span_mm = max(1e-4, Lx - x_exit)
-            max_px_plume = float(np.max(p_x[plume_mask])) if n_in_plume > 0 else x_exit
-            plume_fill_frac = (max_px_plume - x_exit) / plume_span_mm
-
-            if n_in_plume < 15 or plume_fill_frac < 0.60:
-                sim._plume_remesh_deferred = True
+        def _live_zone_debye_dx(x_s: float, x_e: float, r_ref_mm: float, min_ptcls: int = 8):
+            """Compute ratio_debye * lambda_D,z [mm] from live particles inside [x_s, x_e]."""
+            mask = (p_x >= x_s) & (p_x <= x_e)
+            n_z = int(np.sum(mask))
+            if n_z < min_ptcls:
+                return None
+            px_z = p_x[mask]
+            py_z = p_y[mask]
+            # Effective occupied axial length in [m]
+            occ_span_mm = max(0.5 * (x_e - x_s), float(np.max(px_z) - x_s))
+            len_m = max(1e-5, occ_span_mm * 1e-3)
+            r_core_mm = min(Ly, max(float(np.percentile(np.abs(py_z), 90)), 0.5 * r_ref_mm, 0.3))
+            if is_axi:
+                vol_m3 = math.pi * (r_core_mm * 1e-3) ** 2 * len_m
             else:
-                sim._plume_remesh_deferred = False
-                plume_len_m = max(1e-4, (max_px_plume - x_exit) * 1e-3)
-                p_y = sim.p_y[:num_p][plume_mask]
+                vol_m3 = (r_core_mm * 1e-3) * 1e-3 * len_m
+            n_core_avg = (n_z * macro_weight) / max(vol_m3, 1e-16)
+            if n_core_avg <= 0.0:
+                return None
+            lambda_D_zone_mm = math.sqrt(eps0 * Te_up / (q_e * max(n_core_avg, 1e11))) * 1e3
+            return ratio_debye * lambda_D_zone_mm
 
-                # Evaluate actual beam envelope radius r_core (90th percentile of |y|)
-                # Bounded by screen grid aperture radius and domain boundary Ly
-                r_screen = float(grids[0].get('r', 1.0)) if grids else 1.0
-                r_last = float(grids[-1].get('r', r_screen)) if grids else r_screen
-                if len(p_y) > 0:
-                    r_core_mm = max(float(np.percentile(np.abs(p_y), 90)), r_last * 0.5, 0.3)
+        # Evaluate Far_Plume first (over full populated plume if Far_Plume alone has fewer particles)
+        f_far = float(getattr(sim, '_current_plume_factor', 4.0))
+        dx_plume_debye = _live_zone_debye_dx(x_exit, Lx, r_last, min_ptcls=15)
+        if dx_plume_debye is not None:
+            far_len_mm = max(0.2, plume_span_mm * 0.7)
+            dx_far_geom = min(0.45 * r_last, far_len_mm / 10.0)
+            dx_far_target = min(dx_plume_debye, dx_far_geom)
+            f_far = max(1.5, min(8.0, round(dx_far_target / dx0_safe, 1)))
+
+        calibrated_zones = []
+        for z in base_zones:
+            z_copy = dict(z)
+            z_name = str(z.get('name', ''))
+            z_low = z_name.lower()
+            x_s = float(z.get('x_start', 0.0))
+            x_e = float(z.get('x_end', Lx))
+            z_len = max(1e-5, x_e - x_s)
+            f_base = float(z.get('factor', 1.0))
+
+            if 'presheath' in z_low:
+                dx_deb = _live_zone_debye_dx(x_s, x_e, r_screen, min_ptcls=10)
+                if dx_deb is not None:
+                    dx_geom = z_len / 12.0
+                    dx_target = min(dx_deb, dx_geom)
+                    z_copy['factor'] = max(1.0, min(1.5, round(dx_target / dx0_safe, 1)))
+            elif 'barrel' in z_low:
+                # Parse grid index if available
+                g_idx = 0
+                parts = z_name.split('_')
+                if len(parts) >= 2 and parts[1].isdigit():
+                    g_idx = max(0, min(len(grids) - 1, int(parts[1]) - 1))
+                r_g = float(grids[g_idx].get('r', r_screen))
+                dx_deb = _live_zone_debye_dx(x_s, x_e, r_g, min_ptcls=5)
+                if dx_deb is not None:
+                    dx_geom = z_len / 10.0
+                    dx_target = min(dx_deb, dx_geom)
+                    z_copy['factor'] = max(0.8, min(1.6, round(dx_target / dx0_safe, 1)))
+            elif 'gap' in z_low:
+                dx_deb = _live_zone_debye_dx(x_s, x_e, r_screen, min_ptcls=6)
+                if dx_deb is not None:
+                    dx_geom = min(float(max_rel_jump) * z_len, z_len / 15.0)
+                    dx_target = min(dx_deb, dx_geom)
+                    z_copy['factor'] = max(0.8, min(1.5, round(dx_target / dx0_safe, 1)))
+            elif z_name == 'Near_Plume':
+                dx_deb = _live_zone_debye_dx(x_s, x_e, r_last, min_ptcls=8)
+                if dx_deb is not None:
+                    dx_geom = min(0.35 * r_last, z_len / 6.0)
+                    dx_target = min(dx_deb, dx_geom)
+                    f_near_raw = max(1.5, min(4.0, round(dx_target / dx0_safe, 1)))
+                    # Keep smooth grading between optics and Far_Plume
+                    z_copy['factor'] = min(f_near_raw, f_far)
                 else:
-                    r_core_mm = r_screen
-                Ly = float(getattr(sim, 'Ly', r_core_mm))
-                r_core_mm = min(r_core_mm, Ly)
+                    z_copy['factor'] = round(min(3.5, max(1.5, 0.5 * (1.0 + f_far))), 1)
+            elif z_name == 'Far_Plume':
+                dx_deb_far = _live_zone_debye_dx(x_s, x_e, r_last, min_ptcls=12)
+                if dx_deb_far is not None:
+                    dx_far_geom = min(0.45 * r_last, z_len / 10.0)
+                    dx_far_target = min(dx_deb_far, dx_far_geom)
+                    f_far = max(1.5, min(8.0, round(dx_far_target / dx0_safe, 1)))
+                z_copy['factor'] = f_far
+            else:
+                z_copy['factor'] = f_base
 
-                is_axi = getattr(sim, 'is_axisymmetric', False)
-                if is_axi:
-                    vol_core_m3 = math.pi * (r_core_mm * 1e-3)**2 * plume_len_m
-                else:
-                    vol_core_m3 = (r_core_mm * 1e-3) * 1e-3 * plume_len_m
+            calibrated_zones.append(z_copy)
 
-                macro_weight = float(getattr(sim, 'macro_weight', 1.0))
-                n_phys_ions = n_in_plume * macro_weight
-                n_core_avg = n_phys_ions / max(vol_core_m3, 1e-15)
+        # Ensure Near_Plume <= Far_Plume for monotonic plume grading
+        near_z = next((z for z in calibrated_zones if z.get('name') == 'Near_Plume'), None)
+        far_z = next((z for z in calibrated_zones if z.get('name') == 'Far_Plume'), None)
+        if near_z is not None and far_z is not None and near_z['factor'] > far_z['factor']:
+            near_z['factor'] = round(max(1.5, 0.5 * (1.0 + far_z['factor'])), 1)
 
-                if n_core_avg > 0:
-                    eps0 = 8.854e-12
-                    q = 1.6e-19
-                    Te_plume = float(getattr(sim, 'Te_up', 3.0))
-                    # Local plume Debye length [mm] from actual beam core density
-                    lambda_D_plume_mm = math.sqrt(eps0 * Te_plume / (q * max(n_core_avg, 1e12))) * 1e3
-                    ratio_debye = float(remesh_cfg.get("dx_over_debye", 0.8)) if isinstance(remesh_cfg, dict) else 0.8
+        return calibrated_zones
 
-                    # Maximum allowable cell size in far plume bounded by local Debye length and geometric smoothness
-                    far_len_mm = max(0.2, plume_span_mm * 0.7)
-                    dx_far_debye = ratio_debye * lambda_D_plume_mm
-                    dx_far_geom = min(0.45 * r_last, far_len_mm / 10.0)
-                    dx_far_target = min(dx_far_debye, dx_far_geom)
-
-                    auto_factor = dx_far_target / max(dx0, 1e-6)
-                    # Clamped sensibly between 1.5x and 8.0x
-                    f_far = max(1.5, min(8.0, round(auto_factor, 1)))
-        except Exception as exc:
-            print(f"[Plume Remesh Warning] Failed to estimate live plume factor: {exc}")
-            f_far = getattr(sim, '_current_plume_factor', 4.0)
-
-    f_near = round(min(3.5, max(1.2, 0.5 * (1.0 + f_far))), 1)
-
-    plume_remaining = Lx - x_curr
-    if plume_remaining > 1e-5:
-        near_plume_len = min(1.0, 0.3 * plume_remaining)
-        if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
-            x_next = round(x_curr + near_plume_len, 5)
-            zones.append({
-                'name': 'Near_Plume',
-                'x_start': round(x_curr, 5),
-                'x_end': x_next,
-                'factor': f_near
-            })
-            x_curr = x_next
-
-        if Lx - x_curr > 1e-5:
-            zones.append({
-                'name': 'Far_Plume',
-                'x_start': round(x_curr, 5),
-                'x_end': round(Lx, 5),
-                'factor': f_far
-            })
-
-    return zones
+    except Exception as exc:
+        print(f"[Adaptive Remesh Warning] Failed to estimate live zone factors: {exc}")
+        existing = getattr(sim, 'zone_configs', None)
+        return [dict(z) for z in existing] if isinstance(existing, list) and existing else base_zones
 
 
 def estimate_stability_optimized_mesh_zones(
@@ -683,4 +624,5 @@ def compute_plume_mean_dx(sim, zone_configs=None) -> float:
     if total_len > 0:
         return weighted_dx / total_len
     return dx0
+
 

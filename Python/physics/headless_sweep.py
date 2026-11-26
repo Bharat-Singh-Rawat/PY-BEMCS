@@ -401,6 +401,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [0])),
         "plume_history_dx": list(getattr(sim, 'plume_history_dx', [float(getattr(sim, 'dx', 0.04))])),
         "plume_dx_history": list(getattr(sim, 'plume_dx_history', [(0, float(getattr(sim, 'dx', 0.04)))])),
+        "zone_history_dx": {k: list(v) for k, v in getattr(sim, 'zone_history_dx', {}).items()},
         "zone_configs": getattr(sim, 'zone_configs', None),
         "T_histories": {i: [] for i in range(n_grids)},
         "T_grids": [float(t) for t in getattr(sim, 'T_grids', [300.0] * n_grids)],
@@ -409,6 +410,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
         "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
         "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+        "x_coords": sim.x_coords.copy() if getattr(sim, 'x_coords', None) is not None else None,
+        "y_coords": sim.y_coords.copy() if getattr(sim, 'y_coords', None) is not None else None,
         "V": sim.V.copy() if hasattr(sim, 'V') and sim.V is not None else None,
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),
@@ -457,6 +460,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
             paused_state["isBound"] = sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None
             paused_state["X"] = sim.X.copy() if getattr(sim, 'X', None) is not None else None
             paused_state["Y"] = sim.Y.copy() if getattr(sim, 'Y', None) is not None else None
+            paused_state["x_coords"] = sim.x_coords.copy() if getattr(sim, 'x_coords', None) is not None else None
+            paused_state["y_coords"] = sim.y_coords.copy() if getattr(sim, 'y_coords', None) is not None else None
             if status_dict is not None and trk_file is None:
                 paused_state["tracking_buffer"] = list(tracking_buffer)
             if status_dict is not None:
@@ -606,6 +611,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
                 "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
                 "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+                "x_coords": sim.x_coords.copy() if getattr(sim, 'x_coords', None) is not None else None,
+                "y_coords": sim.y_coords.copy() if getattr(sim, 'y_coords', None) is not None else None,
                 "sim_mode": str(scenario_params.get("sim_mode", "Both")),
                 "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
                 "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
@@ -624,6 +631,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
                 "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
                 "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
                 "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+                "zone_history_dx": {k: list(v) for k, v in getattr(sim, 'zone_history_dx', {}).items()},
                 "zone_configs": getattr(sim, 'zone_configs', None),
                 "Lx": float(getattr(sim, 'Lx', 3.0)),
                 "Ly": float(getattr(sim, 'Ly', 3.0)),
@@ -832,6 +840,8 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "isBound": sim.isBound.copy() if getattr(sim, 'isBound', None) is not None else None,
         "X": sim.X.copy() if getattr(sim, 'X', None) is not None else None,
         "Y": sim.Y.copy() if getattr(sim, 'Y', None) is not None else None,
+        "x_coords": sim.x_coords.copy() if getattr(sim, 'x_coords', None) is not None else None,
+        "y_coords": sim.y_coords.copy() if getattr(sim, 'y_coords', None) is not None else None,
         "sim_mode": str(scenario_params.get("sim_mode", "Both")),
         "energy_history_t": list(getattr(sim, 'energy_history_t', [])),
         "energy_history_ke_i": list(getattr(sim, 'energy_history_ke_i', [])),
@@ -850,6 +860,7 @@ def run_single_sweep_scenario_worker(payload: dict) -> dict:
         "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
         "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
         "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+        "zone_history_dx": {k: list(v) for k, v in getattr(sim, 'zone_history_dx', {}).items()},
         "zone_configs": getattr(sim, 'zone_configs', None),
         "Lx": float(getattr(sim, 'Lx', 3.0)),
         "Ly": float(getattr(sim, 'Ly', 3.0)),

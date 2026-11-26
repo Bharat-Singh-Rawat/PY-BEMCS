@@ -42,15 +42,24 @@ class DiagnosticsMixin:
             if hasattr(self, 'cell_vol_1d') and len(self.cell_vol_1d) == self.nx:
                 cvol = np.tile(self.cell_vol_1d, (self.ny, 1))
             else:
-                dx_m = float(getattr(self, 'dx', 0.05)) * 1e-3
+                x_c = getattr(self, 'x_coords', None)
+                if x_c is not None and len(x_c) == self.nx and self.nx >= 2:
+                    dx_cells_m = np.diff(x_c) * 1e-3
+                    hx_m = np.zeros(self.nx, dtype=np.float64)
+                    hx_m[0] = 0.5 * dx_cells_m[0]
+                    hx_m[1:-1] = 0.5 * (dx_cells_m[:-1] + dx_cells_m[1:])
+                    hx_m[-1] = 0.5 * dx_cells_m[-1]
+                else:
+                    dx_m = float(getattr(self, 'dx', 0.05)) * 1e-3
+                    hx_m = np.full(self.nx, dx_m, dtype=np.float64)
                 dy_m = float(getattr(self, 'dy', 0.05)) * 1e-3
                 if getattr(self, 'is_axisymmetric', False):
-                    r_coords_m = ((np.arange(self.ny) + 0.5) * dy_m if not hasattr(self, 'y_coords')
+                    r_coords_m = ((np.arange(self.ny) + 0.5) * dy_m if not hasattr(self, 'y_coords') or len(self.y_coords) != self.ny
                                   else self.y_coords * 1e-3)
                     V_rad = 2.0 * np.pi * np.maximum(r_coords_m, dy_m * 0.25) * dy_m
-                    cvol = np.outer(V_rad, np.full(self.nx, dx_m))
+                    cvol = np.outer(V_rad, hx_m)
                 else:
-                    cvol = np.full((self.ny, self.nx), dx_m * dy_m * 1e-3)
+                    cvol = np.tile(hx_m * dy_m * 1e-3, (self.ny, 1))
 
         sp = species.lower().strip()
 

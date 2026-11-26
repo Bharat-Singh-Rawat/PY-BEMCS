@@ -353,8 +353,9 @@ class SimControlMixin:
             self.adv_params["Ly"] = auto_Ly
 
         self.apply_advanced_settings_to_sim()
+        build_params = self.get_params()
         try:
-            self.sim.build_domain(self.get_params())
+            self.sim.build_domain(build_params)
         except Exception as exc:
             self.lbl_status.setText(f"Status: Domain build error: {exc}")
             QMessageBox.critical(self, "Domain Build Error", f"Failed to build domain:\n\n{exc}")
@@ -416,7 +417,10 @@ class SimControlMixin:
         cfg_name = getattr(self, "current_config_name", "config.json")
         dx_min = getattr(self.sim, 'dx_min', self.sim.dx)
         dx_max = getattr(self.sim, 'dx_max', self.sim.dx)
-        mesh_mode_tag = "JSON 3-Zone" if self.adv_params.get("use_json_mesh_zones", False) else f"Auto {len(getattr(self.sim, 'zone_configs', []))}-Zone"
+        if self.adv_params.get("use_json_mesh_zones", False):
+            mesh_mode_tag = "JSON 3-Zone"
+        else:
+            mesh_mode_tag = f"Auto {len(getattr(self.sim, 'zone_configs', []))}-Zone"
         if abs(dx_max - dx_min) > 1e-6:
             dx_str = f"dx=[{dx_min:.4f}..{dx_max:.4f}], dy={self.sim.dy:.4f} mm"
         else:

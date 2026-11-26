@@ -188,10 +188,15 @@ class PPCWindow(QWidget):
         mean_active = float(np.mean(raw_ppc[active_mask])) if total_active > 0 else 0.0
 
         # Physical zone boundaries
-        x_up = getattr(sim, 'upstream_gap_mm', 0.8)
-        x_last = sim.grid_x_ends[-1] if hasattr(sim, 'grid_x_ends') and sim.grid_x_ends else sim.Lx * 0.5
-        ix_up = int(np.clip(sim._x_to_ix(x_up) if hasattr(sim, '_x_to_ix') else round(x_up / sim.dx), 0, sim.nx))
-        ix_last = int(np.clip(sim._x_to_ix(x_last) if hasattr(sim, '_x_to_ix') else round(x_last / sim.dx), 0, sim.nx))
+        x_up = float(getattr(sim, 'upstream_gap_mm', 0.8))
+        x_last = float(sim.grid_x_ends[-1]) if hasattr(sim, 'grid_x_ends') and sim.grid_x_ends else float(sim.Lx * 0.5)
+        x_coords_curr = getattr(sim, 'x_coords', getattr(sim, 'xpts', None))
+        if x_coords_curr is not None and len(x_coords_curr) == sim.nx:
+            ix_up = int(np.clip(np.searchsorted(x_coords_curr, x_up), 0, sim.nx))
+            ix_last = int(np.clip(np.searchsorted(x_coords_curr, x_last), 0, sim.nx))
+        else:
+            ix_up = int(np.clip(sim._x_to_ix(x_up) if hasattr(sim, '_x_to_ix') else round(x_up / sim.dx), 0, sim.nx))
+            ix_last = int(np.clip(sim._x_to_ix(x_last) if hasattr(sim, '_x_to_ix') else round(x_last / sim.dx), 0, sim.nx))
 
         def _zone_stats(cols):
             a = int(np.count_nonzero(active_mask[:, cols]))
@@ -260,12 +265,18 @@ class PPCWindow(QWidget):
         self.ax.set_ylim(0, sim.Ly)
 
         # Grid boundary overlay
-        if hasattr(sim, 'isBound') and np.any(sim.isBound):
+        if hasattr(sim, 'isBound') and sim.isBound is not None and np.any(sim.isBound):
             gy, gx = np.where(sim.isBound)
             x_pts = getattr(sim, 'x_coords', getattr(sim, 'xpts', None))
             y_pts = getattr(sim, 'y_coords', getattr(sim, 'ypts', None))
+            if (x_pts is None or len(x_pts) != sim.nx) and X is not None and X.shape[1] == sim.nx:
+                x_pts = X[0, :]
+            if (y_pts is None or len(y_pts) != sim.ny) and Y is not None and Y.shape[0] == sim.ny:
+                y_pts = Y[:, 0]
             if x_pts is not None and y_pts is not None:
-                self.ax.scatter(x_pts[gx], y_pts[gy], s=3, c='black', alpha=0.7)
+                valid_m = (gx < len(x_pts)) & (gy < len(y_pts))
+                if np.any(valid_m):
+                    self.ax.scatter(x_pts[gx[valid_m]], y_pts[gy[valid_m]], s=3, c='black', alpha=0.7)
             else:
                 self.ax.scatter(gx * sim.dx, gy * sim.dy, s=3, c='black', alpha=0.7)
 

@@ -399,7 +399,7 @@ class DomainMixin:
             x_last_grid_end = 2.0 * self.Lx / 3.0
 
         use_json_mesh_zones = bool(params.get('use_json_mesh_zones', False))
-        explicit_zone_configs = params.get('zone_configs', None)
+        explicit_zone_configs = params.get('zone_configs', None) if preserve_state else None
 
         if (
             not use_json_mesh_zones
@@ -427,14 +427,6 @@ class DomainMixin:
                 Lx=self.Lx,
                 dx0=self.dx,
                 max_rel_jump=max_jump_allowed,
-                n0=n0_n,
-                Te_up=Te_up,
-                V_plasma_offset=float(params.get("V_plasma_offset", 20.0)),
-                m_ion=self.m_ion,
-                q_ion=self.q_ion,
-                ratio_debye=float(ratio_debye) if ratio_debye is not None else 0.8,
-                entire_bulk_plasma=bool(entire_bulk_plasma),
-                is_axisymmetric=bool(self.is_axisymmetric),
             )
 
         self.zone_configs = zone_configs
@@ -511,11 +503,16 @@ class DomainMixin:
             self.entered_optics_step = 0.0
             self.first_grid_entry_iter = None
             self._last_neut_injected = 0
+            self._plume_remesh_deferred = False
             from ..mesh_utils import compute_plume_mean_dx
             base_p_dx = compute_plume_mean_dx(self, zone_configs)
             self.plume_history_iterations = [0]
             self.plume_history_dx = [base_p_dx]
             self.plume_dx_history = [(0, base_p_dx)]
+            self.zone_history_dx = {
+                str(z.get('name', 'Zone')): [float(self.dx * float(z.get('factor', 1.0)))]
+                for z in (zone_configs or [])
+            }
             far_z = next((z for z in zone_configs if z['name'] == 'Far_Plume'), None)
             self._current_plume_factor = float(far_z['factor']) if far_z else 4.0
             self._domain_built = True
@@ -915,21 +912,41 @@ class DomainMixin:
 
         far_zone = next((z for z in new_zones if z['name'] == 'Far_Plume'), None)
         new_far_factor = far_zone['factor'] if far_zone else 4.0
-        old_far_factor = getattr(self, '_current_plume_factor', None)
+        old_zones = getattr(self, 'zone_configs', None)
 
-        # Check if rebuild is necessary
-        factor_diff = abs(new_far_factor - old_far_factor) if old_far_factor is not None else 999.0
-        if not force and old_far_factor is not None and factor_diff < 0.15:
+        # Check if any zone factor across the domain changed by >= 0.15
+        max_factor_diff = 0.0
+        if isinstance(old_zones, list) and len(old_zones) == len(new_zones):
+            for oz, nz in zip(old_zones, new_zones):
+                max_factor_diff = max(
+                    max_factor_diff,
+                    abs(float(nz.get('factor', 1.0)) - float(oz.get('factor', 1.0)))
+                )
+        else:
+            old_far_factor = getattr(self, '_current_plume_factor', None)
+            max_factor_diff = abs(new_far_factor - old_far_factor) if old_far_factor is not None else 999.0
+
+        if not force and max_factor_diff < 0.15:
             if not getattr(self, '_plume_remesh_deferred', False):
                 current_dx = compute_plume_mean_dx(self)
                 if not hasattr(self, 'plume_history_iterations'):
                     self.plume_history_iterations = []
                     self.plume_history_dx = []
                     self.plume_dx_history = []
+                if not hasattr(self, 'zone_history_dx') or not isinstance(self.zone_history_dx, dict):
+                    self.zone_history_dx = {}
                 if not self.plume_history_iterations or self.plume_history_iterations[-1] != self.iteration:
                     self.plume_history_iterations.append(self.iteration)
                     self.plume_history_dx.append(current_dx)
                     self.plume_dx_history.append((self.iteration, current_dx))
+                    curr_zones = getattr(self, 'zone_configs', None) or new_zones
+                    n_prev = len(self.plume_history_iterations) - 1
+                    for z in (curr_zones or []):
+                        z_name = str(z.get('name', 'Zone'))
+                        z_dx = float(self.dx * float(z.get('factor', 1.0)))
+                        if z_name not in self.zone_history_dx:
+                            self.zone_history_dx[z_name] = [z_dx] * n_prev
+                        self.zone_history_dx[z_name].append(z_dx)
             return False
 
         old_x = self.x_coords.copy()
@@ -953,6 +970,9 @@ class DomainMixin:
 
         cfg["zone_configs"] = new_zones
         cfg["use_json_mesh_zones"] = False
+        cfg["Lx"] = self.Lx
+        cfg["Ly"] = self.Ly
+        cfg["truncate_downstream_plume"] = bool(getattr(self, "truncate_downstream_plume", False))
 
         # Rebuild domain geometry and matrices on the newly partitioned mesh
         self.build_domain(cfg, preserve_state=True)
@@ -1099,17 +1119,27 @@ class DomainMixin:
         self._has_stability_remeshed = True
         self._stability_remesh_iter = self.iteration
 
-        # Record plume cell size history
+        # Record plume & all-zone cell size history
         mean_plume_dx = compute_plume_mean_dx(self, new_zones)
         if not hasattr(self, 'plume_history_iterations'):
             self.plume_history_iterations = []
             self.plume_history_dx = []
             self.plume_dx_history = []
+        if not hasattr(self, 'zone_history_dx') or not isinstance(self.zone_history_dx, dict):
+            self.zone_history_dx = {}
+        n_prev = len(self.plume_history_iterations)
         self.plume_history_iterations.append(self.iteration)
         self.plume_history_dx.append(mean_plume_dx)
         self.plume_dx_history.append((self.iteration, mean_plume_dx))
+        for z in (new_zones or []):
+            z_name = str(z.get('name', 'Zone'))
+            z_dx = float(self.dx * float(z.get('factor', 1.0)))
+            if z_name not in self.zone_history_dx:
+                self.zone_history_dx[z_name] = [z_dx] * n_prev
+            self.zone_history_dx[z_name].append(z_dx)
 
-        print(f"[Plume Remesh] Iter {self.iteration}: Adapted plume mesh (far factor {new_far_factor:.1f}x, mean Δx {mean_plume_dx:.4f} mm, grid {self.ny}x{self.nx}).")
+        zone_str = ", ".join(f"{z['name']}:{z['factor']:.1f}x" for z in new_zones)
+        print(f"[Adaptive Remesh] Iter {self.iteration}: Adapted domain mesh ({zone_str}, plume mean Δx {mean_plume_dx:.4f} mm, grid {self.ny}x{self.nx}).")
         return True
 
     def execute_stability_remesh(self, params=None, remesh_cfg=None):

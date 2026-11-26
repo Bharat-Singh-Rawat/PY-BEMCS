@@ -240,9 +240,20 @@ class SweepMixin:
             "isBound": is_bound_snap.copy() if is_bound_snap is not None else None,
             "X": snap.get('X').copy() if snap.get('X') is not None else (getattr(sim, 'X', None).copy() if getattr(sim, 'X', None) is not None else None),
             "Y": snap.get('Y').copy() if snap.get('Y') is not None else (getattr(sim, 'Y', None).copy() if getattr(sim, 'Y', None) is not None else None),
+            "x_coords": snap.get('x_coords').copy() if snap.get('x_coords') is not None else (getattr(sim, 'x_coords', None).copy() if getattr(sim, 'x_coords', None) is not None else None),
+            "y_coords": snap.get('y_coords').copy() if snap.get('y_coords') is not None else (getattr(sim, 'y_coords', None).copy() if getattr(sim, 'y_coords', None) is not None else None),
             "V": snap.get('V').copy() if snap.get('V') is not None else (getattr(sim, 'V', None).copy() if getattr(sim, 'V', None) is not None else None),
             "damage_map": getattr(sim, 'damage_map', None).copy() if getattr(sim, 'damage_map', None) is not None else None,
             "eroded_depth": getattr(sim, 'eroded_depth', None).copy() if getattr(sim, 'eroded_depth', None) is not None else None,
+            "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
+            "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+            "current_cex_ppc_map": getattr(sim, 'current_cex_ppc_map', None).copy() if getattr(sim, 'current_cex_ppc_map', None) is not None else None,
+            "accum_cex_ppc_map": getattr(sim, 'accum_cex_ppc_map', None).copy() if getattr(sim, 'accum_cex_ppc_map', None) is not None else None,
+            "cell_vol_2d": getattr(sim, 'cell_vol_2d', None).copy() if getattr(sim, 'cell_vol_2d', None) is not None else None,
+            "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
+            "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
+            "n0_plasma": float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))),
+            "Te_up": float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0))),
             "energy_history_tot": list(getattr(sim, 'energy_history_tot', [])),
             "charge_history_q_net": list(getattr(sim, 'charge_history_q_net', [])),
             "energy_history_fe": list(getattr(sim, 'energy_history_fe', [])),
@@ -259,10 +270,7 @@ class SweepMixin:
             "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
             "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
             "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
-            "zone_configs": getattr(sim, 'zone_configs', None),
-            "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
-            "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
-            "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+            "zone_history_dx": {k: list(v) for k, v in getattr(sim, 'zone_history_dx', {}).items()},
             "zone_configs": getattr(sim, 'zone_configs', None),
         }
 
@@ -1632,31 +1640,85 @@ class SweepMixin:
         except Exception:
             return {}
 
-    def _sync_sim_domain_from_scenario_data(self, d_data, include_fields=False):
-        """Synchronize self.sim geometry and mesh metadata from a cached scenario domain dict."""
-        if not d_data or not hasattr(self, 'sim') or self.sim is None:
+    def _sync_sim_domain_from_scenario_data(self, d_data, include_fields=False, info=None):
+        """Synchronize self.sim geometry and mesh metadata from cached scenario domain dict and live info snapshot."""
+        if not hasattr(self, 'sim') or self.sim is None:
             return
-        if d_data.get("X") is not None and d_data.get("Y") is not None:
-            self.sim.X = d_data["X"]
-            self.sim.Y = d_data["Y"]
-            self.sim.nx = d_data["X"].shape[1]
-            self.sim.ny = d_data["X"].shape[0]
-        for k in ("dx", "dy", "upstream_gap_mm"):
-            if d_data.get(k) is not None:
-                setattr(self.sim, k, float(d_data[k]))
-        for k in ("Lx", "Ly"):
-            if d_data.get(k) is not None:
-                setattr(self.sim, k, float(d_data[k]))
-        for k in ("V", "isBound", "Tmap", "mask_grids", "T_grids", "x_coords", "y_coords", "zone_configs", "grid_x_starts", "grid_x_ends", "grids"):
-            if d_data.get(k) is not None:
-                setattr(self.sim, k, d_data[k])
-        if "truncate_downstream_plume" in d_data:
-            self.sim.truncate_downstream_plume = bool(d_data["truncate_downstream_plume"])
-        if include_fields:
-            if d_data.get("Vdc") is not None:
-                self.sim.Vdc = d_data["Vdc"]
-            elif d_data.get("V") is not None:
-                self.sim.Vdc = d_data["V"]
+        if d_data:
+            if d_data.get("X") is not None and d_data.get("Y") is not None:
+                self.sim.X = d_data["X"]
+                self.sim.Y = d_data["Y"]
+                self.sim.nx = d_data["X"].shape[1]
+                self.sim.ny = d_data["X"].shape[0]
+            for k in ("dx", "dy", "upstream_gap_mm"):
+                if d_data.get(k) is not None:
+                    setattr(self.sim, k, float(d_data[k]))
+            for k in ("Lx", "Ly"):
+                if d_data.get(k) is not None:
+                    setattr(self.sim, k, float(d_data[k]))
+            for k in ("V", "isBound", "Tmap", "mask_grids", "T_grids", "x_coords", "y_coords", "zone_configs", "grid_x_starts", "grid_x_ends", "grids"):
+                if d_data.get(k) is not None:
+                    setattr(self.sim, k, d_data[k])
+            if "truncate_downstream_plume" in d_data:
+                self.sim.truncate_downstream_plume = bool(d_data["truncate_downstream_plume"])
+            if include_fields:
+                if d_data.get("Vdc") is not None:
+                    self.sim.Vdc = d_data["Vdc"]
+                elif d_data.get("V") is not None:
+                    self.sim.Vdc = d_data["V"]
+
+        # Overlay live post-remesh mesh coordinates, dimensions, and arrays from info if available
+        if isinstance(info, dict) and info:
+            for k in ("dx", "dy", "upstream_gap_mm", "Lx", "Ly"):
+                if info.get(k) is not None:
+                    setattr(self.sim, k, float(info[k]))
+            if info.get("zone_configs"):
+                self.sim.zone_configs = info["zone_configs"]
+            if info.get("X") is not None and info.get("Y") is not None:
+                self.sim.X = info["X"]
+                self.sim.Y = info["Y"]
+                self.sim.ny, self.sim.nx = info["X"].shape
+            else:
+                if info.get("nx") is not None and int(info["nx"]) > 0:
+                    self.sim.nx = int(info["nx"])
+                if info.get("ny") is not None and int(info["ny"]) > 0:
+                    self.sim.ny = int(info["ny"])
+
+            # Sync or reconstruct non-uniform x_coords and y_coords matching post-remesh (ny, nx)
+            if info.get("x_coords") is not None and len(info["x_coords"]) == self.sim.nx:
+                self.sim.x_coords = info["x_coords"]
+            elif getattr(self.sim, 'X', None) is not None and self.sim.X.shape[1] == self.sim.nx:
+                self.sim.x_coords = self.sim.X[0, :].copy()
+            elif getattr(self.sim, 'zone_configs', None) and hasattr(self.sim, '_build_nonuniform_x_coords'):
+                try:
+                    xc, zb, zdx, zoff = self.sim._build_nonuniform_x_coords(self.sim.zone_configs, self.sim.Lx, self.sim.dx)
+                    if len(xc) == self.sim.nx:
+                        self.sim.x_coords = xc
+                        self.sim.zone_boundaries = zb
+                        self.sim.zone_dx = zdx
+                        self.sim.zone_offsets = zoff
+                except Exception:
+                    pass
+
+            if info.get("y_coords") is not None and len(info["y_coords"]) == self.sim.ny:
+                self.sim.y_coords = info["y_coords"]
+            elif getattr(self.sim, 'Y', None) is not None and self.sim.Y.shape[0] == self.sim.ny:
+                self.sim.y_coords = self.sim.Y[:, 0].copy()
+
+            if getattr(self.sim, 'x_coords', None) is not None and len(self.sim.x_coords) > 1:
+                self.sim.xpts = self.sim.x_coords
+                self.sim.x_pts = self.sim.x_coords
+                self.sim.dx_cells = np.diff(self.sim.x_coords)
+                self.sim.dx_min = float(np.min(self.sim.dx_cells))
+                self.sim.dx_max = float(np.max(self.sim.dx_cells))
+            if getattr(self.sim, 'y_coords', None) is not None and len(self.sim.y_coords) > 1:
+                self.sim.ypts = self.sim.y_coords
+                self.sim.y_pts = self.sim.y_coords
+                self.sim.dy_cells = np.diff(self.sim.y_coords)
+
+            for k in ("V", "isBound", "Tmap", "mask_grids", "T_grids", "grids", "cell_vol_2d"):
+                if info.get(k) is not None:
+                    setattr(self.sim, k, info[k])
 
     def _update_toggle_btn_for_scenario(self, scenario_idx):
         """Update btn_toggle text ('PAUSE BEAM' or 'RESUME BEAM') based on selected scenario state."""
@@ -1849,7 +1911,11 @@ class SweepMixin:
         elif bound_xy is not None and hasattr(self, 'ax_live'):
             self.scat_bound = self.ax_live.scatter(bound_xy[:, 0], bound_xy[:, 1], s=4, c="k", alpha=0.8, zorder=2)
 
-        if getattr(self, '_current_rendered_scenario_grid_idx', None) != scenario_idx:
+        live_mesh_shape = getattr(live_X, "shape", None)
+        if (
+            getattr(self, '_current_rendered_scenario_grid_idx', None) != scenario_idx
+            or (live_mesh_shape is not None and getattr(self, '_current_rendered_scenario_mesh_shape', None) != live_mesh_shape)
+        ):
             X = info.get("X")
             Y = info.get("Y")
             V = info.get("V")
@@ -1906,6 +1972,7 @@ class SweepMixin:
                 if hasattr(self, 'scat_elec') and self.scat_elec is not None:
                     self.scat_elec.set_zorder(5)
                 self._current_rendered_scenario_grid_idx = scenario_idx
+                self._current_rendered_scenario_mesh_shape = getattr(X, "shape", None)
                 self._bg_live = None
 
         if bound_xy is not None and hasattr(self, 'scat_dmg_bound') and self.scat_dmg_bound is not None:
@@ -2044,7 +2111,7 @@ class SweepMixin:
                 self.ax_ebs.set_ylim(-100, 100)
 
         if d_data and not getattr(self, 'sim_isRunning', False):
-            self._sync_sim_domain_from_scenario_data(d_data, include_fields=True)
+            self._sync_sim_domain_from_scenario_data(d_data, include_fields=True, info=info)
             if info.get("Lx") is not None:
                 self.sim.Lx = float(info["Lx"])
             if info.get("Ly") is not None:
@@ -2356,9 +2423,9 @@ class SweepMixin:
             return
 
         try:
-            # Sync domain geometry and mesh grids from cached scenario data to ensure dimensions match
+            # Sync domain geometry and live post-remesh mesh grids from cached scenario data & info snapshot
             d_data = self._get_scenario_domain_data(scenario_idx)
-            self._sync_sim_domain_from_scenario_data(d_data)
+            self._sync_sim_domain_from_scenario_data(d_data, info=info)
 
             cur_ny = getattr(self.sim, 'ny', 1) or 1
             cur_nx = getattr(self.sim, 'nx', 1) or 1
@@ -2382,7 +2449,7 @@ class SweepMixin:
             else:
                 self.sim.accum_ppc_map = self.sim.current_ppc_map.astype(float)
 
-            # Guarantee that X and Y match (cur_ny, cur_nx)
+            # Guarantee that X, Y, x_coords, and y_coords match (cur_ny, cur_nx)
             if (
                 not hasattr(self.sim, 'X')
                 or self.sim.X is None
@@ -2390,8 +2457,14 @@ class SweepMixin:
                 or self.sim.Y is None
                 or self.sim.X.shape != (cur_ny, cur_nx)
             ):
-                x_c = np.linspace(0, self.sim.Lx, cur_nx)
-                y_c = np.linspace(0, self.sim.Ly, cur_ny)
+                x_c = getattr(self.sim, 'x_coords', None)
+                if x_c is None or len(x_c) != cur_nx:
+                    x_c = np.linspace(0, self.sim.Lx, cur_nx)
+                y_c = getattr(self.sim, 'y_coords', None)
+                if y_c is None or len(y_c) != cur_ny:
+                    y_c = np.linspace(0, self.sim.Ly, cur_ny)
+                self.sim.x_coords = x_c
+                self.sim.y_coords = y_c
                 self.sim.X, self.sim.Y = np.meshgrid(x_c, y_c)
 
             self.sim.ppc_steps_count = int(ppc_steps) if ppc_steps is not None else 0
@@ -2468,7 +2541,7 @@ class SweepMixin:
             if d_data is None:
                 d_data = self._get_scenario_domain_data(scenario_idx)
 
-            self._sync_sim_domain_from_scenario_data(d_data)
+            self._sync_sim_domain_from_scenario_data(d_data, info=info)
 
             # Sync current iteration for the selected scenario
             scen_iter = int(info.get("iter", info.get("steady_iterations", 0)))
@@ -2496,14 +2569,18 @@ class SweepMixin:
             plume_it = info.get("plume_history_iterations")
             plume_dx = info.get("plume_history_dx")
             plume_tuple = info.get("plume_dx_history")
+            zone_dx_hist = info.get("zone_history_dx")
             if plume_it is not None and len(plume_it) > 0:
                 self.sim.plume_history_iterations = list(plume_it)
                 self.sim.plume_history_dx = list(plume_dx) if plume_dx is not None else []
                 self.sim.plume_dx_history = list(plume_tuple) if plume_tuple is not None else []
+                if isinstance(zone_dx_hist, dict):
+                    self.sim.zone_history_dx = {k: list(v) for k, v in zone_dx_hist.items()}
             elif not getattr(self, 'is_sweep_active', False) or getattr(self, 'sweep_current_idx', 0) + 1 != scenario_idx:
                 self.sim.plume_history_iterations = []
                 self.sim.plume_history_dx = []
                 self.sim.plume_dx_history = []
+                self.sim.zone_history_dx = {}
 
             param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
             param_val = info.get("parameter_value", "")
@@ -2563,60 +2640,33 @@ class SweepMixin:
             if d_data is None:
                 d_data = self._get_scenario_domain_data(scenario_idx)
 
-            self._sync_sim_domain_from_scenario_data(d_data)
+            self._sync_sim_domain_from_scenario_data(d_data, info=info)
 
-            cur_ny = getattr(self.sim, 'ny', 1) or 1
-            cur_nx = getattr(self.sim, 'nx', 1) or 1
+            # Determine if this is the live running sequential scenario on self.sim
+            is_parallel = (
+                hasattr(self, 'parallel_sweep_worker')
+                and self.parallel_sweep_worker is not None
+                and self.parallel_sweep_worker.isRunning()
+            )
+            is_live_seq_scenario = (
+                not is_parallel
+                and getattr(self, 'is_sweep_active', False)
+                and (getattr(self, 'sweep_current_idx', 0) + 1 == scenario_idx)
+            )
 
-            # Sync particles from scenario snapshot
-            prim_xy = info.get("prim_xy")
-            cex_xy = info.get("cex_xy")
-            elec_xy = info.get("elec_xy")
-
-            n_prim = len(prim_xy) if prim_xy is not None else 0
-            n_cex = len(cex_xy) if cex_xy is not None else 0
-            n_tot = n_prim + n_cex
-
-            if n_tot > 0:
-                all_px = np.empty(n_tot, dtype=np.float32)
-                all_py = np.empty(n_tot, dtype=np.float32)
-                all_cex = np.zeros(n_tot, dtype=bool)
-                if n_prim > 0:
-                    all_px[:n_prim] = prim_xy[:, 0]
-                    all_py[:n_prim] = prim_xy[:, 1]
-                if n_cex > 0:
-                    all_px[n_prim:] = cex_xy[:, 0]
-                    all_py[n_prim:] = cex_xy[:, 1]
-                    all_cex[n_prim:] = True
-                self.sim.p_x = all_px
-                self.sim.p_y = all_py
-                self.sim.p_isCEX = all_cex
-                self.sim.num_p = n_tot
-            else:
-                self.sim.num_p = 0
-                self.sim.p_x = np.empty(0, dtype=np.float32)
-                self.sim.p_y = np.empty(0, dtype=np.float32)
-                self.sim.p_isCEX = np.empty(0, dtype=bool)
-
-            n_elec = len(elec_xy) if elec_xy is not None else 0
-            if n_elec > 0:
-                self.sim.e_x = elec_xy[:, 0]
-                self.sim.e_y = elec_xy[:, 1]
-                self.sim.num_e = n_elec
-            else:
-                self.sim.num_e = 0
-                self.sim.e_x = np.empty(0, dtype=np.float32)
-                self.sim.e_y = np.empty(0, dtype=np.float32)
-
-            self.sim.macro_weight = float(info.get("macro_weight", getattr(self.sim, 'macro_weight', 1e8)))
-            self.sim.iteration = int(info.get("iter", 0))
-
-            # Sync PPC spatial maps and plasma physics parameters
-            self.sim.current_ppc_map = info.get("current_ppc_map")
-            self.sim.accum_ppc_map = info.get("accum_ppc_map")
-            self.sim.current_cex_ppc_map = info.get("current_cex_ppc_map")
-            self.sim.accum_cex_ppc_map = info.get("accum_cex_ppc_map")
-            self.sim.ppc_steps_count = int(info.get("ppc_steps_count", 0))
+            # Sync PPC spatial maps first so cur_ny, cur_nx match the true post-remesh grid
+            if info.get("current_ppc_map") is not None:
+                self.sim.current_ppc_map = info["current_ppc_map"]
+                if hasattr(self.sim.current_ppc_map, 'shape') and len(self.sim.current_ppc_map.shape) == 2:
+                    self.sim.ny, self.sim.nx = self.sim.current_ppc_map.shape
+            if info.get("accum_ppc_map") is not None:
+                self.sim.accum_ppc_map = info["accum_ppc_map"]
+            if info.get("current_cex_ppc_map") is not None:
+                self.sim.current_cex_ppc_map = info["current_cex_ppc_map"]
+            if info.get("accum_cex_ppc_map") is not None:
+                self.sim.accum_cex_ppc_map = info["accum_cex_ppc_map"]
+            if info.get("ppc_steps_count") is not None:
+                self.sim.ppc_steps_count = int(info["ppc_steps_count"])
             if info.get("cell_vol_2d") is not None:
                 self.sim.cell_vol_2d = info["cell_vol_2d"]
             if info.get("n0_plasma") is not None:
@@ -2626,7 +2676,55 @@ class SweepMixin:
             if info.get("V") is not None:
                 self.sim.V = info["V"]
 
-            # Guarantee that X and Y match (cur_ny, cur_nx)
+            cur_ny = getattr(self.sim, 'ny', 1) or 1
+            cur_nx = getattr(self.sim, 'nx', 1) or 1
+
+            # Only overwrite p_x / p_y / num_p from display subsamples when NOT running live sequential on self.sim!
+            # Overwriting self.sim.p_x during a live sequential sweep destroys 99% of active simulation particles!
+            if not is_live_seq_scenario:
+                prim_xy = info.get("prim_xy")
+                cex_xy = info.get("cex_xy")
+                elec_xy = info.get("elec_xy")
+
+                n_prim = len(prim_xy) if prim_xy is not None else 0
+                n_cex = len(cex_xy) if cex_xy is not None else 0
+                n_tot = n_prim + n_cex
+
+                if n_tot > 0:
+                    all_px = np.empty(n_tot, dtype=np.float32)
+                    all_py = np.empty(n_tot, dtype=np.float32)
+                    all_cex = np.zeros(n_tot, dtype=bool)
+                    if n_prim > 0:
+                        all_px[:n_prim] = prim_xy[:, 0]
+                        all_py[:n_prim] = prim_xy[:, 1]
+                    if n_cex > 0:
+                        all_px[n_prim:] = cex_xy[:, 0]
+                        all_py[n_prim:] = cex_xy[:, 1]
+                        all_cex[n_prim:] = True
+                    self.sim.p_x = all_px
+                    self.sim.p_y = all_py
+                    self.sim.p_isCEX = all_cex
+                    self.sim.num_p = n_tot
+                else:
+                    self.sim.num_p = 0
+                    self.sim.p_x = np.empty(0, dtype=np.float32)
+                    self.sim.p_y = np.empty(0, dtype=np.float32)
+                    self.sim.p_isCEX = np.empty(0, dtype=bool)
+
+                n_elec = len(elec_xy) if elec_xy is not None else 0
+                if n_elec > 0:
+                    self.sim.e_x = elec_xy[:, 0]
+                    self.sim.e_y = elec_xy[:, 1]
+                    self.sim.num_e = n_elec
+                else:
+                    self.sim.num_e = 0
+                    self.sim.e_x = np.empty(0, dtype=np.float32)
+                    self.sim.e_y = np.empty(0, dtype=np.float32)
+
+                self.sim.macro_weight = float(info.get("macro_weight", getattr(self.sim, 'macro_weight', 1e8)))
+                self.sim.iteration = int(info.get("iter", 0))
+
+            # Guarantee that X, Y, x_coords, and y_coords match (cur_ny, cur_nx)
             if (
                 not hasattr(self.sim, 'X')
                 or self.sim.X is None
@@ -2634,8 +2732,14 @@ class SweepMixin:
                 or self.sim.Y is None
                 or self.sim.X.shape != (cur_ny, cur_nx)
             ):
-                x_c = np.linspace(0, self.sim.Lx, cur_nx)
-                y_c = np.linspace(0, self.sim.Ly, cur_ny)
+                x_c = getattr(self.sim, 'x_coords', None)
+                if x_c is None or len(x_c) != cur_nx:
+                    x_c = np.linspace(0, self.sim.Lx, cur_nx)
+                y_c = getattr(self.sim, 'y_coords', None)
+                if y_c is None or len(y_c) != cur_ny:
+                    y_c = np.linspace(0, self.sim.Ly, cur_ny)
+                self.sim.x_coords = x_c
+                self.sim.y_coords = y_c
                 self.sim.X, self.sim.Y = np.meshgrid(x_c, y_c)
 
             param_id = getattr(self, 'sweep_config', {}).get("param_id", "param")
@@ -2748,7 +2852,7 @@ class SweepMixin:
         if not getattr(self, 'field_window', None) or not self.field_window.isVisible():
             return
         try:
-            self._sync_sim_domain_from_scenario_data(d_data, include_fields=True)
+            self._sync_sim_domain_from_scenario_data(d_data, include_fields=True, info=info)
 
             # If dynamic potential is present in info, use it; otherwise fallback to domain cache V
             if info.get("V") is not None:
@@ -3250,6 +3354,8 @@ class SweepMixin:
             "isBound": getattr(sim, 'isBound', None).copy() if getattr(sim, 'isBound', None) is not None else None,
             "X": getattr(sim, 'X', None).copy() if getattr(sim, 'X', None) is not None else None,
             "Y": getattr(sim, 'Y', None).copy() if getattr(sim, 'Y', None) is not None else None,
+            "x_coords": getattr(sim, 'x_coords', None).copy() if getattr(sim, 'x_coords', None) is not None else None,
+            "y_coords": getattr(sim, 'y_coords', None).copy() if getattr(sim, 'y_coords', None) is not None else None,
             "V": getattr(sim, 'V', None).copy() if getattr(sim, 'V', None) is not None else None,
             "damage_map": getattr(sim, 'damage_map', None).copy() if getattr(sim, 'damage_map', None) is not None else None,
             "eroded_depth": getattr(sim, 'eroded_depth', None).copy() if getattr(sim, 'eroded_depth', None) is not None else None,
@@ -3272,6 +3378,7 @@ class SweepMixin:
             "plume_history_iterations": list(getattr(sim, 'plume_history_iterations', [])),
             "plume_history_dx": list(getattr(sim, 'plume_history_dx', [])),
             "plume_dx_history": list(getattr(sim, 'plume_dx_history', [])),
+            "zone_history_dx": {k: list(v) for k, v in getattr(sim, 'zone_history_dx', {}).items()},
             "zone_configs": getattr(sim, 'zone_configs', None),
             "Lx": float(getattr(sim, 'Lx', 3.0)),
             "Ly": float(getattr(sim, 'Ly', 3.0)),
@@ -3281,6 +3388,11 @@ class SweepMixin:
             "dy": float(getattr(sim, 'dy', 0.05)),
             "current_ppc_map": getattr(sim, 'current_ppc_map', None).copy() if getattr(sim, 'current_ppc_map', None) is not None else None,
             "accum_ppc_map": getattr(sim, 'accum_ppc_map', None).copy() if getattr(sim, 'accum_ppc_map', None) is not None else None,
+            "current_cex_ppc_map": getattr(sim, 'current_cex_ppc_map', None).copy() if getattr(sim, 'current_cex_ppc_map', None) is not None else None,
+            "accum_cex_ppc_map": getattr(sim, 'accum_cex_ppc_map', None).copy() if getattr(sim, 'accum_cex_ppc_map', None) is not None else None,
+            "cell_vol_2d": getattr(sim, 'cell_vol_2d', None).copy() if getattr(sim, 'cell_vol_2d', None) is not None else None,
+            "n0_plasma": float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))),
+            "Te_up": float(getattr(sim, 'Te_up', getattr(sim, 'Te', 3.0))),
             "ppc_steps_count": int(getattr(sim, 'ppc_steps_count', 0)),
             "macro_weight": float(getattr(sim, 'macro_weight', 1e8)),
             "perf_history": list(sim._perf_monitor.history) if getattr(sim, '_perf_monitor', None) and sim._perf_monitor.history else [],

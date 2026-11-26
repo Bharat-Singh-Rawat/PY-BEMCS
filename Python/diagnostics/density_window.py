@@ -187,15 +187,24 @@ class DensityWindow(QWidget):
             n_steps = max(1, int(sim.ppc_steps_count))
             cvol = getattr(sim, 'cell_vol_2d', None)
             if cvol is None or cvol.shape != cur_shape:
-                dx_m = float(getattr(sim, 'dx', 0.05)) * 1e-3
+                x_c = getattr(sim, 'x_coords', None)
+                if x_c is not None and len(x_c) == sim.nx and sim.nx >= 2:
+                    dx_cells_m = np.diff(x_c) * 1e-3
+                    hx_m = np.zeros(sim.nx, dtype=np.float64)
+                    hx_m[0] = 0.5 * dx_cells_m[0]
+                    hx_m[1:-1] = 0.5 * (dx_cells_m[:-1] + dx_cells_m[1:])
+                    hx_m[-1] = 0.5 * dx_cells_m[-1]
+                else:
+                    dx_m = float(getattr(sim, 'dx', 0.05)) * 1e-3
+                    hx_m = np.full(sim.nx, dx_m, dtype=np.float64)
                 dy_m = float(getattr(sim, 'dy', 0.05)) * 1e-3
                 if getattr(sim, 'is_axisymmetric', False):
-                    r_coords_m = ((np.arange(sim.ny) + 0.5) * dy_m if not hasattr(sim, 'y_coords')
+                    r_coords_m = ((np.arange(sim.ny) + 0.5) * dy_m if not hasattr(sim, 'y_coords') or len(sim.y_coords) != sim.ny
                                   else sim.y_coords * 1e-3)
                     V_rad = 2.0 * np.pi * np.maximum(r_coords_m, dy_m * 0.25) * dy_m
-                    cvol = np.outer(V_rad, np.full(sim.nx, dx_m))
+                    cvol = np.outer(V_rad, hx_m)
                 else:
-                    cvol = np.full(cur_shape, dx_m * dy_m * 1e-3)
+                    cvol = np.tile(hx_m * dy_m * 1e-3, (sim.ny, 1))
 
             counts = None
             if sp_k in ('cex', 'cex_ions'):

@@ -296,15 +296,16 @@ class AdvancedSettingsDialog(QDialog):
         remesh_enabled = bool(remesh_cfg.get("enabled", current_params.get("adaptive_remesh_enabled", True)))
         interval_iters = int(remesh_cfg.get("interval_iterations", current_params.get("remesh_interval_iterations", 150)))
 
-        grp_remesh = QGroupBox("Adaptive Plume Remeshing")
+        grp_remesh = QGroupBox("Adaptive Plume & Domain Remeshing")
         layout_remesh = QVBoxLayout(grp_remesh)
 
-        self.chk_adaptive_remesh = QCheckBox("Enable Adaptive Plume Remeshing")
+        self.chk_adaptive_remesh = QCheckBox("Enable Adaptive Plume & Domain Remeshing")
         self.chk_adaptive_remesh.setChecked(remesh_enabled)
         self.chk_adaptive_remesh.setToolTip(
-            "When checked: PY-BEMCS automatically re-evaluates and adapts the plume mesh cell size\n"
-            "every N iterations during the simulation based on local plume ion density and Debye length.\n"
-            "Upstream presheath and inter-grid optics remain strictly at baseline resolution."
+            "When checked: PY-BEMCS automatically re-evaluates and calibrates the mesh cell size\n"
+            "across all domain sections (Presheath, Grid Barrels, Inter-Grid Gaps, Near Plume, and Far Plume)\n"
+            "every N iterations during the simulation based on live particle density, local Debye length,\n"
+            "and geometric/E-field limits. Rebuilding the domain resets back to the initial uncalibrated mesh."
         )
         layout_remesh.addWidget(self.chk_adaptive_remesh)
 
@@ -316,7 +317,7 @@ class AdvancedSettingsDialog(QDialog):
         self.spin_remesh_interval.setRange(10, 50000)
         self.spin_remesh_interval.setSingleStep(10)
         self.spin_remesh_interval.setValue(interval_iters)
-        self.spin_remesh_interval.setToolTip("Number of simulation iterations every which the plume mesh is automatically re-evaluated and adapted (default: 150).")
+        self.spin_remesh_interval.setToolTip("Number of simulation iterations every which the domain & plume mesh is automatically re-evaluated and adapted (default: 150).")
         form_remesh.addRow("Remesh Interval (iterations):", self.spin_remesh_interval)
 
         layout_remesh.addWidget(self.remesh_sub_widget)

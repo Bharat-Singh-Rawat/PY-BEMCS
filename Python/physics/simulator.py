@@ -251,6 +251,7 @@ class DigitalTwinSimulator(
         self.plume_history_iterations = []
         self.plume_history_dx = []
         self.plume_dx_history = []
+        self.zone_history_dx = {}
         self._last_remesh_plume_factor = None
         self._current_plume_factor = 4.0
         self._has_stability_remeshed = False

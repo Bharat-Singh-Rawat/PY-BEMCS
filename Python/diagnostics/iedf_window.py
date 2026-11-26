@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox
 
 class IEDFWindow(QWidget):
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__()
+        self.parent_app = parent
         self.setWindowTitle("Energy Distribution Function (IEDF & EEDF)")
         self.setGeometry(100, 100, 600, 450)
 
