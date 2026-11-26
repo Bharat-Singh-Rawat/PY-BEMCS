@@ -1031,7 +1031,14 @@ class MeshWindow(QDialog):
                 if xs > 0.0:
                     self.ax.axvline(x=xs, color="#e11d48", linestyle="--", linewidth=1.0, alpha=0.75, zorder=5)
                 xc = 0.5 * (xs + xe)
-                short_name = name.replace("Grid_", "G").replace("_barrel", "").replace("Gap_", "Gap ").replace("_Plume", " Plm")
+                short_name = (
+                    name.replace("Grid_", "G")
+                    .replace("_barrel", "")
+                    .replace("Gap_", "Gap ")
+                    .replace("_Plume", " Plm")
+                    .replace("Far_Presheath", "Far Pre")
+                    .replace("Sheath_Meniscus", "Meniscus")
+                )
                 tag = f"{short_name}\n({factor:.1f}×)"
                 self.ax.text(
                     xc, y_top, tag, color="#0f172a", fontsize=7, ha="center", va="top",

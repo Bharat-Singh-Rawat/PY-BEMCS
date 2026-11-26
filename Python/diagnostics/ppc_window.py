@@ -281,7 +281,14 @@ class PPCWindow(QWidget):
                     if x_s > 0:
                         self.ax.axvline(x=x_s, color='cyan', linestyle=':', linewidth=0.9, alpha=0.7)
                     xc = (x_s + x_e) * 0.5
-                    short_name = name.replace("Grid_", "G").replace("_barrel", "").replace("Gap_", "Gap ").replace("_Plume", " Plm")
+                    short_name = (
+                        name.replace("Grid_", "G")
+                        .replace("_barrel", "")
+                        .replace("Gap_", "Gap ")
+                        .replace("_Plume", " Plm")
+                        .replace("Far_Presheath", "Far Pre")
+                        .replace("Sheath_Meniscus", "Meniscus")
+                    )
                     self.ax.text(xc, y_pos, short_name, color='white', fontsize=7, ha='center',
                                  bbox=dict(boxstyle='round,pad=0.15', facecolor='black', alpha=0.6))
             else:

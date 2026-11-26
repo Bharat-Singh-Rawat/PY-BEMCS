@@ -427,6 +427,14 @@ class DomainMixin:
                 Lx=self.Lx,
                 dx0=self.dx,
                 max_rel_jump=max_jump_allowed,
+                n0=n0_n,
+                Te_up=Te_up,
+                V_plasma_offset=float(params.get("V_plasma_offset", 20.0)),
+                m_ion=self.m_ion,
+                q_ion=self.q_ion,
+                ratio_debye=float(ratio_debye) if ratio_debye is not None else 0.8,
+                entire_bulk_plasma=bool(entire_bulk_plasma),
+                is_axisymmetric=bool(self.is_axisymmetric),
             )
 
         self.zone_configs = zone_configs

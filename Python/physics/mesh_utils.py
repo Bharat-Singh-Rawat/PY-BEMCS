@@ -301,22 +301,30 @@ def evaluate_mesh_efield_variation(
     return max_jump_x, max_jump_y, is_compliant
 
 
-def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump: float = 0.10):
+def estimate_automatic_mesh_zones(
+    grids,
+    upstream_gap_mm,
+    Lx,
+    dx0,
+    max_rel_jump: float = 0.10,
+    n0: float = 1e17,
+    Te_up: float = 3.0,
+    V_plasma_offset: float = 20.0,
+    m_ion: float = 131.293 * 1.6605e-27,
+    q_ion: float = 1.602e-19,
+    ratio_debye: float = 0.8,
+    entire_bulk_plasma: bool = False,
+    is_axisymmetric: bool = False,
+):
     """
-    Automatically partition the domain into physical axial zones and estimate
-    physically-grounded coarsening factors based on Debye length, aperture
-    thickness, inter-grid gaps, plume expansion, and electric field gradient limits.
-
-    Zones created:
-      1. Presheath: [0, upstream_gap], factor = 1.0 (dense plasma, resolves Debye length)
-      2. For each grid i:
-         - Grid barrel: [x_i, x_i + t_i], factor = min(1.5, max(0.8, round((t_i / 15.0) / dx0, 1)))
-           (ensures >= 15 cells across thickness for aperture resolution)
-         - Inter-grid gap: [x_i + t_i, x_{i+1}], factor = min(1.0, max(0.5, round((gap_i / 20.0) / dx0, 1)))
-           (ensures steep acceleration/deceleration electric field jumps <= 10%)
-      3. Plume:
-         - Near Plume: [x_exit, x_exit + near_len], factor = 2.0 (neutralization & transition)
-         - Far Plume:  [x_exit + near_len, Lx], factor = 4.0 (dilute neutralized beam)
+    Automatically partition the domain into physical axial zones and pre-size
+    physically-grounded coarsening factors across all sections (Option B):
+      - Far Presheath & Sheath/Meniscus (or unified Presheath if gap is short)
+      - Grid Barrels (resolving aperture thickness >= 12 cells without sub-dx0 over-refinement)
+      - Inter-Grid Acceleration/Deceleration Gaps (local continuity Debye length & E-field jump bound,
+        preventing 0.5x hyper-refinement that triggers unnecessary Boris substepping)
+      - Near Plume & Far Plume (pre-sized from 1D continuity ion velocity/density drop and local
+        Debye length expansion, bounded by aperture geometry)
     """
     if not grids:
         return [
@@ -325,18 +333,58 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
             {'name': 'Plume',     'x_start': min(2.0 * Lx / 3.0, Lx), 'x_end': Lx, 'factor': 4.0},
         ]
 
+    eps0 = 8.854e-12
+    q_e = 1.602e-19
+    n0_safe = max(float(n0), 1e10)
+    Te_safe = max(float(Te_up), 0.1)
+    m_i_safe = max(float(m_ion), 1e-30)
+    q_i_safe = max(float(q_ion), 1e-22)
+    dx0_safe = max(float(dx0), 1e-6)
+    r_deb = float(ratio_debye) if (ratio_debye is not None and float(ratio_debye) > 0.0) else 0.8
+    bohm_fac = 1.0 if entire_bulk_plasma else 0.61
+
+    # Upstream Debye length [mm] and Bohm velocity [m/s]
+    debye_bohm_mm = math.sqrt(eps0 * Te_safe / (q_e * n0_safe * bohm_fac)) * 1e3
+    debye_unscreened_mm = math.sqrt(eps0 * Te_safe / (q_e * n0_safe)) * 1e3
+    v_bohm = math.sqrt(q_i_safe * Te_safe / m_i_safe)
+    v_Screen0 = float(grids[0].get('V', 1000.0))
+    V_plasma = v_Screen0 + float(V_plasma_offset)
+
     zones = []
     x_curr = 0.0
     up_gap = min(float(upstream_gap_mm), Lx)
 
-    # 1. Presheath Zone
+    # 1. Presheath Zone(s): Split into Far_Presheath and Sheath_Meniscus if upstream gap is long enough
     if up_gap > 1e-5:
-        zones.append({
-            'name': 'Presheath',
-            'x_start': round(x_curr, 5),
-            'x_end': round(up_gap, 5),
-            'factor': 1.0
-        })
+        r_screen = float(grids[0].get('r', 0.8))
+        meniscus_len = min(0.55 * up_gap, max(6.0 * debye_bohm_mm, 0.35 * r_screen, 6.0 * dx0_safe))
+        far_pre_len = up_gap - meniscus_len
+
+        # Only split if Far_Presheath has at least 8 cells and allows meaningful coarsening (>= 1.2x)
+        dx_far_pre_max = min(max(r_deb, 1.0) * debye_unscreened_mm, far_pre_len / 8.0) if far_pre_len > 0 else dx0_safe
+        f_far_pre = round(min(1.5, max(1.0, dx_far_pre_max / dx0_safe)), 1)
+
+        if far_pre_len >= 8.0 * dx0_safe and f_far_pre >= 1.2:
+            x_split = round(far_pre_len, 5)
+            zones.append({
+                'name': 'Far_Presheath',
+                'x_start': round(x_curr, 5),
+                'x_end': x_split,
+                'factor': f_far_pre
+            })
+            zones.append({
+                'name': 'Sheath_Meniscus',
+                'x_start': x_split,
+                'x_end': round(up_gap, 5),
+                'factor': 1.0
+            })
+        else:
+            zones.append({
+                'name': 'Presheath',
+                'x_start': round(x_curr, 5),
+                'x_end': round(up_gap, 5),
+                'factor': 1.0
+            })
         x_curr = up_gap
 
     # 2. Grid Barrels and Inter-Grid Gaps
@@ -345,11 +393,13 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
         t_grid = float(g.get('t', 0.5))
         gap = float(g.get('gap', 1.0))
 
-        # Grid barrel
+        # Grid barrel: decoupled SubgridManager resolves 5-10 um surface normals/erosion,
+        # so Eulerian grid needs >= 10-12 cells across thickness without sub-1.0x over-refinement
+        # unless the grid is very thin compared to dx0.
         if x_curr < Lx:
             x_next = min(x_curr + t_grid, Lx)
             if x_next - x_curr > 1e-5:
-                f_t = min(1.5, max(0.8, round((t_grid / 15.0) / max(dx0, 1e-6), 1)))
+                f_t = min(1.5, max(0.8, round((t_grid / 12.0) / dx0_safe, 1)))
                 zones.append({
                     'name': f'Grid_{i+1}_barrel',
                     'x_start': round(x_curr, 5),
@@ -358,12 +408,26 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
                 })
                 x_curr = x_next
 
-        # Internal inter-grid gap (steepest electric field: keep cell size bounded to <= 10% jump)
+        # Internal inter-grid gap: size via local continuity ion density & E-field jump limit
         if i < num_grids - 1 and x_curr < Lx:
             x_next = min(x_curr + gap, Lx)
             if x_next - x_curr > 1e-5:
-                # Inter-grid acceleration gap must not be coarsened beyond 1.0 to preserve <= 10% jump
-                f_gap = min(1.0, max(0.5, round((gap / 20.0) / max(dx0, 1e-6), 1)))
+                v_g1 = float(g.get('V', 1000.0))
+                v_g2 = float(grids[i + 1].get('V', -200.0))
+                v_mid = 0.5 * (v_g1 + v_g2)
+                dV_mid = max(Te_safe, V_plasma - v_mid)
+                v_ion_gap = math.sqrt(v_bohm**2 + 2.0 * q_i_safe * dV_mid / m_i_safe)
+                n_gap = max(1e12, bohm_fac * n0_safe * (v_bohm / max(v_ion_gap, v_bohm)))
+                lambda_D_gap_mm = math.sqrt(eps0 * Te_safe / (q_e * n_gap)) * 1e3
+
+                # Bound gap cell size by local Debye length, E-field relative jump limit, and >= 16 cells across gap
+                dx_gap_max = min(
+                    r_deb * lambda_D_gap_mm,
+                    float(max_rel_jump) * gap,
+                    gap / 16.0
+                )
+                # Never hyper-refine below 0.8x (prevents 0.5x Boris substep explosion); allow up to 1.2x at ultra-high n0
+                f_gap = min(1.2, max(0.8, round(dx_gap_max / dx0_safe, 1)))
                 zones.append({
                     'name': f'Gap_{i+1}_{i+2}',
                     'x_start': round(x_curr, 5),
@@ -372,10 +436,34 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
                 })
                 x_curr = x_next
 
-    # 3. Plume Zones (Near Plume and Far Plume)
+    # 3. Plume Zones (Near Plume and Far Plume): Analytical continuity & local Debye pre-sizing
     plume_remaining = Lx - x_curr
     if plume_remaining > 1e-5:
+        r_screen = max(float(grids[0].get('r', 0.8)), 0.1)
+        r_last = max(float(grids[-1].get('r', r_screen)), 0.1)
+        v_last = float(grids[-1].get('V', -180.0))
+        dV_exit = max(50.0, V_plasma - max(v_last, -500.0))
+        v_exit = math.sqrt(v_bohm**2 + 2.0 * q_i_safe * dV_exit / m_i_safe)
+
+        # Geometric expansion factor in plume (conservative core radius ~ max(r_last, 0.85 * r_screen))
+        r_core_est = max(r_last, 0.85 * r_screen)
+        area_ratio = (r_screen / r_core_est)**2 if is_axisymmetric else (r_screen / r_core_est)
+        T_opt_est = 0.85
+
+        # Expected steady-state beam core ion density [m^-3] and local plume Debye length [mm]
+        n_plume_est = max(1e12, bohm_fac * n0_safe * T_opt_est * (v_bohm / max(v_exit, v_bohm)) * area_ratio)
+        lambda_D_plume_mm = math.sqrt(eps0 * Te_safe / (q_e * n_plume_est)) * 1e3
+
         near_plume_len = min(1.0, 0.3 * plume_remaining)
+        far_plume_len = max(0.2, plume_remaining - near_plume_len)
+
+        dx_far_debye = r_deb * lambda_D_plume_mm
+        dx_far_geom = min(0.45 * r_last, far_plume_len / 10.0)
+        dx_far_target = min(dx_far_debye, dx_far_geom)
+
+        f_far = max(2.0, min(8.0, round(dx_far_target / dx0_safe, 1)))
+        f_near = round(min(3.5, max(1.5, 0.5 * (1.0 + f_far))), 1)
+
         # Near Plume
         if near_plume_len > 1e-5 and x_curr + near_plume_len < Lx - 1e-5:
             x_next = round(x_curr + near_plume_len, 5)
@@ -383,7 +471,7 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
                 'name': 'Near_Plume',
                 'x_start': round(x_curr, 5),
                 'x_end': x_next,
-                'factor': 2.0
+                'factor': f_near
             })
             x_curr = x_next
 
@@ -393,7 +481,7 @@ def estimate_automatic_mesh_zones(grids, upstream_gap_mm, Lx, dx0, max_rel_jump:
                 'name': 'Far_Plume',
                 'x_start': round(x_curr, 5),
                 'x_end': round(Lx, 5),
-                'factor': 4.0
+                'factor': f_far
             })
 
     return zones
@@ -426,47 +514,38 @@ def estimate_automatic_plume_mesh_zones(
     x_curr = 0.0
     up_gap = min(float(upstream_gap_mm), Lx)
 
-    # 1. Presheath Zone: strictly baseline factor = 1.0
-    if up_gap > 1e-5:
-        zones.append({
-            'name': 'Presheath',
-            'x_start': round(x_curr, 5),
-            'x_end': round(up_gap, 5),
-            'factor': 1.0
-        })
-        x_curr = up_gap
+    # Preserve upstream presheath and optics zones from existing zone_configs if available
+    existing_zones = getattr(sim, 'zone_configs', None) if sim is not None else None
+    x_exit_expected = up_gap + (sum(float(g.get('t', 0.5)) + float(g.get('gap', 1.0)) for g in grids) - float(grids[-1].get('gap', 1.0)))
+    x_exit_expected = min(x_exit_expected, Lx)
 
-    # 2. Grid Barrels and Inter-Grid Gaps: strictly baseline resolution
-    num_grids = len(grids)
-    for i, g in enumerate(grids):
-        t_grid = float(g.get('t', 0.5))
-        gap = float(g.get('gap', 1.0))
+    non_plume_existing = (
+        [dict(z) for z in existing_zones if 'plume' not in z.get('name', '').lower()]
+        if isinstance(existing_zones, list) and len(existing_zones) > 0
+        else []
+    )
 
-        # Grid barrel
-        if x_curr < Lx:
-            x_next = min(x_curr + t_grid, Lx)
-            if x_next - x_curr > 1e-5:
-                f_t = min(1.5, max(0.8, round((t_grid / 15.0) / max(dx0, 1e-6), 1)))
-                zones.append({
-                    'name': f'Grid_{i+1}_barrel',
-                    'x_start': round(x_curr, 5),
-                    'x_end': round(x_next, 5),
-                    'factor': f_t
-                })
-                x_curr = x_next
-
-        # Internal inter-grid gap
-        if i < num_grids - 1 and x_curr < Lx:
-            x_next = min(x_curr + gap, Lx)
-            if x_next - x_curr > 1e-5:
-                f_gap = min(1.0, max(0.5, round((gap / 20.0) / max(dx0, 1e-6), 1)))
-                zones.append({
-                    'name': f'Gap_{i+1}_{i+2}',
-                    'x_start': round(x_curr, 5),
-                    'x_end': round(x_next, 5),
-                    'factor': f_gap
-                })
-                x_curr = x_next
+    if non_plume_existing and abs(float(non_plume_existing[-1].get('x_end', 0.0)) - x_exit_expected) <= 1e-3:
+        zones.extend(non_plume_existing)
+        x_curr = float(non_plume_existing[-1]['x_end'])
+    else:
+        # Fallback: compute upstream and optics zones via estimate_automatic_mesh_zones
+        base_zones = estimate_automatic_mesh_zones(
+            grids=grids,
+            upstream_gap_mm=upstream_gap_mm,
+            Lx=Lx,
+            dx0=dx0,
+            max_rel_jump=max_rel_jump,
+            n0=float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17))) if sim is not None else 1e17,
+            Te_up=float(getattr(sim, 'Te_up', 3.0)) if sim is not None else 3.0,
+            m_ion=float(getattr(sim, 'm_ion', 131.293 * 1.6605e-27)) if sim is not None else 131.293 * 1.6605e-27,
+            q_ion=float(getattr(sim, 'q_ion', 1.602e-19)) if sim is not None else 1.602e-19,
+            is_axisymmetric=bool(getattr(sim, 'is_axisymmetric', False)) if sim is not None else False,
+        )
+        for z in base_zones:
+            if 'plume' not in z.get('name', '').lower():
+                zones.append(z)
+                x_curr = float(z['x_end'])
 
     # 3. Plume Zones: Automatic determination based on local beam core density / Debye ratio
     x_exit = x_curr
