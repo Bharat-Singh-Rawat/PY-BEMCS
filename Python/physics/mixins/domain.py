@@ -176,7 +176,10 @@ class DomainMixin:
                 self.laplacian_lu_gpu = None
 
     def build_domain(self, params, preserve_state=False):
+        import copy
         self._stop_requested = False
+        if isinstance(params, dict):
+            self._last_params = copy.deepcopy(params)
         if params.get("beam_mass_amu") is not None and float(params["beam_mass_amu"]) > 0:
             self.m_ion = float(params["beam_mass_amu"]) * 1.6605e-27
             self.m_XE = self.m_ion
@@ -224,7 +227,7 @@ class DomainMixin:
         is_refining = getattr(self, "_efield_refinement_active", False)
         _dxy_mm = getattr(self, "_original_dxy_mm", None)
 
-        if not is_refining:
+        if not is_refining and not preserve_state:
             if ratio_debye is not None:
                 _lambda_D_m = np.sqrt(self.eps0 * Te_up * self.q / (n0_n * self.q**2))
                 _lambda_D_mm = _lambda_D_m * 1e3
@@ -248,11 +251,11 @@ class DomainMixin:
                     grids=grids,
                     n0=n0_n,
                     Te_up=Te_up,
-                    ratio_debye=1.0,
+                    ratio_debye=0.8,
                     max_rel_jump=max_jump_allowed,
                 )
-                self.dx = min(self.dx, dx_efield)
-                self.dy = min(self.dy, dy_efield)
+                self.dx = dx_efield
+                self.dy = dy_efield
 
         user_gap = float(params.get('upstream_gap_mm', 0.0))
         upstream_gap = user_gap if user_gap > 0.0 else self.recommended_upstream_gap_mm
@@ -396,8 +399,17 @@ class DomainMixin:
             x_last_grid_end = 2.0 * self.Lx / 3.0
 
         use_json_mesh_zones = bool(params.get('use_json_mesh_zones', False))
+        explicit_zone_configs = params.get('zone_configs', None)
 
-        if use_json_mesh_zones:
+        if (
+            not use_json_mesh_zones
+            and isinstance(explicit_zone_configs, list)
+            and len(explicit_zone_configs) > 0
+            and abs(float(explicit_zone_configs[-1].get('x_end', 0.0)) - self.Lx) <= 1e-3
+        ):
+            import copy
+            zone_configs = copy.deepcopy(explicit_zone_configs)
+        elif use_json_mesh_zones:
             mesh_zones_cfg = params.get('mesh_zones', {})
             presheath_factor = float(mesh_zones_cfg.get('presheath_factor', 1.0))
             optics_factor    = float(mesh_zones_cfg.get('optics_factor', 1.0))
@@ -639,35 +651,36 @@ class DomainMixin:
         self._damage_version = 0
         self.V_fixed.fill(0.0)
 
-        self.energy_history_t.clear()
-        self.energy_history_ke_i.clear()
-        self.energy_history_ke_e.clear()
-        self.energy_history_fe.clear()
-        self.energy_history_tot.clear()
-        self._prev_total_energy = None
+        if not preserve_state:
+            self.energy_history_t.clear()
+            self.energy_history_ke_i.clear()
+            self.energy_history_ke_e.clear()
+            self.energy_history_fe.clear()
+            self.energy_history_tot.clear()
+            self._prev_total_energy = None
 
-        self.charge_history_t.clear()
-        self.charge_history_q_i.clear()
-        self.charge_history_q_e.clear()
-        self.charge_history_q_b.clear()
-        self.charge_history_q_free.clear()
-        self.charge_history_q_net.clear()
-        self._prev_total_charge = None
+            self.charge_history_t.clear()
+            self.charge_history_q_i.clear()
+            self.charge_history_q_e.clear()
+            self.charge_history_q_b.clear()
+            self.charge_history_q_free.clear()
+            self.charge_history_q_net.clear()
+            self._prev_total_charge = None
 
-        if hasattr(self, 'potential_history'):
-            self.potential_history.clear()
+            if hasattr(self, 'potential_history'):
+                self.potential_history.clear()
 
-        if hasattr(self, 'ion_current_history'):
-            self.ion_current_history.clear()
-        if hasattr(self, 'exit_ion_current_history'):
-            self.exit_ion_current_history.clear()
+            if hasattr(self, 'ion_current_history'):
+                self.ion_current_history.clear()
+            if hasattr(self, 'exit_ion_current_history'):
+                self.exit_ion_current_history.clear()
 
-        if hasattr(self, 'substep_history_iter'):
-            self.substep_history_iter.clear()
-            self.substep_history_ion.clear()
-            self.substep_history_e.clear()
-            self.last_n_sub_ion = 1
-            self.last_n_sub_e = 1
+            if hasattr(self, 'substep_history_iter'):
+                self.substep_history_iter.clear()
+                self.substep_history_ion.clear()
+                self.substep_history_e.clear()
+                self.last_n_sub_ion = 1
+                self.last_n_sub_e = 1
 
         if not hasattr(self, 'grid_deflections') or len(self.grid_deflections) != len(grids):
             self.grid_deflections = [0.0] * len(grids)
@@ -773,10 +786,11 @@ class DomainMixin:
         if not preserve_state:
             self.Tmap[self.isBound] = 300.0
         self.build_sparse_matrix()
-        self.recalc_poisson(iterations=30 if not preserve_state else 10, params=params)
+        if not preserve_state:
+            self.recalc_poisson(iterations=30, params=params)
 
         # Stage 2: Electric field jump evaluation & pre-flight adaptive refinement
-        if enforce_efield and grids:
+        if enforce_efield and grids and not preserve_state:
             max_jump_x, max_jump_y, compliant = evaluate_mesh_efield_variation(
                 self.Ex, self.Ey, is_bound=self.isBound, max_rel_jump=max_jump_allowed
             )
@@ -857,6 +871,7 @@ class DomainMixin:
                 self.num_p = n_rem
 
         self.build_domain(cfg, preserve_state=True)
+        self.recalc_poisson(iterations=10, params=cfg)
         print(f"[Plume Reshape] Downstream plume truncated from {old_Lx:.3f} mm to {self.Lx:.3f} mm. Mesh now has {self.nx * self.ny:,} cells.")
         return True
 
@@ -897,15 +912,16 @@ class DomainMixin:
         # Check if rebuild is necessary
         factor_diff = abs(new_far_factor - old_far_factor) if old_far_factor is not None else 999.0
         if not force and old_far_factor is not None and factor_diff < 0.15:
-            current_dx = compute_plume_mean_dx(self)
-            if not hasattr(self, 'plume_history_iterations'):
-                self.plume_history_iterations = []
-                self.plume_history_dx = []
-                self.plume_dx_history = []
-            if not self.plume_history_iterations or self.plume_history_iterations[-1] != self.iteration:
-                self.plume_history_iterations.append(self.iteration)
-                self.plume_history_dx.append(current_dx)
-                self.plume_dx_history.append((self.iteration, current_dx))
+            if not getattr(self, '_plume_remesh_deferred', False):
+                current_dx = compute_plume_mean_dx(self)
+                if not hasattr(self, 'plume_history_iterations'):
+                    self.plume_history_iterations = []
+                    self.plume_history_dx = []
+                    self.plume_dx_history = []
+                if not self.plume_history_iterations or self.plume_history_iterations[-1] != self.iteration:
+                    self.plume_history_iterations.append(self.iteration)
+                    self.plume_history_dx.append(current_dx)
+                    self.plume_dx_history.append((self.iteration, current_dx))
             return False
 
         old_x = self.x_coords.copy()
@@ -914,6 +930,9 @@ class DomainMixin:
         old_Tmap = self.Tmap.copy() if getattr(self, 'Tmap', None) is not None else None
         old_damage = self.damage_map.copy() if getattr(self, 'damage_map', None) is not None else None
         old_eroded = self.eroded_depth.copy() if getattr(self, 'eroded_depth', None) is not None else None
+        old_accum_ppc = self.accum_ppc_map.copy() if getattr(self, 'accum_ppc_map', None) is not None else None
+        old_accum_cex = self.accum_cex_ppc_map.copy() if getattr(self, 'accum_cex_ppc_map', None) is not None else None
+        old_ppc_steps = getattr(self, 'ppc_steps_count', 0)
         old_iter = self.iteration
 
         num_p = self.num_p
@@ -963,6 +982,29 @@ class DomainMixin:
         if old_eroded is not None:
             interp_ero = RegularGridInterpolator((old_y, old_x), old_eroded, bounds_error=False, fill_value=0.0)
             self.eroded_depth = interp_ero(pts_new)
+
+        if old_accum_ppc is not None:
+            interp_ppc = RegularGridInterpolator((old_y, old_x), old_accum_ppc, bounds_error=False, fill_value=0.0)
+            self.accum_ppc_map = np.maximum(0.0, interp_ppc(pts_new))
+            self.ppc_steps_count = old_ppc_steps
+
+        if old_accum_cex is not None:
+            interp_cex = RegularGridInterpolator((old_y, old_x), old_accum_cex, bounds_error=False, fill_value=0.0)
+            self.accum_cex_ppc_map = np.maximum(0.0, interp_cex(pts_new))
+
+        # Recompute current_ppc_map on the new mesh so PPC & Density diagnostics stay continuous
+        if self.num_p > 0:
+            ix_new = self._x_to_ix(self.p_x[:self.num_p])
+            iy_new = np.clip(np.round(self.p_y[:self.num_p] / self.dy).astype(int), 0, self.ny - 1)
+            flat_new = iy_new * self.nx + ix_new
+            self.current_ppc_map = np.bincount(flat_new, minlength=self.nx * self.ny).reshape((self.ny, self.nx))
+            if hasattr(self, 'p_isCEX') and self.p_isCEX is not None:
+                is_cex_now = self.p_isCEX[:self.num_p]
+                if np.any(is_cex_now):
+                    self.current_cex_ppc_map = np.bincount(flat_new[is_cex_now], minlength=self.nx * self.ny).reshape((self.ny, self.nx))
+                else:
+                    self.current_cex_ppc_map = np.zeros((self.ny, self.nx), dtype=np.int32)
+            self.current_prim_ppc_map = np.maximum(0, self.current_ppc_map - self.current_cex_ppc_map)
 
         # Re-deposit charge on the adapted grid
         self.rho.fill(0.0)

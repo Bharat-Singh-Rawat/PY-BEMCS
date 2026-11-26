@@ -1,6 +1,7 @@
 """
 Mesh utilities and automatic domain zoning calculations.
 """
+import math
 import numpy as np
 
 
@@ -477,16 +478,24 @@ def estimate_automatic_plume_mesh_zones(
             plume_mask = (p_x >= x_exit) & (p_x <= Lx)
             n_in_plume = int(np.sum(plume_mask))
 
-            n0 = float(getattr(sim, 'n0_plasma', getattr(sim, 'n0', 1e17)))
-            if n_in_plume >= 10:
-                plume_len_m = max(1e-4, (Lx - x_exit) * 1e-3)
+            # Wait until ions have populated at least 60% of the plume length before adapting
+            plume_span_mm = max(1e-4, Lx - x_exit)
+            max_px_plume = float(np.max(p_x[plume_mask])) if n_in_plume > 0 else x_exit
+            plume_fill_frac = (max_px_plume - x_exit) / plume_span_mm
+
+            if n_in_plume < 15 or plume_fill_frac < 0.60:
+                sim._plume_remesh_deferred = True
+            else:
+                sim._plume_remesh_deferred = False
+                plume_len_m = max(1e-4, (max_px_plume - x_exit) * 1e-3)
                 p_y = sim.p_y[:num_p][plume_mask]
 
                 # Evaluate actual beam envelope radius r_core (90th percentile of |y|)
                 # Bounded by screen grid aperture radius and domain boundary Ly
                 r_screen = float(grids[0].get('r', 1.0)) if grids else 1.0
+                r_last = float(grids[-1].get('r', r_screen)) if grids else r_screen
                 if len(p_y) > 0:
-                    r_core_mm = max(float(np.percentile(np.abs(p_y), 90)), r_screen * 0.5, 0.3)
+                    r_core_mm = max(float(np.percentile(np.abs(p_y), 90)), r_last * 0.5, 0.3)
                 else:
                     r_core_mm = r_screen
                 Ly = float(getattr(sim, 'Ly', r_core_mm))
@@ -503,14 +512,27 @@ def estimate_automatic_plume_mesh_zones(
                 n_core_avg = n_phys_ions / max(vol_core_m3, 1e-15)
 
                 if n_core_avg > 0:
-                    density_ratio = n0 / max(n_core_avg, 1e12)
-                    auto_factor = math.sqrt(density_ratio)
-                    # Clamped sensibly between 2.0x and 8.0x
-                    f_far = max(2.0, min(8.0, round(auto_factor, 1)))
-        except Exception:
+                    eps0 = 8.854e-12
+                    q = 1.6e-19
+                    Te_plume = float(getattr(sim, 'Te_up', 3.0))
+                    # Local plume Debye length [mm] from actual beam core density
+                    lambda_D_plume_mm = math.sqrt(eps0 * Te_plume / (q * max(n_core_avg, 1e12))) * 1e3
+                    ratio_debye = float(remesh_cfg.get("dx_over_debye", 0.8)) if isinstance(remesh_cfg, dict) else 0.8
+
+                    # Maximum allowable cell size in far plume bounded by local Debye length and geometric smoothness
+                    far_len_mm = max(0.2, plume_span_mm * 0.7)
+                    dx_far_debye = ratio_debye * lambda_D_plume_mm
+                    dx_far_geom = min(0.45 * r_last, far_len_mm / 10.0)
+                    dx_far_target = min(dx_far_debye, dx_far_geom)
+
+                    auto_factor = dx_far_target / max(dx0, 1e-6)
+                    # Clamped sensibly between 1.5x and 8.0x
+                    f_far = max(1.5, min(8.0, round(auto_factor, 1)))
+        except Exception as exc:
+            print(f"[Plume Remesh Warning] Failed to estimate live plume factor: {exc}")
             f_far = getattr(sim, '_current_plume_factor', 4.0)
 
-    f_near = round(min(3.0, max(1.2, 0.5 * (1.0 + f_far))), 1)
+    f_near = round(min(3.5, max(1.2, 0.5 * (1.0 + f_far))), 1)
 
     plume_remaining = Lx - x_curr
     if plume_remaining > 1e-5:

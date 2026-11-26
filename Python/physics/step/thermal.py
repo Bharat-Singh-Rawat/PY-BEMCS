@@ -122,5 +122,9 @@ def step_thermal(sim, ctx: StepContext):
                 needs_remesh = True
 
         if needs_remesh:
-            sim.build_domain(params, preserve_state=True)
+            p_remesh = dict(params) if isinstance(params, dict) else {}
+            if getattr(sim, 'zone_configs', None):
+                p_remesh['zone_configs'] = sim.zone_configs
+            sim.build_domain(p_remesh, preserve_state=True)
+            sim.recalc_poisson(iterations=10, params=p_remesh)
             ctx.remeshed = True

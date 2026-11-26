@@ -230,12 +230,49 @@ class DensityWindow(QWidget):
         current_step = getattr(sim, 'iteration', -1)
         cur_shape = (int(getattr(sim, 'ny', 0)), int(getattr(sim, 'nx', 0)))
 
-        # Automatically reset accumulator if mesh dimensions change (e.g. sweep scenario)
-        # or if simulation iteration jumped backwards / restarted
-        if getattr(self, '_last_mesh_shape', None) != cur_shape or current_step < self._last_sim_step:
+        # Automatically reset accumulator if simulation iteration jumped backwards / restarted.
+        # If mesh dimensions changed mid-run (e.g. adaptive plume remesh), interpolate existing accumulators.
+        if current_step < self._last_sim_step:
             self._accum_maps.clear()
             self._accum_count = 0
             self._last_mesh_shape = cur_shape
+            self._last_x_coords = getattr(sim, 'x_coords', None)
+            self._last_y_coords = getattr(sim, 'y_coords', None)
+        elif getattr(self, '_last_mesh_shape', None) != cur_shape:
+            old_x = getattr(self, '_last_x_coords', None)
+            old_y = getattr(self, '_last_y_coords', None)
+            new_X = getattr(sim, 'X', None)
+            new_Y = getattr(sim, 'Y', None)
+            if (
+                self._accum_count > 0
+                and old_x is not None and old_y is not None
+                and new_X is not None and new_Y is not None
+                and new_X.shape == cur_shape
+            ):
+                try:
+                    from scipy.interpolate import RegularGridInterpolator
+                    pts_new = (new_Y, new_X)
+                    for sp_k, old_map in list(self._accum_maps.items()):
+                        if old_map.shape == (len(old_y), len(old_x)):
+                            interp_fn = RegularGridInterpolator((old_y, old_x), old_map, bounds_error=False, fill_value=0.0)
+                            self._accum_maps[sp_k] = np.maximum(0.0, interp_fn(pts_new))
+                        else:
+                            self._accum_maps.clear()
+                            self._accum_count = 0
+                            break
+                except Exception:
+                    self._accum_maps.clear()
+                    self._accum_count = 0
+            else:
+                self._accum_maps.clear()
+                self._accum_count = 0
+            self._last_mesh_shape = cur_shape
+            self._last_x_coords = getattr(sim, 'x_coords', None).copy() if getattr(sim, 'x_coords', None) is not None else None
+            self._last_y_coords = getattr(sim, 'y_coords', None).copy() if getattr(sim, 'y_coords', None) is not None else None
+        else:
+            if getattr(self, '_last_x_coords', None) is None and getattr(sim, 'x_coords', None) is not None:
+                self._last_x_coords = sim.x_coords.copy()
+                self._last_y_coords = sim.y_coords.copy()
 
         # Check if step advanced for accumulator
         if is_new_step and current_step != self._last_sim_step:

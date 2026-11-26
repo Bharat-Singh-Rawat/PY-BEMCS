@@ -13,7 +13,7 @@ from .figure_layout import rebuild_groove_axes
 class RenderingMixin:
     """Mixin managing canvas plotting, static domain rendering, and live snapshot consumption."""
 
-    def draw_static_domain(self, redraw=True):
+    def draw_static_domain(self, redraw=True, preserve_history=False):
         self.tempmesh = None
         self.dmg_mesh = None
 
@@ -114,44 +114,45 @@ class RenderingMixin:
         if getattr(self, 'steady_state_window', None) and self.steady_state_window.isVisible():
             self.steady_state_window.update_plot(self.sim, self)
 
-        self.iter_history = []
-        self.ebs_history = []
-        self.div_history = []
-        self.div_mid_history = []
-        self.line_ebs.set_data([], [])
-        self.line_div.set_data([], [])
-        if hasattr(self, 'line_div_mid'):
-            self.line_div_mid.set_data([], [])
+        if not preserve_history:
+            self.iter_history = []
+            self.ebs_history = []
+            self.div_history = []
+            self.div_mid_history = []
+            self.line_ebs.set_data([], [])
+            self.line_div.set_data([], [])
+            if hasattr(self, 'line_div_mid'):
+                self.line_div_mid.set_data([], [])
 
-        dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
-        is_ebs_us = getattr(self, 'ebs_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds'
-        init_ebs_x_max = max(0.05, 100 * dt_us) if is_ebs_us else 100
+            dt_us = (self.sim.dt * 1e6) if hasattr(self, 'sim') and hasattr(self.sim, 'dt') and self.sim.dt > 0 else 5e-4
+            is_ebs_us = getattr(self, 'ebs_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds'
+            init_ebs_x_max = max(0.05, 100 * dt_us) if is_ebs_us else 100
 
-        is_div_us = getattr(self, 'div_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds'
-        init_div_x_max = max(0.05, 100 * dt_us) if is_div_us else 100
+            is_div_us = getattr(self, 'div_xaxis_unit', getattr(self, 'xaxis_unit', 'iterations')) == 'microseconds'
+            init_div_x_max = max(0.05, 100 * dt_us) if is_div_us else 100
 
-        v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
-        if v_init_saddle is not None:
-            pad = max(20.0, abs(v_init_saddle) * 0.1)
-            self.ax_ebs.set_xlim(0, init_ebs_x_max)
-            self.ax_ebs.set_ylim(v_init_saddle - pad, v_init_saddle + pad)
-        else:
-            self.ax_ebs.set_xlim(0, init_ebs_x_max)
-            self.ax_ebs.set_ylim(-100, 100)
-        self.ax_div.set_xlim(0, init_div_x_max)
-        self.ax_div.set_ylim(0, 45)
-        self._update_div_plot_visibility()
+            v_init_saddle = getattr(self.sim, 'saddle_point_potential', getattr(self.sim, 'min_pot', None))
+            if v_init_saddle is not None:
+                pad = max(20.0, abs(v_init_saddle) * 0.1)
+                self.ax_ebs.set_xlim(0, init_ebs_x_max)
+                self.ax_ebs.set_ylim(v_init_saddle - pad, v_init_saddle + pad)
+            else:
+                self.ax_ebs.set_xlim(0, init_ebs_x_max)
+                self.ax_ebs.set_ylim(-100, 100)
+            self.ax_div.set_xlim(0, init_div_x_max)
+            self.ax_div.set_ylim(0, 45)
+            self._update_div_plot_visibility()
 
-        n_grids = len(getattr(self.sim, 'mask_grids', [])) or len(getattr(self, 'grid_widgets', [])) or 1
-        if len(getattr(self, 'ax_grooves', [])) != n_grids and hasattr(self, '_main_grid'):
-            rebuild_groove_axes(self, n_grids)
-        title_fs = 8.5 if n_grids > 2 else 10
-        ly_lim = max(1.0, float(getattr(self.sim, 'Ly', 1.0)))
-        for i, (ax_g, line_g) in enumerate(zip(getattr(self, 'ax_grooves', []), getattr(self, 'line_grooves', []))):
-            line_g.set_data([], [])
-            ax_g.set_xlim(0, ly_lim)
-            ax_g.set_ylim(1.0, 0.0)
-            ax_g.set_title(f"Grid {i + 1} Erosion Profile — Ready", fontsize=title_fs, pad=3)
+            n_grids = len(getattr(self.sim, 'mask_grids', [])) or len(getattr(self, 'grid_widgets', [])) or 1
+            if len(getattr(self, 'ax_grooves', [])) != n_grids and hasattr(self, '_main_grid'):
+                rebuild_groove_axes(self, n_grids)
+            title_fs = 8.5 if n_grids > 2 else 10
+            ly_lim = max(1.0, float(getattr(self.sim, 'Ly', 1.0)))
+            for i, (ax_g, line_g) in enumerate(zip(getattr(self, 'ax_grooves', []), getattr(self, 'line_grooves', []))):
+                line_g.set_data([], [])
+                ax_g.set_xlim(0, ly_lim)
+                ax_g.set_ylim(1.0, 0.0)
+                ax_g.set_title(f"Grid {i + 1} Erosion Profile — Ready", fontsize=title_fs, pad=3)
 
         self.ax_dmg.clear()
         self.ax_dmg.set_title("Sputter Damage Map", fontsize=10)
@@ -250,8 +251,12 @@ class RenderingMixin:
             self.lblPerfStep.setText("Step / RAM:   —")
 
         if remeshed:
-            self.lbl_status.setText("Domain Remeshed (Thermal or Erosion)!")
-            self.draw_static_domain(redraw=False)
+            self.lbl_status.setText("Domain Remeshed (Adaptive Plume / Thermal / Erosion)!")
+            self.draw_static_domain(redraw=False, preserve_history=True)
+            if getattr(self, 'mesh_window', None) is not None and self.mesh_window.isVisible():
+                self.mesh_window.update_plot(self.sim, params=params)
+            if getattr(self, 'plume_mesh_window', None) is not None and self.plume_mesh_window.isVisible():
+                self.plume_mesh_window.update_plot(self.sim)
 
         if self.scat_prim is not None and self.scat_cex is not None:
             self.scat_prim.set_offsets(snap['prim_xy'])
@@ -512,7 +517,7 @@ class RenderingMixin:
                         self.sim.V = snap['V']
                     if 'isBound' in snap and snap['isBound'] is not None:
                         self.sim.isBound = snap['isBound']
-                self.draw_static_domain(redraw=False)
+                self.draw_static_domain(redraw=False, preserve_history=True)
 
         damage_map = snap['damage_map']
         if damage_map is not None and damage_map.shape == snap['X'].shape:

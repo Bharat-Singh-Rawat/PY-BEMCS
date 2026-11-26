@@ -327,8 +327,14 @@ class DigitalTwinSimulator(
             remesh_enabled = remesh_cfg.get("enabled", True)
         if remesh_enabled:
             interval = int(remesh_cfg.get("interval_iterations", getattr(self, 'remesh_interval_iterations', 150)))
-            if interval > 0 and self.iteration > 0 and (self.iteration % interval == 0):
-                self.execute_plume_remesh(params)
+            if interval > 0 and self.iteration > 0:
+                is_scheduled = (self.iteration % interval == 0)
+                is_deferred = getattr(self, '_plume_remesh_deferred', False) and (self.iteration % 25 == 0)
+                if is_scheduled or is_deferred:
+                    did_remesh = self.execute_plume_remesh(params)
+                    if did_remesh:
+                        ctx.remeshed = True
+                        res = (True, res[1], res[2], res[3], res[4])
         return res
 
     def _check_and_execute_stability_remesh(self, params):
