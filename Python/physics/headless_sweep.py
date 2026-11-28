@@ -155,7 +155,12 @@ def compute_perveance_metrics_static(
     l_g = max(gap_mm * 1e-3, 1e-6)
     t_s = max(t_screen_mm * 1e-3, 0.0)
     r_s = max(r_screen_mm * 1e-3, 1e-6)
-    l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
+    if is_axisymmetric:
+        # 3D circular aperture (radial + azimuthal transverse Laplacian): l_e^2 = (l_g + t_s)^2 + r_s^2
+        l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
+    else:
+        # 2D planar slit (single transverse dimension y): l_e^2 = (l_g + t_s)^2 + (r_s / 2)^2
+        l_e_sq = (l_g + t_s) ** 2 + 0.25 * (r_s ** 2)
 
     # Physical screen grid extraction aperture open area in m^2:
     if aperture_area is not None and aperture_area > 0.0:

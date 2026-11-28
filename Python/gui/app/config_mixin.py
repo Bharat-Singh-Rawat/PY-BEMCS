@@ -468,11 +468,14 @@ class ConfigMixin:
         self.inputs["target_ppc"].setValue(float(sim.get("target_ppc", 40.0)))
         if "inj_y_length_mm" in self.inputs:
             inj_y = sim.get("inj_y_length_mm", sim.get("inj_y_length", None))
+            grids_for_inj = config.get("grids", [])
             if inj_y is not None and float(inj_y) > 0:
                 self.inputs["inj_y_length_mm"].setValue(float(inj_y))
                 self._last_auto_inj_y_length = float(inj_y)
             else:
-                screen_r = self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+                screen_r = float(grids_for_inj[0]["r"]) if grids_for_inj else (
+                    self.grid_widgets[0]["r"].value() if self.grid_widgets else 0.80
+                )
                 self.inputs["inj_y_length_mm"].setValue(screen_r)
                 self._last_auto_inj_y_length = screen_r
 
@@ -577,6 +580,12 @@ class ConfigMixin:
         self._last_auto_hole_boundary_dist = _hdist_val
         if "hole_boundary_dist_mm" in self.inputs:
             self.inputs["hole_boundary_dist_mm"].setValue(_hdist_val)
+
+        if "inj_y_length_mm" in self.inputs:
+            inj_y = sim.get("inj_y_length_mm", sim.get("inj_y_length", None))
+            target_inj_y = float(inj_y) if (inj_y is not None and float(inj_y) > 0) else float(_screen_r)
+            self.inputs["inj_y_length_mm"].setValue(target_inj_y)
+            self._last_auto_inj_y_length = target_inj_y
 
         auto_Lx, auto_Ly = self.compute_grid_domain_size()
         if "Lx" in adv:

@@ -95,8 +95,8 @@ When generating the simulation domain (`build_domain`), the engine automatically
    - **Total Acceleration Potential**: $V_{\mathrm{tot}} = \max(V_{\mathrm{screen}} - V_{\mathrm{accel}}, \, 0.0)$
    - **Measured Effective Perveance**:
      $$P_{\mathrm{eff}} = \frac{I_{\mathrm{exit}}}{V_{\mathrm{tot}}^{3/2}} \quad [\text{A}/\text{V}^{1.5}]$$
-   - **Theoretical Maximum Child-Langmuir Perveance** (Goebel & Katz formulation with equivalent acceleration length $l_e$):
-     $$l_e^2 = (l_g + t_s)^2 + r_s^2, \qquad P_{\max} = \frac{4 \varepsilon_0}{9} \sqrt{\frac{2 q_{\mathrm{ion}}}{m_{\mathrm{ion}}}} \frac{A_{\mathrm{aperture}}}{l_e^2}$$
+   - **Theoretical Maximum Child-Langmuir Perveance** (Goebel & Katz formulation with coordinate-consistent equivalent acceleration length $l_e$):
+     $$l_{e,\mathrm{3D}}^2 = (l_g + t_s)^2 + r_s^2 \;\; (\text{Axisymmetric}), \qquad l_{e,\mathrm{2D}}^2 = (l_g + t_s)^2 + \frac{r_s^2}{4} \;\; (\text{2D Cartesian}), \qquad P_{\max} = \frac{4 \varepsilon_0}{9} \sqrt{\frac{2 q_{\mathrm{ion}}}{m_{\mathrm{ion}}}} \frac{A_{\mathrm{aperture}}}{l_e^2}$$
      where $l_g$ is grid gap, $t_s$ is screen thickness, $r_s$ is aperture radius, and $A_{\mathrm{aperture}}$ is the screen aperture open area ($\pi r_s^2$ in radial mode, $r_s \times 1\,\text{mm}$ in Cartesian half-slit mode). It is strictly defined by $r_s$ and invariant to domain size $L_y$.
    - **Perveance Fraction**:
      $$\Pi = \frac{P_{\mathrm{eff}}}{P_{\max}}$$

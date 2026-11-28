@@ -3473,7 +3473,6 @@ class SweepMixin:
         l_g = max(gap_mm * 1e-3, 1e-6)       # inter-grid separation in meters
         t_s = max(t_screen_mm * 1e-3, 0.0)    # screen grid thickness in meters
         r_s = max(r_screen_mm * 1e-3, 1e-6)   # screen aperture radius in meters
-        l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
 
         # Physical screen grid extraction aperture open area in m^2:
         # Theoretical Child-Langmuir space-charge limited current perveance limit (Goebel & Katz)
@@ -3487,9 +3486,13 @@ class SweepMixin:
             geometry = str(getattr(self.inputs.get('geometry'), 'currentText', lambda: 'half_hole')()).strip().lower()
 
         if is_axisymmetric:
+            # 3D circular aperture (radial + azimuthal transverse Laplacian): l_e^2 = (l_g + t_s)^2 + r_s^2
+            l_e_sq = (l_g + t_s) ** 2 + (r_s ** 2)
             # Full 3D circular aperture: Area = π * r_s^2
             area = np.pi * (r_s ** 2)
         else:
+            # 2D planar slit (single transverse dimension y): l_e^2 = (l_g + t_s)^2 + (r_s / 2)^2
+            l_e_sq = (l_g + t_s) ** 2 + 0.25 * (r_s ** 2)
             # 2D Cartesian slab geometry with 1 mm unit depth (1e-3 m):
             # In half_hole: extraction slit width = r_s
             # In one_hole: full centered slit width = 2 * r_s

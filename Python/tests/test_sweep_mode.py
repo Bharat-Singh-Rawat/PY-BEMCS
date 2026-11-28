@@ -769,8 +769,8 @@ class TestSweepMixinAppIntegration(unittest.TestCase):
         v_tot = 1300.0
         expected_p_eff = 5.0e-5 / (v_tot ** 1.5)
         eps_0 = 8.8541878128e-12
-        # Goebel & Katz equivalent length: l_e^2 = (l_g + t_s)^2 + r_s^2
-        l_e_sq = (1.0e-3 + 0.5e-3) ** 2 + (1.0e-3) ** 2
+        # Goebel & Katz 2D planar slit equivalent length: l_e^2 = (l_g + t_s)^2 + (r_s / 2)^2
+        l_e_sq = (1.0e-3 + 0.5e-3) ** 2 + 0.25 * ((1.0e-3) ** 2)
         expected_p_max = (4.0 * eps_0 / 9.0) * np.sqrt(2.0 * self.win.sim.q_ion / self.win.sim.m_ion) * (1.0e-6 / l_e_sq)
         expected_frac = expected_p_eff / expected_p_max
 
